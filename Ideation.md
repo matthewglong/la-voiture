@@ -1,0 +1,5 @@
+We're designing a two-player browser-based video game that will require some sort of a lightweight physics engine. The basic idea is that two users will enter a session on their phone, assemble their own car, and submit that. Once both are submitted on the main screen, they will both be released to drive and launch off of a jump, and whichever one flies the furthest wins. 
+
+Things that we'll need to think about are how to allow users to configure their cars. We certainly care about allowing them to style them, and we want to leave ourselves open to awarding style points. Airflow and wind resistance might be something that we care about in addition to gravity. And we want this to be simple enough that anybody can quickly join a session without having to learn a bunch of functionality. 
+
+Importantly, we only have 3-4 hours to build this entirely using Claude Code, and so we need to be really clear about what is in scope versus what is not, although we have 3 people working on this and we're not constrained by human efficiency. 
