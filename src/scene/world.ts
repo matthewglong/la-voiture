@@ -12,6 +12,8 @@ export interface World {
   sunDir: THREE.Vector3;
   /** Karl the Fog. */
   fog: THREE.FogExp2;
+  /** Pre-filtered reflection of the sky alone (the water reflects this, not the studio). */
+  skyEnv: THREE.Texture;
   resize(): void;
   /** Keep the sun's shadow frustum centred on the action. */
   setShadowFocus(p: THREE.Vector3, radius?: number): void;
@@ -52,6 +54,20 @@ export function createWorld(container: HTMLElement): World {
 
   // Neutral studio reflections: clearcoat paint picks up soft light panels like a product shot.
   const pmrem = new THREE.PMREMGenerator(renderer);
+  // The Bay reflects the real sky instead (a studio at grazing angles looks like oil on water).
+  const skyScene = new THREE.Scene();
+  const skyForEnv = new Sky();
+  skyForEnv.scale.setScalar(1000);
+  const su = skyForEnv.material.uniforms;
+  su.turbidity.value = u.turbidity.value;
+  su.rayleigh.value = u.rayleigh.value;
+  su.mieCoefficient.value = u.mieCoefficient.value;
+  su.mieDirectionalG.value = u.mieDirectionalG.value;
+  su.sunPosition.value.copy(sunDir);
+  skyScene.add(skyForEnv);
+  const skyEnv = pmrem.fromScene(skyScene, 0).texture;
+  skyForEnv.geometry.dispose();
+  skyForEnv.material.dispose();
   const envScene = new RoomEnvironment();
   scene.environment = pmrem.fromScene(envScene, 0.04).texture;
   scene.environmentIntensity = 0.55;
@@ -115,6 +131,7 @@ export function createWorld(container: HTMLElement): World {
     sun,
     sunDir,
     fog,
+    skyEnv,
     resize,
     setShadowFocus,
     render: () => renderer.render(scene, camera),

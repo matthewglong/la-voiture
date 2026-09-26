@@ -96,7 +96,7 @@ button:disabled {
 }
 
 .wind .tag {
-  font-size: 0.7rem;
+  font-size: max(0.7rem, 10.5px);
   letter-spacing: 0.12em;
   padding: 0.25rem 0.55rem;
   border-radius: 999px;
@@ -148,7 +148,7 @@ button:disabled {
 }
 
 .round-chip {
-  font-size: 0.75rem;
+  font-size: max(0.75rem, 11px);
   letter-spacing: 0.14em;
   color: var(--ink);
   background: rgba(255, 253, 247, 0.85);
@@ -184,9 +184,14 @@ button:disabled {
 }
 
 .panel.dim {
-  opacity: 0.62;
-  filter: saturate(0.55);
+  /* Still readable from the sofa: grey it out rather than making it see-through. */
+  background: rgba(236, 234, 228, 0.97);
+  filter: saturate(0.3) brightness(0.97);
   transform: scale(0.97);
+}
+
+.panel.dim .panel-head {
+  opacity: 0.8;
 }
 
 .panel.active {
@@ -253,7 +258,7 @@ button:disabled {
 }
 
 .section-title {
-  font-size: 0.68rem;
+  font-size: max(0.68rem, 11px);
   letter-spacing: 0.16em;
   color: var(--ink-soft);
   margin: 0 0 0.3rem 0.1rem;
@@ -270,7 +275,7 @@ button:disabled {
   grid-template-columns: 6.6rem 1fr 4.9rem;
   align-items: center;
   gap: 0.45rem;
-  font-size: 0.78rem;
+  font-size: max(0.78rem, 11px);
 }
 
 .stat .label {
@@ -316,7 +321,7 @@ button:disabled {
   text-align: right;
   font-weight: 900;
   white-space: nowrap;
-  font-size: 0.74rem;
+  font-size: max(0.74rem, 11px);
 }
 
 .stat .val.up {
@@ -331,7 +336,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.2rem 0.5rem;
-  font-size: 0.74rem;
+  font-size: max(0.74rem, 11px);
 }
 
 .pick {
@@ -428,7 +433,7 @@ button:disabled {
   border-radius: 0.35rem;
   background: var(--ink);
   color: #fff;
-  font-size: 0.72rem;
+  font-size: max(0.72rem, 11px);
   display: grid;
   place-items: center;
 }
@@ -454,7 +459,7 @@ button:disabled {
 
 .card .tagline {
   grid-column: 1 / -1;
-  font-size: 0.72rem;
+  font-size: max(0.72rem, 11px);
   line-height: 1.25;
   color: var(--ink-soft);
 }
@@ -469,7 +474,7 @@ button:disabled {
   position: absolute;
   right: 0.5rem;
   bottom: -0.55rem;
-  font-size: 0.56rem;
+  font-size: max(0.56rem, 9px);
   letter-spacing: 0.12em;
   padding: 0.08rem 0.35rem;
   border-radius: 0.3rem;
@@ -517,7 +522,7 @@ button:disabled {
 }
 
 .card.compact .tagline {
-  font-size: 0.64rem;
+  font-size: max(0.64rem, 10.5px);
 }
 
 .keep {
@@ -537,7 +542,7 @@ button:disabled {
 
 .keep kbd {
   font-family: inherit;
-  font-size: 0.7rem;
+  font-size: max(0.7rem, 10.5px);
   padding: 0.05rem 0.35rem;
   border-radius: 0.3rem;
   background: #b7791f;
@@ -550,7 +555,7 @@ button:disabled {
 .launch {
   position: absolute;
   left: 50%;
-  bottom: 2.2rem;
+  bottom: 2.8rem;
   transform: translateX(-50%);
   font-size: 2.3rem;
   font-weight: 900;
@@ -572,7 +577,7 @@ button:disabled {
 
 .launch small {
   display: block;
-  font-size: 0.75rem;
+  font-size: max(0.75rem, 10.5px);
   letter-spacing: 0.1em;
   opacity: 0.85;
 }
@@ -589,6 +594,29 @@ button:disabled {
 
 .hidden {
   display: none !important;
+}
+
+.fade {
+  position: absolute;
+  inset: 0;
+  background: #eef4f8;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.fade.go {
+  animation: fadecut 0.55s ease-out;
+}
+
+@keyframes fadecut {
+  0%,
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 /* ---------- Race HUD ---------- */
@@ -661,7 +689,7 @@ button:disabled {
   grid-template-columns: auto 1fr;
   align-items: center;
   gap: 0.45rem;
-  font-size: 0.72rem;
+  font-size: max(0.72rem, 11px);
   letter-spacing: 0.12em;
   color: var(--ink-soft);
 }
@@ -877,7 +905,7 @@ button:disabled {
 }
 
 .results .row .det {
-  font-size: 0.72rem;
+  font-size: max(0.72rem, 11px);
   color: var(--ink-soft);
   margin-top: 0.15rem;
 }
@@ -934,8 +962,8 @@ button:disabled {
   position: absolute;
   right: 50%;
   transform: translateX(50%);
-  bottom: 0.6rem;
-  font-size: 0.72rem;
+  bottom: 0.55rem;
+  font-size: max(0.72rem, 11px);
   font-weight: 900;
   letter-spacing: 0.08em;
   padding: 0.3rem 0.7rem;
@@ -949,11 +977,20 @@ button:disabled {
   background: #f6d5d5;
 }
 
-.title-card {
+.bottombar {
   position: absolute;
   left: 50%;
-  bottom: 2.4rem;
+  bottom: 2.8rem;
   transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.title-card {
   font-size: 0.85rem;
   color: var(--ink);
   background: rgba(255, 253, 247, 0.85);

@@ -49,6 +49,12 @@ export interface PartOption {
   cdA?: number;
   /** Added lift area (m²). */
   clA?: number;
+  /** Folded until the top of the arc, then springs open (glider wings): clA and openCdA apply once open. */
+  opensAtApex?: boolean;
+  /** Extra drag area once the wings are open (m²). */
+  openCdA?: number;
+  /** Open wings trim to a glide: their lift is capped at this multiple of the car's weight. */
+  trim?: number;
   /** Chassis grip multiplier (4WD). */
   gripMul?: number;
   /** Wheels: tyre friction coefficient. */
@@ -78,8 +84,14 @@ export interface CarStats {
   mass: number;
   /** Drag area used on the road and in the air (m²). The kite adds more once open. */
   cdA: number;
-  /** Lift area in flight (m²), excluding the kite. */
+  /** Lift area in flight from the body and fixed wings (m²). */
   clA: number;
+  /** Extra lift area of wings that spring open at the top of the arc (m²). */
+  apexClA: number;
+  /** Extra drag area of those wings once open (m²). */
+  apexCdA: number;
+  /** Cap on the open wings' lift, as a multiple of the car's weight. */
+  apexTrim: number;
   /** Tyre grip coefficient (wheels × chassis multiplier). */
   mu: number;
   /** Engine power (W). */

@@ -31,31 +31,31 @@ const CHASSIS: OptionDef[] = [
     name: 'Go-kart',
     price: 0,
     mass: 200,
-    cdA: 0.8,
+    cdA: 0.85,
     tagline: 'Light and slim, but drag hurts light cars more in flight',
   },
   {
     id: 'tub',
     name: 'Bathtub',
     price: 5,
-    mass: 300,
-    cdA: 1.0,
-    clA: 2.0,
+    mass: 250,
+    cdA: 1.05,
+    clA: 1.7,
     tagline: 'Flat bottom makes it a lifting body, but heavier and draggier than a kart',
   },
   {
     id: 'sedan',
     name: 'Sedan',
     price: 15,
-    mass: 900,
-    cdA: 1.0,
-    tagline: 'Balanced and slippery for its size, but 900 kg needs a strong engine',
+    mass: 660,
+    cdA: 0.9,
+    tagline: 'Balanced and slippery for its size, but 660 kg needs a strong engine',
   },
   {
     id: 'pickup',
     name: 'Pickup 4x4',
     price: 25,
-    mass: 1250,
+    mass: 1210,
     cdA: 1.05,
     gripMul: 1.35,
     tagline: '4WD grip and momentum shrug off drag, but heavy and a quarter of your budget',
@@ -69,7 +69,7 @@ const WHEELS: OptionDef[] = [
     price: 0,
     mass: 20,
     mu: 0.85,
-    crr: 0.008,
+    crr: 0.009,
     bumpLoss: 0.25,
     tagline: 'Light and free-rolling, but they spin under power and lose 25% at each track',
   },
@@ -79,19 +79,19 @@ const WHEELS: OptionDef[] = [
     price: 10,
     mass: 60,
     mu: 0.95,
-    crr: 0.015,
-    bumpLoss: 0.08,
-    tagline: 'Good grip and only lose 8% at each track, for a little weight',
+    crr: 0.021,
+    bumpLoss: 0.07,
+    tagline: 'Good grip and only lose 7% at each track, for a little weight',
   },
   {
     id: 'monster',
     name: 'Monster',
     price: 20,
-    mass: 200,
+    mass: 220,
     mu: 1.3,
-    crr: 0.035,
+    crr: 0.024,
     bumpLoss: 0.005,
-    cdA: 0.3,
+    cdA: 0.35,
     tagline: 'Huge grip and roll right over the tracks, but heavy, draggy and slow-rolling',
   },
 ];
@@ -102,7 +102,7 @@ const ENGINES: OptionDef[] = [
     name: 'Lawnmower',
     price: 0,
     mass: 30,
-    power: 2_500,
+    power: 2500,
     tagline: 'Free and light, but only 2.5 kW: it putters down the hill',
   },
   {
@@ -117,10 +117,10 @@ const ENGINES: OptionDef[] = [
     id: 'jet',
     name: 'Jet',
     price: 35,
-    mass: 420,
-    power: 190_000,
+    mass: 350,
+    power: 200_000,
     jet: true,
-    thrustCap: 16_500,
+    thrustCap: 17_500,
     tagline: 'Thrust ignores grip, so no wheelspin, but heavy, pricey and capped off the line',
   },
 ];
@@ -131,7 +131,7 @@ const FUEL: OptionDef[] = [
     name: 'Jerry can',
     price: 0,
     mass: 10,
-    energy: 80_000,
+    energy: 120_000,
     tagline: 'Light and free: plenty for a lawnmower, a sip for a V8',
   },
   {
@@ -139,16 +139,16 @@ const FUEL: OptionDef[] = [
     name: 'Standard',
     price: 10,
     mass: 60,
-    energy: 450_000,
-    tagline: '450 kJ: a few seconds of V8 or jet for 60 kg',
+    energy: 460_000,
+    tagline: '460 kJ: a few seconds of V8 or jet for 60 kg',
   },
   {
     id: 'big',
     name: 'Oversized',
     price: 20,
-    mass: 280,
-    energy: 1_000_000,
-    tagline: '1000 kJ, the most push, but 280 kg to haul and leftovers are wasted',
+    mass: 230,
+    energy: 760_000,
+    tagline: '760 kJ, the most push, but 230 kg to haul and leftovers are wasted',
   },
 ];
 
@@ -159,7 +159,7 @@ const WINGS: OptionDef[] = [
     name: 'Spoiler',
     price: 8,
     mass: 10,
-    clA: 0.6,
+    clA: 0.7,
     cdA: 0.1,
     tagline: 'A little lift for a little drag',
   },
@@ -168,14 +168,17 @@ const WINGS: OptionDef[] = [
     name: 'Glider wings',
     price: 25,
     mass: 60,
-    clA: 3.0,
-    cdA: 0.4,
-    tagline: 'Big lift, great on light cars, but pricey and draggy',
+    clA: 13.2,
+    cdA: 0.2,
+    openCdA: 2.6,
+    trim: 0.65,
+    opensAtApex: true,
+    tagline: 'Pop open at the top of the arc to glide far on light cars, but pricey and draggy',
   },
 ];
 
 const NOSES: OptionDef[] = [
-  { id: 'blunt', name: 'Blunt', price: 0, mass: 0, cdA: 0.55, tagline: 'Free, but pushes a wall of air' },
+  { id: 'blunt', name: 'Blunt', price: 0, mass: 0, cdA: 0.5, tagline: 'Free, but pushes a wall of air' },
   { id: 'wedge', name: 'Wedge', price: 8, mass: 20, cdA: 0.1, tagline: 'Cuts most of the drag for a little weight' },
   { id: 'cone', name: 'Cone', price: 15, mass: 40, cdA: 0.0, tagline: 'No extra drag at all, but the priciest and heaviest' },
 ];
@@ -187,15 +190,15 @@ const BOOSTERS: OptionDef[] = [
     name: 'Nitro',
     price: 15,
     mass: 30,
-    nitroJ: 120_000,
-    tagline: '+120 kJ kick at the lip: huge on light cars, small on heavy ones',
+    nitroJ: 110_000,
+    tagline: '+110 kJ kick at the lip: huge on light cars, small on heavy ones',
   },
   {
     id: 'kite',
     name: 'Kite',
     price: 10,
     mass: 15,
-    kite: { clA: 6, liftCap: 2300, cdA: 1.1 },
+    kite: { clA: 6.5, liftCap: 2200, cdA: 1.1 },
     tagline: 'Opens at the lip for big lift even when slow, but drags in flight',
   },
 ];
@@ -273,11 +276,18 @@ export function computeStats(config: CarConfig): CarStats {
   let mass = 0;
   let cdA = 0;
   let clA = 0;
+  let apexClA = 0;
+  let apexCdA = 0;
+  let apexTrim = 0;
   let price = 0;
   for (const o of opts) {
     mass += o.mass;
     cdA += o.cdA ?? 0;
-    clA += o.clA ?? 0;
+    if (o.opensAtApex) {
+      apexClA += o.clA ?? 0;
+      apexCdA += o.openCdA ?? 0;
+      apexTrim = Math.max(apexTrim, o.trim ?? 1);
+    } else clA += o.clA ?? 0;
     price += o.price;
   }
 
@@ -285,6 +295,9 @@ export function computeStats(config: CarConfig): CarStats {
     mass,
     cdA,
     clA,
+    apexClA,
+    apexCdA,
+    apexTrim,
     mu: (wheels.mu ?? 0.9) * (chassis.gripMul ?? 1),
     power: engine.power ?? 0,
     energy: fuel.energy ?? 0,

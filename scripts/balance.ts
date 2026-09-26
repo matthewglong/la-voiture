@@ -1,7 +1,7 @@
 // Balance check: enumerate every affordable build, simulate it in three winds, and check that
 // no performance option is dominated. Run with `npm run balance`. Exits non-zero on failure.
 import { BUDGET, PARTS, SLOT_LABELS, computeStats, defaultConfig } from '../src/parts';
-import { simulateToEnd, type SimResult } from '../src/sim/physics';
+import { CarSim, DT, simulateToEnd, type SimResult } from '../src/sim/physics';
 import { PERFORMANCE_SLOTS, type CarConfig, type SlotId } from '../src/types';
 
 declare const process: { exitCode: number | undefined; argv: string[] };
@@ -204,6 +204,90 @@ for (const st of optionStats) {
 }
 out('');
 
+// Wind: a headwind must never lengthen a flight. (A tailwind can shorten a slow glider's flight:
+// less airspeed means less lift once its wings are open. That is reported, not failed.)
+let windWrong = 0;
+let tailShort = 0;
+let tailExample = '';
+for (const b of builds) {
+  const [dh, dc, dt] = distByKey.get(b.key)!;
+  if (dh > dc + 0.05) windWrong++;
+  if (dc > dt + 0.05) {
+    tailShort++;
+    if (!tailExample) tailExample = `${label(b.config)}: ${dh.toFixed(1)} / ${dc.toFixed(1)} / ${dt.toFixed(1)} m`;
+  }
+}
+out(`## Wind`);
+out(`Builds that fly further into a headwind than in calm air: ${windWrong}`);
+out(`Builds that fly shorter with a tailwind than in calm air: ${tailShort}${tailExample ? ` (e.g. ${tailExample})` : ''}`);
+out('');
+
+// Glider wings spring open at the top of the arc and must visibly glide on a go-kart:
+// a flatter water entry and a longer flight than the same kart without wings.
+interface Flight {
+  distance: number;
+  air: number;
+  entryDeg: number;
+  apex: number;
+}
+function fly(cfg: CarConfig, wind: number): Flight | null {
+  const sim = new CarSim(computeStats(cfg), wind);
+  let vx = 0;
+  let vy = 0;
+  while (!sim.done) {
+    vx = sim.state.vel.x;
+    vy = sim.state.vel.y;
+    sim.step(DT);
+  }
+  if (sim.state.phase === 'dnf') return null;
+  return {
+    distance: sim.state.distance,
+    air: sim.state.flightTime,
+    entryDeg: (Math.atan2(-vy, vx) * 180) / Math.PI,
+    apex: sim.state.maxHeight,
+  };
+}
+const GLIDE_REFS: Partial<CarConfig>[] = [
+  { chassis: 'kart', wheels: 'tiny', engine: 'mower', fuel: 'jerry', nose: 'wedge', booster: 'nitro' },
+  { chassis: 'kart', wheels: 'standard', engine: 'v8', fuel: 'big', nose: 'cone', booster: 'none' },
+];
+const glideFails: string[] = [];
+out('## Glide (calm air): go-kart with glider wings vs the same kart with none');
+for (const ref of GLIDE_REFS) {
+  const base = { ...defaultConfig(0), ...ref } as CarConfig;
+  const g = fly({ ...base, wing: 'glider' }, 0);
+  const n = fly({ ...base, wing: 'none' }, 0);
+  const name = label({ ...base, wing: 'glider' });
+  if (!g || !n) {
+    glideFails.push(`${name}: DNF`);
+    continue;
+  }
+  out(
+    `${name}: ${g.distance.toFixed(1)} vs ${n.distance.toFixed(1)} m, air ${g.air.toFixed(1)} vs ${n.air.toFixed(1)} s, water entry ${g.entryDeg.toFixed(0)}° vs ${n.entryDeg.toFixed(0)}°`,
+  );
+  if (g.entryDeg > 0.75 * n.entryDeg || g.air < 1.2 * n.air) glideFails.push(name);
+}
+out('');
+
+// Pacing: sensible builds (a V8 or jet with a real tank) should reach the lip in about 8-15 s.
+const pace = (pred: (c: CarConfig) => boolean): number[] =>
+  ranked
+    .get(0)!
+    .filter((sc) => !sc.result.dnf && pred(sc.build.config))
+    .map((sc) => sc.result.runTime)
+    .sort((a, b) => a - b);
+const pct = (a: number[], f: number): number => a[Math.min(a.length - 1, Math.floor(a.length * f))];
+const sensible = pace((c) => c.engine !== 'mower' && c.fuel !== 'jerry');
+const weak = pace((c) => c.engine === 'mower' || c.fuel === 'jerry');
+out('## Run-up pacing (calm air)');
+out(
+  `V8 or jet with a Standard or Oversized tank (${sensible.length} builds): median ${pct(sensible, 0.5).toFixed(1)} s, 90% within ${pct(sensible, 0.9).toFixed(1)} s`,
+);
+out(
+  `Lawnmower or jerry-can builds (${weak.length} builds, coasting most of the way): median ${pct(weak, 0.5).toFixed(1)} s, 90% within ${pct(weak, 0.9).toFixed(1)} s`,
+);
+out('');
+
 // All-$0 build.
 const zero = defaultConfig(0);
 const zeroResults = WINDS.map((w) => ({ wind: w, r: simulateToEnd(computeStats(zero), w) }));
@@ -243,6 +327,9 @@ for (const { wind, r } of zeroResults) {
 }
 if (nanFound) failures.push('NaN or infinite values in the results');
 if (neverBest.length > 0) failures.push(`Never the best pick for its slot: ${neverBest.join(', ')}`);
+if (windWrong > 0) failures.push(`${windWrong} builds fly further into a headwind than in calm air`);
+if (glideFails.length > 0) failures.push(`Glider wings don't visibly glide on: ${glideFails.join('; ')}`);
+if (pct(sensible, 0.5) > 15) failures.push(`Sensible builds take ${pct(sensible, 0.5).toFixed(1)} s to reach the lip (target about 8-15 s)`);
 
 // Tuning targets (enforced so the numbers stay in range). The all-$0 target applies in calm air;
 // in a ±8 m/s wind it must still clearly reach the water (≥ 3 m) and stay a weak build (≤ 40 m).
@@ -264,6 +351,7 @@ const runTimes = topSlice.map((s) => s.result.runTime);
 const airTimes = topSlice.map((s) => s.result.flightTime);
 const allRun = WINDS.flatMap((w) => ranked.get(w)!.filter((s) => !s.result.dnf).map((s) => s.result.runTime));
 const allAir = WINDS.flatMap((w) => ranked.get(w)!.filter((s) => !s.result.dnf).map((s) => s.result.flightTime));
+if (Math.max(...allAir) > 6.5) failures.push(`Longest flight is ${Math.max(...allAir).toFixed(1)} s (target about 2-6 s)`);
 const range = (a: number[]): string => `${Math.min(...a).toFixed(1)}-${Math.max(...a).toFixed(1)} s`;
 notes.push(`Run-up time, top ${Math.round(TOP_FRACTION * 100)}%: ${range(runTimes)} (all finishers: ${range(allRun)})`);
 notes.push(`Flight time, top ${Math.round(TOP_FRACTION * 100)}%: ${range(airTimes)} (all finishers: ${range(allAir)})`);
@@ -271,7 +359,7 @@ notes.push(`Flight time, top ${Math.round(TOP_FRACTION * 100)}%: ${range(airTime
 out('## Checks');
 for (const n of notes) out(`- ${n}`);
 if (failures.length === 0) {
-  out('- PASS: every performance option reaches the top 10% in some wind and is the best pick for its slot in some build, the winner changes with wind, the all-$0 build reaches the lip in every wind and splashes 5-25 m out in calm air, best builds fly 80-180 m, no NaNs.');
+  out('- PASS: every performance option reaches the top 10% in some wind and is the best pick for its slot in some build, the winner changes with wind, a headwind always shortens the flight, glider wings visibly glide, sensible builds reach the lip in about 8-15 s, no flight lasts over 6.5 s, the all-$0 build reaches the lip in every wind and splashes 5-25 m out in calm air, best builds fly 80-180 m, no NaNs.');
 } else {
   for (const f of failures) out(`- FAIL: ${f}`);
 }

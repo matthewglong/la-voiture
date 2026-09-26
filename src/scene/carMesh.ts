@@ -18,6 +18,8 @@ export interface CarMesh {
   setThrottle(level: number): void;
   /** 0..1 nitro flame burst from the nitro bottles' nozzles. No-op without nitro. */
   setNitro(level: number): void;
+  /** Glider wings: folded back along the body (false) or spread (true); animated unless instant. */
+  setWingsOpen(open: boolean, instant?: boolean): void;
   /** Idle animation (flag flutter, kite sway, flame flicker). */
   update(dt: number, t: number): void;
   /** Frees per-car resources only (never shared cached geometry/materials). */
@@ -212,6 +214,8 @@ interface Ctx {
   fx: Set<THREE.Object3D>;
   disposables: { dispose(): void }[];
   wheelSpins: THREE.Object3D[];
+  /** Glider wing hinges (one per side, side = +1 for +z). */
+  wingPivots: { pivot: THREE.Group; side: number }[];
 }
 
 interface MeshOpts {
@@ -972,10 +976,15 @@ function gliderGeo(rootZ: number): THREE.BufferGeometry {
 
 function buildGlider(ctx: Ctx, gl: Layout['glider']): void {
   const m = M();
-  const b = ctx.body;
   const geo = gliderGeo(gl.rootZ);
   for (const e of [1, -1]) {
-    const wing = add(b, geo, m.white, gl.x, gl.y, 0, { rx: -e * 0.08, sz: e });
+    // Each wing (and its strut) hangs off a hinge so it can fold back along the body.
+    const pivot = new THREE.Group();
+    pivot.position.set(gl.x, gl.y, 0);
+    ctx.body.add(pivot);
+    ctx.wingPivots.push({ pivot, side: e });
+    const b = pivot;
+    const wing = add(b, geo, m.white, 0, 0, 0, { rx: -e * 0.08, sz: e });
     // Painted tip with a tall winglet so the wing still reads edge-on from the side camera.
     add(wing, rbox(0.46, 0.09, 0.1, 0.03), ctx.paint, -0.14, 0, 2.4);
     add(wing, rbox(0.42, 0.42, 0.06, 0.03), ctx.paint, -0.2, 0.19, 2.44, { rz: 0.12 });
@@ -983,7 +992,7 @@ function buildGlider(ctx: Ctx, gl: Layout['glider']): void {
     const le = Math.atan2(0.22, 2.42 - gl.rootZ);
     add(wing, rbox(0.1, 0.07, 2.42 - gl.rootZ, 0.03), ctx.paint, 0.36 - 0.11, 0, (2.42 + gl.rootZ) / 2 - 0.03, { ry: -le });
     if (gl.strutFromY !== undefined && gl.strutZ !== undefined) {
-      add(b, rbox(0.08, gl.y - gl.strutFromY, 0.05, 0.02), m.darkMetal, gl.x, (gl.y + gl.strutFromY) / 2, e * gl.strutZ);
+      add(b, rbox(0.08, gl.y - gl.strutFromY, 0.05, 0.02), m.darkMetal, 0, (gl.strutFromY - gl.y) / 2, e * gl.strutZ);
     }
   }
 }
@@ -1259,6 +1268,7 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
     fx: new Set(),
     disposables: [],
     wheelSpins: [],
+    wingPivots: [],
   };
 
   let L: Layout;
@@ -1351,9 +1361,26 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
     kite.linePos.needsUpdate = true;
   };
 
+  // Wing hinge: 0 = folded back, 1 = spread. A springy approach gives the unfold a little pop.
+  const WING_FOLD = 1.35;
+  let wingTarget = 1;
+  let wingPos = 1;
+  let wingVel = 0;
+  const applyWings = (): void => {
+    for (const w of ctx.wingPivots) w.pivot.rotation.y = -w.side * WING_FOLD * (1 - wingPos);
+  };
+
   return {
     group: root,
     wheelRadius: wt.r,
+    setWingsOpen(open: boolean, instant = false): void {
+      wingTarget = open ? 1 : 0;
+      if (instant) {
+        wingPos = wingTarget;
+        wingVel = 0;
+        applyWings();
+      }
+    },
     setWheelRotation(angle: number): void {
       for (const w of ctx.wheelSpins) w.rotation.z = -angle;
     },
@@ -1373,9 +1400,19 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
       nitro = THREE.MathUtils.clamp(level, 0, 1);
       applyFlames(false);
     },
-    update(_dt: number, t: number): void {
+    update(dt: number, t: number): void {
       if (disposed) return;
       applyFlames(true);
+      if (ctx.wingPivots.length && (wingPos !== wingTarget || wingVel !== 0)) {
+        const h = Math.min(dt, 1 / 30);
+        wingVel += (180 * (wingTarget - wingPos) - 16 * wingVel) * h;
+        wingPos += wingVel * h;
+        if (Math.abs(wingTarget - wingPos) < 1e-3 && Math.abs(wingVel) < 1e-2) {
+          wingPos = wingTarget;
+          wingVel = 0;
+        }
+        applyWings();
+      }
       if (flag) {
         const pos = flag.geo.getAttribute('position') as THREE.BufferAttribute;
         const arr = pos.array as Float32Array;

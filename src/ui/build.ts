@@ -160,6 +160,7 @@ export class BuildUI {
   private readonly roundChip: HTMLElement;
   private readonly launchBtn: HTMLButtonElement;
   private readonly hint: HTMLElement;
+  private readonly bottom: HTMLElement;
   private readonly panels: [PanelRefs, PanelRefs];
   private view: BuildView | null = null;
   /** Stops re-rendering the option cards while the pointer is over them. */
@@ -172,14 +173,16 @@ export class BuildUI {
     this.roundChip = el('div', 'round-chip', top);
     this.wind = el('div', 'wind', top);
     this.wind.id = 'wind-forecast';
-    this.banner = el('div', 'banner', top);
+    const bottom = el('div', 'bottombar', this.root);
+    this.banner = el('div', 'banner', bottom);
     this.banner.id = 'draft-banner';
     this.panels = [this.makePanel(0), this.makePanel(1)];
     this.launchBtn = el('button', 'launch hidden', this.root);
     this.launchBtn.id = 'launch-btn';
     this.launchBtn.innerHTML = 'LAUNCH ▶<small>ENTER</small>';
     this.launchBtn.addEventListener('click', () => this.h.onLaunch());
-    this.hint = el('div', 'title-card', this.root);
+    this.hint = el('div', 'title-card', bottom);
+    this.bottom = bottom;
   }
 
   private makePanel(p: PlayerIndex): PanelRefs {
@@ -195,6 +198,9 @@ export class BuildUI {
     name.id = `name-p${p + 1}`;
     name.setAttribute('aria-label', `Player ${p + 1} name`);
     name.addEventListener('input', () => this.h.onName(p, name.value));
+    name.addEventListener('blur', () => {
+      if (this.view) name.value = this.view.names[p];
+    });
     name.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === 'Escape') name.blur();
       e.stopPropagation();
@@ -241,6 +247,7 @@ export class BuildUI {
       this.banner.dataset.active = '';
     }
     this.launchBtn.classList.toggle('hidden', !isDone(d));
+    this.bottom.classList.toggle('hidden', isDone(d));
     this.hint.textContent = isDone(d)
       ? 'Click LAUNCH (or press Enter) to race'
       : `Click a card or press 1-${Math.min(9, PARTS[slot!].length)} · M mutes`;
@@ -281,7 +288,7 @@ export class BuildUI {
 
     // Option cards (active player only).
     const slot = currentSlot(d);
-    const key = `${isActive}|${slot}|${money}|${d.slotIndex}|${d.turn}|${view.round}`;
+    const key = `${isActive}|${slot}|${money}|${d.slotIndex}|${d.turn}|${view.round}|${view.names.join('|')}`;
     if (key === this.optionsKey[p]) return;
     this.optionsKey[p] = key;
     refs.options.replaceChildren();
@@ -295,7 +302,8 @@ export class BuildUI {
       const other = view.names[active ?? 0];
       w.append('Waiting for ');
       el('b', '', w, other);
-      w.append(` to pick a ${SLOT_LABELS[slot].toLowerCase()}…`);
+      const label = SLOT_LABELS[slot].toLowerCase();
+      w.append(` to pick ${/^[aeiou]/.test(label) ? 'an' : 'a'} ${label}…`);
       return;
     }
     el('div', 'section-title', refs.options, `Pick your ${SLOT_LABELS[slot].toLowerCase()}`);

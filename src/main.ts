@@ -60,6 +60,11 @@ const fixedWind =
 const windRng = makeRng(seed);
 const buildRng = makeRng(seed ^ 0x5bd1e995);
 
+function cleanName(p: PlayerIndex, raw: string): string {
+  const name = raw.trim().slice(0, 16).trim();
+  return name === '' ? DEFAULT_NAMES[p] : name;
+}
+
 function rollWind(): number {
   const rolled = Math.round((windRng() * 16 - 8) * 10) / 10;
   return fixedWind ?? rolled;
@@ -76,7 +81,7 @@ const city = buildCity();
 scene.add(city.group);
 const landmarks = buildLandmarks();
 scene.add(landmarks.group);
-const bay = buildBay();
+const bay = buildBay({ envMap: world.skyEnv, anisotropy: world.renderer.capabilities.getMaxAnisotropy() });
 scene.add(bay.group);
 const splashes = new Splashes();
 scene.add(splashes.group);
@@ -139,6 +144,8 @@ class CarView {
     this.mesh?.setKiteOpen(false);
     this.mesh?.setThrottle(0);
     this.mesh?.setNitro(0);
+    // Glider wings show spread in the garage; they fold for the run-up at the countdown.
+    this.mesh?.setWingsOpen(true, true);
   }
 
   stopAudio(): void {
@@ -168,6 +175,8 @@ let doneTime = -1;
 let countIndex = -1;
 let gameClock = 0;
 let firstLaunchSeen = false;
+/** Game time of the most recent splash (the camera holds on it briefly). */
+let lastSplashAt = -1;
 let results: Record<string, unknown> | null = null;
 let sessionBest: { distance: number; name: string; player: PlayerIndex; round: number } | null = null;
 const eventLog: { t: number; player: PlayerIndex; event: SimEvent }[] = [];
@@ -195,11 +204,21 @@ const buildUI = new BuildUI(overlay, {
     startCountdown();
   },
   onName: (p, name) => {
-    names[p] = name.trim() === '' ? DEFAULT_NAMES[p] : name.slice(0, 16);
+    names[p] = cleanName(p, name);
     renderBuild();
   },
 });
 const hud = new HUD(overlay);
+const fade = document.createElement('div');
+fade.className = 'fade';
+overlay.appendChild(fade);
+/** Cut the camera back to the start line behind a short fade. */
+function cutToStart(): void {
+  rig.snap(camTargets, 0);
+  fade.classList.remove('go');
+  void fade.offsetWidth;
+  fade.classList.add('go');
+}
 
 const muteBtn = document.createElement('button');
 muteBtn.className = 'mute';
@@ -297,6 +316,7 @@ function startCountdown(): boolean {
   hud.setup(names, PLAYER_COLORS, wind);
   hud.showCars(true);
   hud.show(true);
+  for (const c of cars) c.mesh?.setWingsOpen(false);
   rig.setMode('countdown');
   return true;
 }
@@ -310,6 +330,7 @@ function startRace(): void {
   stateTime = 0;
   doneTime = -1;
   firstLaunchSeen = false;
+  lastSplashAt = -1;
   rig.setMode('chase');
   for (const p of PLAYERS) {
     const kind = getOption('engine', raceConfigs[p].engine).id as EngineKind;
@@ -347,8 +368,14 @@ function handleEvent(p: PlayerIndex, e: SimEvent): void {
       }
       break;
     }
+    case 'wingsOpen':
+      car.mesh?.setWingsOpen(true);
+      hud.flash(p, 'wings', 'GLIDING!', 'air', gameClock, 2.5);
+      sound.wings(pan);
+      break;
     case 'splash': {
       car.splashT = 0;
+      lastSplashAt = gameClock;
       const pos = new THREE.Vector3(e.x, 0, TRACK.laneZ[p]);
       splashes.spawn(pos, e.speed, PLAYER_COLORS[p]);
       sound.splash(pan, e.speed / 30);
@@ -418,7 +445,7 @@ function finishRace(): void {
   };
   state = 'RESULTS';
   stateTime = 0;
-  rig.setMode('results');
+  rig.setMode(firstLaunchSeen ? 'results' : 'chase');
   hud.showCars(false);
   for (const p of PLAYERS) hud.setTag(p, 0, 0, false);
   hud.showResults(
@@ -441,6 +468,7 @@ function rematch(): boolean {
   firstPicker = (1 - firstPicker) as PlayerIndex;
   wind = rollWind();
   enterBuild();
+  cutToStart();
   return true;
 }
 
@@ -453,19 +481,24 @@ function newPlayers(): boolean {
   bay.setBest(null);
   wind = rollWind();
   enterBuild();
+  cutToStart();
   return true;
 }
 
 // ---------- Input ----------
 window.addEventListener('pointerdown', () => sound.unlock(), { capture: true });
+// Buttons drop focus after a click so Enter/Space never re-press them behind the game's back.
+document.addEventListener('click', (e) => (e.target as HTMLElement | null)?.closest('button')?.blur());
 window.addEventListener('keydown', (e) => {
   sound.unlock();
   const target = e.target as HTMLElement | null;
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
   if (e.key === 'm' || e.key === 'M') {
+    e.preventDefault();
     sound.toggleMute();
     return;
   }
+  if (e.key === 'Enter' || e.key === ' ' || /^[1-9]$/.test(e.key)) e.preventDefault();
   if (state === 'BUILD') {
     if (/^[1-9]$/.test(e.key)) {
       const slot = currentSlot(draft);
@@ -588,6 +621,18 @@ function frame(): void {
         for (const e of sims[p].step(DT)) handleEvent(p, e);
       }
     }
+    // Camera: side-on while anyone is airborne; if the other car is still well up the hill after a
+    // splash, swing back to chase it, then go side-on again as it nears the lip.
+    if (state === 'FLIGHT') {
+      const phases = sims.map((sim) => sim.state.phase);
+      const runner = PLAYERS.find((p) => phases[p] === 'run');
+      if (phases.includes('flight')) rig.setMode('side');
+      else if (runner !== undefined) {
+        const far = sims[runner].state.s < TRACK.lip.s - 55;
+        if (far && gameClock - lastSplashAt > 1.6) rig.setMode('chase');
+        else if (!far) rig.setMode('side');
+      }
+    }
     if (sims[0].done && sims[1].done) {
       if (doneTime < 0) doneTime = stateTime;
       // Nobody launched: skip straight to the results after a short pause.
@@ -631,17 +676,20 @@ function frame(): void {
   const racing = state === 'COUNTDOWN' || state === 'RACE' || state === 'FLIGHT';
   const w = world.renderer.domElement.clientWidth;
   const h = world.renderer.domElement.clientHeight;
+  const tags: { x: number; y: number; vis: boolean }[] = [];
   for (const p of PLAYERS) {
-    if (!racing) {
-      hud.setTag(p, 0, 0, false);
-      continue;
-    }
     tagPos.copy(cars[p].root.position);
     tagPos.y += 3.2;
     tagPos.project(camera);
-    const vis = tagPos.z < 1 && Math.abs(tagPos.x) < 1.05 && Math.abs(tagPos.y) < 1.05;
-    hud.setTag(p, (tagPos.x * 0.5 + 0.5) * w, (-tagPos.y * 0.5 + 0.5) * h, vis);
+    const vis = racing && tagPos.z < 1 && Math.abs(tagPos.x) < 1.05 && Math.abs(tagPos.y) < 1.05;
+    tags.push({ x: (tagPos.x * 0.5 + 0.5) * w, y: (-tagPos.y * 0.5 + 0.5) * h, vis });
   }
+  // Keep the two tags from stacking when the cars are side by side on screen.
+  if (tags[0].vis && tags[1].vis && Math.abs(tags[0].x - tags[1].x) < 110 && Math.abs(tags[0].y - tags[1].y) < 34) {
+    const upper = tags[0].y <= tags[1].y ? 0 : 1;
+    tags[upper].y = Math.min(tags[upper].y, tags[1 - upper].y) - 34;
+  }
+  for (const p of PLAYERS) hud.setTag(p, tags[p].x, tags[p].y, tags[p].vis);
 
   for (const c of cars) c.trail.update(camera);
   splashes.update(gdt);
@@ -701,7 +749,7 @@ const api = {
     return [...names] as [string, string];
   },
   setName(p: PlayerIndex, name: string): void {
-    names[p] = name.trim() === '' ? DEFAULT_NAMES[p] : name.slice(0, 16);
+    names[p] = cleanName(p, name);
     if (state === 'BUILD') renderBuild();
   },
   get draft() {

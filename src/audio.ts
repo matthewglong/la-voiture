@@ -205,6 +205,27 @@ export class Sound {
     n.stop(t + 0.8);
   }
 
+  /** Glider wings snapping open: a short rising swoosh with a click. */
+  wings(pan = 0): void {
+    if (!this.ctx || !this.master) return;
+    const t = this.ctx.currentTime;
+    const n = this.noiseSource();
+    if (!n) return;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(700, t);
+    f.frequency.exponentialRampToValueAtTime(3200, t + 0.25);
+    f.Q.value = 2.5;
+    const g = this.envGain(0.3, 0.02, 0.3)!;
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = pan;
+    n.connect(f).connect(g).connect(p).connect(this.master);
+    n.start(t);
+    n.stop(t + 0.4);
+    p.connect(this.master);
+    this.tone(1800, 0.05, 'square', 0.05, 0.2);
+  }
+
   cheer(): void {
     if (!this.ctx || !this.master) return;
     const t = this.ctx.currentTime;

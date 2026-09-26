@@ -13,6 +13,7 @@ export const START_GRACE = 1;
 export const MAX_RUN_TIME = 90;
 export const MAX_FLIGHT_TIME = 30;
 
+
 export type SimPhase = 'run' | 'flight' | 'splashed' | 'dnf';
 
 export type SimEvent =
@@ -25,6 +26,7 @@ export type SimEvent =
       speedBeforeNitro: number;
       wastedFuelFrac: number;
     }
+  | { type: 'wingsOpen'; t: number; x: number; y: number }
   | { type: 'splash'; t: number; distance: number; x: number; speed: number }
   | { type: 'dnf'; t: number; s: number; reason: 'stalled' | 'timeout' };
 
@@ -54,6 +56,8 @@ export interface SimState {
   engineForce: number;
   bumpsHit: number;
   kiteOpen: boolean;
+  /** Glider wings spring open at the top of the arc. */
+  wingsOpen: boolean;
   /** Seconds from the start to the lip (set at launch). */
   runTime: number;
   /** Seconds in the air so far / total at splash. */
@@ -110,6 +114,7 @@ export class CarSim {
       engineForce: 0,
       bumpsHit: 0,
       kiteOpen: false,
+      wingsOpen: false,
       runTime: 0,
       flightTime: 0,
       launchSpeed: 0,
@@ -138,8 +143,8 @@ export class CarSim {
     const k = this.stats;
     const m = k.mass;
     const seg = sampleTrack(this.track, st.s).segment;
-    const c = Math.cos(seg.angle);
-    const sn = Math.sin(seg.angle);
+    const c = seg.cos;
+    const sn = seg.sin;
     let v = st.speed;
 
     const normal = m * G * c;
@@ -148,7 +153,7 @@ export class CarSim {
     // Aerodynamic drag from the airspeed vector (horizontal wind), projected on the tangent.
     const ax = v * c - this.wind;
     const ay = v * sn;
-    const airspeed = Math.hypot(ax, ay);
+    const airspeed = Math.sqrt(ax * ax + ay * ay);
     force += -0.5 * RHO * k.cdA * airspeed * (ax * c + ay * sn);
 
     // Engine: burns a constant P watts while there is fuel, grip or thrust permitting.
@@ -215,8 +220,8 @@ export class CarSim {
     st.pos.x = p.x;
     st.pos.y = p.y;
     st.angle = p.angle;
-    st.vel.x = v * Math.cos(p.angle);
-    st.vel.y = v * Math.sin(p.angle);
+    st.vel.x = v * p.segment.cos;
+    st.vel.y = v * p.segment.sin;
 
     if ((s > START_GRACE && v <= STALL_SPEED) || (st.t >= 5 && s <= START_GRACE)) {
       this.dnf('stalled', events);
@@ -242,8 +247,8 @@ export class CarSim {
     st.s = lip.s;
     st.pos.x = lip.x;
     st.pos.y = lip.y;
-    st.vel.x = v * Math.cos(lip.angle);
-    st.vel.y = v * Math.sin(lip.angle);
+    st.vel.x = v * lip.cos;
+    st.vel.y = v * lip.sin;
     st.angle = lip.angle;
     st.speed = v;
     st.runTime = st.t;
@@ -264,6 +269,11 @@ export class CarSim {
     const st = this.state;
     const k = this.stats;
     const m = k.mass;
+    // Spring-loaded glider wings pop open as the car tips over the top of its arc.
+    if (!st.wingsOpen && k.apexClA > 0 && st.vel.y <= 0) {
+      st.wingsOpen = true;
+      events.push({ type: 'wingsOpen', t: st.t, x: st.pos.x, y: st.pos.y });
+    }
     const vax = st.vel.x - this.wind;
     const vay = st.vel.y;
     const sp2 = vax * vax + vay * vay;
@@ -271,7 +281,7 @@ export class CarSim {
 
     let fx = 0;
     let fy = -m * G;
-    const cdA = k.cdA + (st.kiteOpen && k.kite ? k.kite.cdA : 0);
+    const cdA = k.cdA + (st.kiteOpen && k.kite ? k.kite.cdA : 0) + (st.wingsOpen ? k.apexCdA : 0);
     fx -= 0.5 * RHO * cdA * sp * vax;
     fy -= 0.5 * RHO * cdA * sp * vay;
     if (sp > 1e-9) {
@@ -283,7 +293,14 @@ export class CarSim {
         py = -py;
       }
       let lift = 0.5 * RHO * k.clA * sp2;
-      if (st.kiteOpen && k.kite) lift += Math.min(0.5 * RHO * k.kite.clA * sp2, k.kite.liftCap);
+      let extra = st.kiteOpen && k.kite ? Math.min(0.5 * RHO * k.kite.clA * sp2, k.kite.liftCap) : 0;
+      if (st.wingsOpen) {
+        // Open glider wings trim to a steady glide: with the kite, their combined lift is capped
+        // at a fraction of the car's weight (a kite that already pulls harder keeps its own lift).
+        const wings = 0.5 * RHO * k.apexClA * sp2;
+        extra = Math.min(extra + wings, Math.max(extra, k.apexTrim * m * G));
+      }
+      lift += extra;
       fx += lift * px;
       fy += lift * py;
     }
@@ -296,7 +313,8 @@ export class CarSim {
     st.pos.y += st.vel.y * dt;
     st.t += dt;
     st.flightTime += dt;
-    st.speed = Math.hypot(st.vel.x, st.vel.y);
+    st.speed = Math.sqrt(st.vel.x * st.vel.x + st.vel.y * st.vel.y);
+    // Display only (atan2's last bits can differ between JS engines; nothing reads it back).
     st.angle = Math.atan2(st.vel.y, st.vel.x);
     if (st.pos.y > st.maxHeight) st.maxHeight = st.pos.y;
     const lipX = this.track.lip.x;

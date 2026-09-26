@@ -108,10 +108,10 @@ export class CameraRig {
     // back (~16 m to the cars) that turning cars stay in the gap between the two side panels.
     const y = TRACK.startY;
     return {
-      focus: new THREE.Vector3(9, y - 1.2, 0),
+      focus: new THREE.Vector3(9, y - 1.6, 0),
       yaw: CHASE_YAW + Math.sin(t * 0.07) * 1.2 * DEG,
-      pitch: 14 * DEG,
-      dist: 28,
+      pitch: 18.5 * DEG,
+      dist: 27,
     };
   }
 
@@ -135,10 +135,10 @@ export class CameraRig {
 
     if (this.mode === 'countdown' || this.mode === 'chase') {
       // Behind and above the trailing car, looking at a point ahead of the midpoint, so both cars
-      // stay in frame as they separate (beyond 80 m the view favours the leader).
+      // stay in frame as they separate (beyond 45 m the view follows the leader).
       const xs = pool.map((c) => c.pos.x);
       const lead = Math.max(...xs);
-      const trailX = Math.max(Math.min(...xs), lead - 80);
+      const trailX = Math.max(Math.min(...xs), lead - 45);
       const sep = lead - trailX;
       const trailY = pool.reduce((y, c) => (c.pos.x <= trailX + 0.01 ? c.pos.y : y), pool[0].pos.y);
       const back = (this.mode === 'countdown' ? 13 : 12) + sep * 0.35;

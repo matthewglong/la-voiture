@@ -23,10 +23,14 @@ function makeWaterNormals(size: number, seed: number): THREE.CanvasTexture {
     s = (s * 16807) % 2147483647;
     return s / 2147483647;
   };
-  for (let i = 0; i < 14; i++) {
-    const kx = Math.round((rnd() * 2 - 1) * (3 + i));
-    const ky = Math.round((rnd() * 2 - 1) * (3 + i)) || 1;
-    waves.push({ kx, ky, a: 1 / (1 + i * 0.55), p: rnd() * Math.PI * 2 });
+  // Many waves with evenly spread directions (integer wave vectors keep the tile seamless) and
+  // amplitude falling with frequency, so no single direction reads as stripes in the distance.
+  for (let i = 0; i < 26; i++) {
+    const ang = ((i + rnd() * 0.8) / 26) * Math.PI * 2;
+    const k = 4 + rnd() * 14;
+    const kx = Math.round(Math.cos(ang) * k);
+    const ky = Math.round(Math.sin(ang) * k) || 1;
+    waves.push({ kx, ky, a: 3 / Math.hypot(kx, ky), p: rnd() * Math.PI * 2 });
   }
   return canvasTexture(
     size,
@@ -46,8 +50,8 @@ function makeWaterNormals(size: number, seed: number): THREE.CanvasTexture {
             dx += c * wv.kx;
             dy += c * wv.ky;
           }
-          const nx = -dx * strength * 0.05;
-          const ny = -dy * strength * 0.05;
+          const nx = -dx * strength * 0.03;
+          const ny = -dy * strength * 0.03;
           const len = Math.hypot(nx, ny, 1);
           const i = (y * w + x) * 4;
           img.data[i] = ((nx / len) * 0.5 + 0.5) * 255;
@@ -95,7 +99,7 @@ function makeLabel(text: string, big: boolean, height: number): THREE.Sprite {
   return sprite;
 }
 
-export function buildBay(): Bay {
+export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } = {}): Bay {
   const group = new THREE.Group();
   group.name = 'bay';
   const lip = TRACK.lip;
@@ -104,20 +108,25 @@ export function buildBay(): Bay {
   const normals = makeWaterNormals(256, 7);
   const normals2 = makeWaterNormals(256, 91);
   const size = 14000;
-  const tile = 14; // metres per ripple tile
-  for (const tex of [normals, normals2]) tex.repeat.set(size / tile, size / tile);
-  normals2.repeat.multiplyScalar(0.61);
+  const tile = 21; // metres per ripple tile
+  for (const tex of [normals, normals2]) {
+    tex.repeat.set(size / tile, size / tile);
+    tex.anisotropy = opts.anisotropy ?? 8;
+  }
+  // A much larger, non-integer second layer breaks up the tiling pattern in the distance.
+  normals2.repeat.multiplyScalar(0.37);
   const waterMat = new THREE.MeshPhysicalMaterial({
-    color: 0x1b6d8c,
+    color: 0x0e5877,
     roughness: 0.2,
     metalness: 0,
     normalMap: normals,
     normalScale: new THREE.Vector2(0.55, 0.55),
-    clearcoat: 1,
-    clearcoatRoughness: 0.12,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.18,
     clearcoatNormalMap: normals2,
-    clearcoatNormalScale: new THREE.Vector2(0.4, 0.4),
-    envMapIntensity: 0.6,
+    clearcoatNormalScale: new THREE.Vector2(0.3, 0.3),
+    envMap: opts.envMap ?? null,
+    envMapIntensity: opts.envMap ? 0.45 : 0.5,
   });
   const water = new THREE.Mesh(new THREE.PlaneGeometry(size, size), waterMat);
   water.rotation.x = -Math.PI / 2;
@@ -169,7 +178,8 @@ export function buildBay(): Bay {
     // Labels float between the lanes so the two rows never overlap on screen.
     const label = makeLabel(big ? `${d} m` : `${d}`, big, big ? 4.2 : 2.1);
     label.position.set(lip.x + d, big ? 6.2 : 2.6, 0);
-    label.renderOrder = 2;
+    // Drawn after the (transparent) flight trails so trails never scribble over the numbers.
+    label.renderOrder = 5;
     group.add(label);
   }
 
@@ -178,8 +188,8 @@ export function buildBay(): Bay {
   best.visible = false;
   const bestBody = new THREE.Mesh(new THREE.SphereGeometry(0.75, 20, 14), yellow);
   bestBody.scale.y = 0.75;
-  const bestPole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 7, 10), pole);
-  bestPole.position.y = 3.5;
+  const bestPole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 10, 10), pole);
+  bestPole.position.y = 5;
   const flagTex = canvasTexture(128, 96, (ctx, w, h) => {
     const n = 4;
     for (let i = 0; i < n * 2; i++) {
@@ -195,7 +205,7 @@ export function buildBay(): Bay {
     flagGeo,
     new THREE.MeshStandardMaterial({ map: flagTex, side: THREE.DoubleSide, roughness: 0.7 }),
   );
-  flag.position.set(1.3, 6.1, 0);
+  flag.position.set(1.3, 9.1, 0);
   best.add(bestBody, bestPole, flag);
   best.traverse((o) => {
     o.castShadow = true;
@@ -217,7 +227,8 @@ export function buildBay(): Bay {
     best.visible = true;
     best.position.set(lip.x + distance, 0, 0);
     bestLabel = makeLabel(`BEST ${distance.toFixed(1)} m${holder ? ` · ${holder}` : ''}`, true, 2.6);
-    bestLabel.position.set(0, 9.2, 0);
+    bestLabel.position.set(0, 12.2, 0);
+    bestLabel.renderOrder = 5;
     if (color) bestLabel.material.color.set(color).lerp(new THREE.Color('#ffffff'), 0.55);
     best.add(bestLabel);
   };
