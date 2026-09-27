@@ -79,6 +79,19 @@ const world = createWorld(sceneHost);
 const { scene, camera } = world;
 const city = buildCity();
 scene.add(city.group);
+// The start gantry fades out while the chase camera looks through its banner and crossbar.
+const gantry = city.group.getObjectByName('startGantry') ?? null;
+const gantryMats: THREE.Material[] = [];
+gantry?.traverse((o) => {
+  const m = (o as THREE.Mesh).material;
+  if (!m) return;
+  for (const mat of Array.isArray(m) ? m : [m]) {
+    if (gantryMats.includes(mat)) continue;
+    mat.transparent = true;
+    gantryMats.push(mat);
+  }
+});
+let gantryOpacity = 1;
 const landmarks = buildLandmarks();
 scene.add(landmarks.group);
 const bay = buildBay({ envMap: world.skyEnv, anisotropy: world.renderer.capabilities.getMaxAnisotropy() });
@@ -538,6 +551,22 @@ const camTargets: CameraTarget[] = [0, 1].map(() => ({
 }));
 let frames = 0;
 let tagUpper: PlayerIndex = 0;
+let tagsStacked = false;
+
+function updateGantry(dt: number): void {
+  if (!gantry) return;
+  const cam = camera.position;
+  const above = cam.y - TRACK.startY;
+  const racing = state === 'COUNTDOWN' || state === 'RACE' || state === 'FLIGHT';
+  // Behind the start line and between the banner's bottom and a few metres over the crossbar.
+  const blocking = racing && cam.x < 4 && cam.x > -45 && above > 4.9 && above < 13;
+  gantryOpacity += ((blocking ? 0 : 1) - gantryOpacity) * damp(10, dt);
+  for (const m of gantryMats) {
+    m.opacity = gantryOpacity;
+    m.depthWrite = gantryOpacity > 0.5;
+  }
+  gantry.visible = gantryOpacity > 0.02;
+}
 
 function updateCars(dt: number, gdt: number, t: number): void {
   const building = state === 'BUILD';
@@ -684,6 +713,7 @@ function frame(): void {
     ct.splashed = ph === 'splashed';
   }
   rig.update(state === 'BUILD' ? dt : gdt, t, camTargets);
+  updateGantry(dt);
   world.setShadowFocus(rig.focus, state === 'BUILD' ? 40 : 60);
 
   // Name tags over the cars while racing.
@@ -698,9 +728,12 @@ function frame(): void {
     const vis = racing && tagPos.z < 1 && Math.abs(tagPos.x) < 1.05 && Math.abs(tagPos.y) < 1.05;
     tags.push({ x: (tagPos.x * 0.5 + 0.5) * w, y: (-tagPos.y * 0.5 + 0.5) * h, vis });
   }
-  // Keep the two tags from stacking when the cars are side by side on screen. The upper slot only
-  // changes hands when the order clearly flips, so tags don't hop between rows.
-  if (tags[0].vis && tags[1].vis && Math.abs(tags[0].x - tags[1].x) < 110 && Math.abs(tags[0].y - tags[1].y) < 34) {
+  // Keep the two tags from stacking when the cars are side by side on screen. Both the decision to
+  // stack and which tag sits on top use hysteresis, so tags don't hop between rows.
+  const tdx = Math.abs(tags[0].x - tags[1].x);
+  const tdy = Math.abs(tags[0].y - tags[1].y);
+  tagsStacked = tags[0].vis && tags[1].vis && (tagsStacked ? tdx < 125 && tdy < 44 : tdx < 110 && tdy < 34);
+  if (tagsStacked) {
     const dy = tags[0].y - tags[1].y;
     if (dy < -12) tagUpper = 0;
     else if (dy > 12) tagUpper = 1;

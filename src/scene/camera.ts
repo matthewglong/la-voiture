@@ -181,7 +181,9 @@ export class CameraRig {
     const centerX = (x0 + x1) / 2;
     const top = Math.max(lip.y + 4, ...ys.map((y) => y + 4));
     const heightDist = ((top + 2) / 2 / tanV) * margin;
-    const dist = Math.max(52, Math.min(maxDist, Math.max(widthFor(x0, x1), heightDist)));
+    // Results stay a little further back so the tall best-distance label clears the top bar.
+    const minDist = this.mode === 'results' ? 64 : 52;
+    const dist = Math.max(minDist, Math.min(maxDist, Math.max(widthFor(x0, x1), heightDist)));
     const panRate = this.mode === 'results' ? 1.5 : 5;
     this.sideFocusX += (centerX - this.sideFocusX) * damp(panRate, dt || 1 / 60);
     const results = this.mode === 'results';

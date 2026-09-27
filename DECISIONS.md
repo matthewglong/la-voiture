@@ -135,8 +135,8 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   keeps its native Enter/Space press.
 - Names are trimmed, cut to 16 characters and trimmed again; an empty name falls back to "Player N".
   The name box accepts up to 40 raw characters so leading spaces don't eat into the 16.
-- Name tags over the cars stack instead of overlapping when the cars are side by side. The upper
-  slot only changes hands when the order clearly flips, so tags don't hop rows.
+- Name tags over the cars stack instead of overlapping when the cars are side by side. Both the
+  decision to stack and which tag sits on top use hysteresis, so tags don't hop rows.
 - The Bay reflects a sky-only PMREM environment (the rest of the scene keeps the RoomEnvironment
   studio look for glossy toys). At grazing angles, the studio reflection read as oily streaks on the
   water. Two ripple layers with large, non-integer tile sizes and full anisotropy cut the
@@ -153,6 +153,9 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
 
 - **Build:** ~16 m behind the start line and ~6 m up, so the turning cars always sit in the gap
   between the two side panels, with the "LA VOITURE" start gantry, the street and the Bay beyond.
+- **Start gantry:** the "LA VOITURE" banner frames the build view and the countdown. During the
+  race it fades out whenever the chase camera sits behind it inside its height band, where it
+  would otherwise hide the cars.
 - **Chase:** behind and above the *trailing* car, looking just past the midpoint. It rises and pulls
   back as the cars separate, so both stay in frame up to 45 m apart; beyond that it follows the
   leader, which would otherwise be a speck. It starts low enough to pass under the start-line banner.
@@ -170,7 +173,8 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
 - **Far-apart races:** while the leader is followed (gap over 45 m), the trailing car is out of
   frame. Its HUD card still shows its speed and fuel, and the straggler follow-up brings it back
   as soon as the leader has splashed. A picture-in-picture inset was considered and left out.
-- **Results:** a slow side-on hold on the splash zone. If nobody launched (both stalled), it stays
+- **Results:** a slow side-on hold on the splash zone, at least 64 m back so the tall
+  best-distance label stays below the top bar. If nobody launched (both stalled), it stays
   on the stalled cars instead, framed above the results card.
 - **Rematch / New players** cut back to the start line behind a short white fade. A blended camera
   move from the Bay to the start line flew through the houses.
