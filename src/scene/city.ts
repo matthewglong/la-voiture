@@ -1492,8 +1492,8 @@ export function buildCity(): City {
     mesh.name = `startFlag${i + 1}`;
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.8, 8), new THREE.MeshStandardMaterial({ color: '#d8dce2', metalness: 0.8, roughness: 0.3 }));
     pole.position.set(startX0, START_Y + 8.1 + 0.9, z);
-    group.add(pole);
-    group.add(mesh);
+    gantry.add(pole);
+    gantry.add(mesh);
     flags.push({ mesh, base: Float32Array.from(g.getAttribute('position').array as ArrayLike<number>), phase: i * 1.7 });
   }
 

@@ -135,8 +135,9 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   keeps its native Enter/Space press.
 - Names are trimmed, cut to 16 characters and trimmed again; an empty name falls back to "Player N".
   The name box accepts up to 40 raw characters so leading spaces don't eat into the 16.
-- Name tags over the cars stack instead of overlapping when the cars are side by side. Both the
-  decision to stack and which tag sits on top use hysteresis, so tags don't hop rows.
+- Name tags over the cars stack instead of overlapping when the cars are side by side. The vertical
+  gap they need shrinks smoothly as they separate sideways, and a tag only moves as far as it has to,
+  so nothing pops. Which tag sits on top only changes when the order clearly flips.
 - The Bay reflects a sky-only PMREM environment (the rest of the scene keeps the RoomEnvironment
   studio look for glossy toys). At grazing angles, the studio reflection read as oily streaks on the
   water. Two ripple layers with large, non-integer tile sizes and full anisotropy cut the
@@ -153,9 +154,10 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
 
 - **Build:** ~16 m behind the start line and ~6 m up, so the turning cars always sit in the gap
   between the two side panels, with the "LA VOITURE" start gantry, the street and the Bay beyond.
-- **Start gantry:** the "LA VOITURE" banner frames the build view and the countdown. During the
-  race it fades out whenever the chase camera sits behind it inside its height band, where it
-  would otherwise hide the cars.
+- **Start gantry:** the "LA VOITURE" banner (and its chequered flags) frames the build view and the
+  countdown. Once the race is on and a car has driven under it, it fades out while the chase camera
+  is still behind it and above its lower edge, and stays faded until the camera itself has passed
+  it. Otherwise it could come between the camera and the cars.
 - **Chase:** behind and above the *trailing* car, looking just past the midpoint. It rises and pulls
   back as the cars separate, so both stay in frame up to 45 m apart; beyond that it follows the
   leader, which would otherwise be a speck. It starts low enough to pass under the start-line banner.

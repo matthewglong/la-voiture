@@ -92,6 +92,7 @@ gantry?.traverse((o) => {
   }
 });
 let gantryOpacity = 1;
+let gantryHidden = false;
 const landmarks = buildLandmarks();
 scene.add(landmarks.group);
 const bay = buildBay({ envMap: world.skyEnv, anisotropy: world.renderer.capabilities.getMaxAnisotropy() });
@@ -551,16 +552,17 @@ const camTargets: CameraTarget[] = [0, 1].map(() => ({
 }));
 let frames = 0;
 let tagUpper: PlayerIndex = 0;
-let tagsStacked = false;
 
 function updateGantry(dt: number): void {
   if (!gantry) return;
   const cam = camera.position;
-  const above = cam.y - TRACK.startY;
-  const racing = state === 'COUNTDOWN' || state === 'RACE' || state === 'FLIGHT';
-  // Behind the start line and between the banner's bottom and a few metres over the crossbar.
-  const blocking = racing && cam.x < 4 && cam.x > -45 && above > 4.9 && above < 13;
-  gantryOpacity += ((blocking ? 0 : 1) - gantryOpacity) * damp(10, dt);
+  const racing = state === 'RACE' || state === 'FLIGHT';
+  // Only once a car has driven under the banner can it come between the camera and the cars.
+  const carPassed = !!sims && sims.some((sim) => sim.state.pos.x > 3);
+  if (!racing || cam.x >= 4) gantryHidden = false;
+  else if (carPassed && cam.x > -45 && cam.y - TRACK.startY > 4.9) gantryHidden = true;
+  // Once faded it stays faded until the camera itself has passed the gantry.
+  gantryOpacity += ((gantryHidden ? 0 : 1) - gantryOpacity) * damp(10, dt);
   for (const m of gantryMats) {
     m.opacity = gantryOpacity;
     m.depthWrite = gantryOpacity > 0.5;
@@ -728,16 +730,15 @@ function frame(): void {
     const vis = racing && tagPos.z < 1 && Math.abs(tagPos.x) < 1.05 && Math.abs(tagPos.y) < 1.05;
     tags.push({ x: (tagPos.x * 0.5 + 0.5) * w, y: (-tagPos.y * 0.5 + 0.5) * h, vis });
   }
-  // Keep the two tags from stacking when the cars are side by side on screen. Both the decision to
-  // stack and which tag sits on top use hysteresis, so tags don't hop between rows.
-  const tdx = Math.abs(tags[0].x - tags[1].x);
-  const tdy = Math.abs(tags[0].y - tags[1].y);
-  tagsStacked = tags[0].vis && tags[1].vis && (tagsStacked ? tdx < 125 && tdy < 44 : tdx < 110 && tdy < 34);
-  if (tagsStacked) {
+  // Keep the two tags from stacking when the cars are side by side on screen. The vertical gap they
+  // need shrinks smoothly as they move apart sideways, and a tag only moves as far as it has to, so
+  // nothing pops; which tag sits on top only changes when the order clearly flips.
+  if (tags[0].vis && tags[1].vis) {
     const dy = tags[0].y - tags[1].y;
     if (dy < -12) tagUpper = 0;
     else if (dy > 12) tagUpper = 1;
-    tags[tagUpper].y = Math.min(tags[tagUpper].y, tags[1 - tagUpper].y) - 34;
+    const need = 34 * THREE.MathUtils.clamp((140 - Math.abs(tags[0].x - tags[1].x)) / 40, 0, 1);
+    tags[tagUpper].y = Math.min(tags[tagUpper].y, tags[1 - tagUpper].y - need);
   }
   for (const p of PLAYERS) hud.setTag(p, tags[p].x, tags[p].y, tags[p].vis);
 
