@@ -224,6 +224,7 @@ button:disabled {
 .panel-head input {
   flex: 1;
   min-width: 0;
+  text-overflow: ellipsis;
   font: inherit;
   font-size: 1.15rem;
   font-weight: 900;
@@ -607,6 +608,10 @@ button:disabled {
 
 .fade.go {
   animation: fadecut 0.55s ease-out;
+}
+
+.fade.go.quick {
+  animation-duration: 0.4s;
 }
 
 @keyframes fadecut {

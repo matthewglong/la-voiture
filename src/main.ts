@@ -212,12 +212,17 @@ const hud = new HUD(overlay);
 const fade = document.createElement('div');
 fade.className = 'fade';
 overlay.appendChild(fade);
-/** Cut the camera back to the start line behind a short fade. */
-function cutToStart(): void {
+/** Jump the camera to its current goal behind a short white fade (no flying through houses). */
+function cutCamera(quick = false): void {
   rig.snap(camTargets, 0);
-  fade.classList.remove('go');
+  fade.classList.remove('go', 'quick');
   void fade.offsetWidth;
   fade.classList.add('go');
+  if (quick) fade.classList.add('quick');
+}
+/** Cut the camera back to the start line behind a short fade. */
+function cutToStart(): void {
+  cutCamera();
 }
 
 const muteBtn = document.createElement('button');
@@ -532,6 +537,7 @@ const camTargets: CameraTarget[] = [0, 1].map(() => ({
   splashed: false,
 }));
 let frames = 0;
+let tagUpper: PlayerIndex = 0;
 
 function updateCars(dt: number, gdt: number, t: number): void {
   const building = state === 'BUILD';
@@ -623,16 +629,22 @@ function frame(): void {
         for (const e of sims[p].step(DT)) handleEvent(p, e);
       }
     }
-    // Camera: side-on while anyone is airborne; if the other car is still well up the hill after a
-    // splash, swing back to chase it, then go side-on again as it nears the lip.
+    // Camera: side-on while anyone is airborne. If the other car is still well up the hill after a
+    // splash, cut (behind a quick fade) to chase it, and cut back side-on as it nears the lip. A
+    // blended swing between the Bay and the hill would fly through the houses.
     if (state === 'FLIGHT') {
       const phases = sims.map((sim) => sim.state.phase);
       const runner = PLAYERS.find((p) => phases[p] === 'run');
       if (phases.includes('flight')) rig.setMode('side');
       else if (runner !== undefined) {
         const far = sims[runner].state.s < TRACK.lip.s - 55;
-        if (far && gameClock - lastSplashAt > 1.6) rig.setMode('chase');
-        else if (!far) rig.setMode('side');
+        if (far && gameClock - lastSplashAt > 1.6 && rig.mode !== 'chase') {
+          rig.setMode('chase');
+          cutCamera(true);
+        } else if (!far && rig.mode === 'chase') {
+          rig.setMode('side');
+          cutCamera(true);
+        }
       }
     }
     if (sims[0].done && sims[1].done) {
@@ -686,10 +698,13 @@ function frame(): void {
     const vis = racing && tagPos.z < 1 && Math.abs(tagPos.x) < 1.05 && Math.abs(tagPos.y) < 1.05;
     tags.push({ x: (tagPos.x * 0.5 + 0.5) * w, y: (-tagPos.y * 0.5 + 0.5) * h, vis });
   }
-  // Keep the two tags from stacking when the cars are side by side on screen.
+  // Keep the two tags from stacking when the cars are side by side on screen. The upper slot only
+  // changes hands when the order clearly flips, so tags don't hop between rows.
   if (tags[0].vis && tags[1].vis && Math.abs(tags[0].x - tags[1].x) < 110 && Math.abs(tags[0].y - tags[1].y) < 34) {
-    const upper = tags[0].y <= tags[1].y ? 0 : 1;
-    tags[upper].y = Math.min(tags[upper].y, tags[1 - upper].y) - 34;
+    const dy = tags[0].y - tags[1].y;
+    if (dy < -12) tagUpper = 0;
+    else if (dy > 12) tagUpper = 1;
+    tags[tagUpper].y = Math.min(tags[tagUpper].y, tags[1 - tagUpper].y) - 34;
   }
   for (const p of PLAYERS) hud.setTag(p, tags[p].x, tags[p].y, tags[p].vis);
 

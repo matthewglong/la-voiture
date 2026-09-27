@@ -10,7 +10,7 @@ import {
   type Draft,
 } from '../draft';
 import { PARTS, SLOT_LABELS, computeStats } from '../parts';
-import { RHO } from '../sim/physics';
+import { G, RHO } from '../sim/physics';
 import { SLOT_ORDER, type CarConfig, type CarStats, type PlayerIndex } from '../types';
 
 export interface BuildHandlers {
@@ -43,6 +43,12 @@ function kiteEquivalent(k: CarStats['kite']): number {
   return Math.min(k.clA, k.liftCap / (0.5 * RHO * 30 * 30));
 }
 
+/** Glider wings as an equivalent lift area at 30 m/s, capped by their trim (so light cars show more). */
+function glideEquivalent(s: CarStats): number {
+  if (s.apexClA <= 0) return 0;
+  return Math.min(s.apexClA, (s.apexTrim * s.mass * G) / (0.5 * RHO * 30 * 30));
+}
+
 const RANGE = {
   mass: sumMax((o) => o.mass),
   drag: sumMax((o) => o.cdA ?? 0),
@@ -69,7 +75,7 @@ interface StatRow {
 }
 
 function statRows(s: CarStats): StatRow[] {
-  const lift = s.clA + kiteEquivalent(s.kite);
+  const lift = s.clA + glideEquivalent(s) + kiteEquivalent(s.kite);
   return [
     { key: 'mass', label: 'Mass', frac: s.mass / RANGE.mass, raw: s.mass, text: `${Math.round(s.mass)} kg`, cost: true },
     { key: 'drag', label: 'Drag', frac: s.cdA / RANGE.drag, raw: s.cdA, text: `${s.cdA.toFixed(2)} m²`, cost: true },
@@ -95,7 +101,7 @@ function statRows(s: CarStats): StatRow[] {
       label: 'Lift',
       frac: lift / RANGE.lift,
       raw: lift,
-      text: s.kite ? `${s.clA.toFixed(1)}+kite` : `${s.clA.toFixed(1)} m²`,
+      text: `${lift.toFixed(1)} m²`,
       cost: false,
     },
     {

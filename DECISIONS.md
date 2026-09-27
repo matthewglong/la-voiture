@@ -45,8 +45,17 @@ Where this file and the prompt disagree, the prompt's intent was followed and th
   capped at its limit, added to the body/wing lift along the same "perpendicular, rotated towards up"
   direction; its extra drag only applies once open (at the lip).
 - Both the lip crossing and the splash are interpolated inside their step (position, speed and
-  time), so launch speeds and distances don't jitter with where the fixed 1/120 s step happens to
-  land. The score is clamped at ≥ 0.
+  time). The score is clamped at ≥ 0.
+- **Residual fixed-step wobble.** Distance can wobble by up to ~0.15 m between neighbouring wind
+  values (up to ~0.25 m with a kite and ~0.4 m with glider wings). Two fixed-step effects cause it:
+  - The run-up step keeps its starting slope across a slope change (mostly the pier-to-kicker
+    corner).
+  - Glider wings open at the first step boundary after the apex rather than at the apex itself.
+
+  So some non-glider builds, with or without lift, can fly up to ~0.12 m further in a headwind than
+  in calm air. Removing this would need sub-stepping at slope changes and at the apex, which departs
+  from the spec's fixed 1/120 s step for a sub-metre effect nobody can see in play. The −8 m/s
+  headwind still shortens every build by at least 1.5 m.
 - The game and `simulateToEnd` share `CarSim.step(DT)` with a fixed 1/120 s step; the game only
   changes how many steps run per frame, so results match `simulateToEnd` bit for bit.
 - **Bit-exact across JS engines.** `Math.cos`, `Math.sin` and `Math.hypot` are not correctly rounded
@@ -81,7 +90,8 @@ spirit as the spec's kite that opens at the lip:
     headwind: extra airspeed adds lift faster than drag.
   - A tailwind can cost such a glider up to ~5 m: less airspeed, less lift.
   - `npm run balance` sweeps every headwind and reports both effects. They follow from the spec's
-    airspeed = v − wind and only touch slow glider builds.
+    airspeed = v − wind. Beyond the fixed-step wobble (see "Residual fixed-step wobble"), only
+    slow glider builds are affected.
 
 Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exactly.
 
@@ -99,6 +109,9 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   name tags over the cars and the flight trails; the drafted Paint colours the car body.
 - Hovering a card previews the part on the car **and** on the stat bars (striped ghost bar,
   green/red value when it is better/worse).
+- The Lift bar shows an equivalent lift area at a typical 30 m/s. It counts body and spoiler lift,
+  glider wings (capped by their trim, so a heavier car shows less) and the kite (capped by its
+  maximum pull).
 - Stat bars: Power and Fuel use a square-root scale so the lawnmower and jerry can are still
   visible; the Lift bar counts the kite as its lift area at a typical 30 m/s launch; Bump resistance
   shows the kinetic energy lost per cable-car crossing.
@@ -121,7 +134,8 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   keeps its native Enter/Space press.
 - Names are trimmed, cut to 16 characters and trimmed again; an empty name falls back to "Player N".
   The name box accepts up to 40 raw characters so leading spaces don't eat into the 16.
-- Name tags over the cars stack instead of overlapping when the cars are side by side.
+- Name tags over the cars stack instead of overlapping when the cars are side by side. The upper
+  slot only changes hands when the order clearly flips, so tags don't hop rows.
 - The Bay reflects a sky-only PMREM environment (the rest of the scene keeps the RoomEnvironment
   studio look for glossy toys). At grazing angles, the studio reflection read as oily streaks on the
   water. Two ripple layers with large, non-integer tile sizes and full anisotropy cut the
@@ -143,12 +157,18 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   leader, which would otherwise be a speck. It starts low enough to pass under the start-line banner.
 - **Flight:** the camera is an orbit (focus, yaw, pitch, distance), so the switch at the first launch
   swings smoothly round from behind to side-on (+z side, so +x reads left to right). It pans with the
-  leader. The lip, and any car in the air or within 45 m of the lip, stay in frame until the span
+  leader. The lip, and any car in the air or within 65 m of the lip, stay in frame until the span
   needs more than ~135 m of distance; after that the lip, then the trailing car, drop out.
 - **Straggler follow-up:** if one car splashes while the other is still well up the hill, the
-  camera holds the splash for ~1.6 s, swings back to chase the remaining car, then goes side-on
-  again 55 m of track before the lip. The side framing includes any running car within 65 m of the
-  lip, so the hand-over never loses it. Without this, the slow car was invisible for most of its run.
+  camera holds the splash for ~1.6 s. It then *cuts* (behind a quick white fade) to chase the
+  remaining car, and cuts side-on again 55 m of track before the lip.
+  - A blended swing between the Bay and the hill flew the camera through the houses.
+  - The side framing includes any running car within 65 m of the lip, so the car is in frame
+    straight after each cut.
+  - The first launch keeps the spec's smooth swing to the side view.
+- **Far-apart races:** while the leader is followed (gap over 45 m), the trailing car is out of
+  frame. Its HUD card still shows its speed and fuel, and the straggler follow-up brings it back
+  as soon as the leader has splashed. A picture-in-picture inset was considered and left out.
 - **Results:** a slow side-on hold on the splash zone. If nobody launched (both stalled), it stays
   on the stalled cars instead, framed above the results card.
 - **Rematch / New players** cut back to the start line behind a short white fade. A blended camera
@@ -159,7 +179,8 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
 "Run-up takes about 8–15 s" holds for sensible builds: a V8 or jet with a Standard or Oversized
 tank has a median of ~12 s (see the balance report).
 
-Lawnmower builds and jerry-can builds coast most of the way and take ~19–25 s. This is a property of
+Lawnmower builds and jerry-can builds coast most of the way and take ~15–25 s in calm air (median
+~22 s; up to ~29 s into a strong headwind). This is a property of
 the track rather than something tuning can fix:
 
 - A car coasting from rest down an 18% grade gains only ~1.7 m/s², and must then cross 70 m of flat
@@ -169,6 +190,15 @@ the track rather than something tuning can fix:
   V8 + jerry-can builds even slower.
 
 The straggler camera keeps these runs watchable.
+
+## Known minor issues (left as is)
+
+- **Glider unfold from the side view.** From the side camera the wing unfold is hard to see: the
+  wings go from a thin trailing rod to edge-on. The "GLIDING!" flash, the swoosh and the flatter
+  trail mark the moment.
+- **First-launch hitch.** The first LAUNCH of a session can stall the first countdown beat for
+  ~0.2–0.3 s while the flame and effect shaders compile; later launches are smooth.
+- **Very wide names** (e.g. sixteen "W"s) are ellipsized in the name box but shown in full elsewhere.
 
 ## Test hooks
 
@@ -261,7 +291,7 @@ The design relationships the taglines describe are all still true:
 **Targets.**
 
 - All-$0 build: 5–25 m is checked in calm air. In a ±8 m/s wind it must still reach the lip and land
-  3–40 m out; it lands 5.9 m in a headwind and 35.0 m in a tailwind.
+  3–40 m out; it lands 5.9 m in a headwind and 35.1 m in a tailwind.
 - Sensible builds reach the lip in a median of 12 s. Lawnmower and jerry-can builds coast (see
   "Pacing").
 - The longest flight in any wind is 5.4 s.

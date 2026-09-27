@@ -117,7 +117,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
   // A much larger, non-integer second layer breaks up the tiling pattern in the distance.
   normals2.repeat.multiplyScalar(0.37);
   const waterMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0e5877,
+    color: 0x0b4c68,
     roughness: 0.2,
     metalness: 0,
     normalMap: normals,
@@ -127,7 +127,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     clearcoatNormalMap: normals2,
     clearcoatNormalScale: new THREE.Vector2(0.3, 0.3),
     envMap: opts.envMap ?? null,
-    envMapIntensity: opts.envMap ? 0.45 : 0.5,
+    envMapIntensity: opts.envMap ? 0.36 : 0.5,
   });
   const water = new THREE.Mesh(new THREE.PlaneGeometry(size, size), waterMat);
   water.rotation.x = -Math.PI / 2;
