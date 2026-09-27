@@ -214,8 +214,8 @@ interface Ctx {
   fx: Set<THREE.Object3D>;
   disposables: { dispose(): void }[];
   wheelSpins: THREE.Object3D[];
-  /** Glider wing hinges (one per side, side = +1 for +z). */
-  wingPivots: { pivot: THREE.Group; side: number }[];
+  /** Glider wing hinges (one per side, side = +1 for +z), and the upright tip plates. */
+  wingPivots: { pivot: THREE.Group; side: number; winglet: THREE.Object3D }[];
 }
 
 interface MeshOpts {
@@ -982,12 +982,12 @@ function buildGlider(ctx: Ctx, gl: Layout['glider']): void {
     const pivot = new THREE.Group();
     pivot.position.set(gl.x, gl.y, 0);
     ctx.body.add(pivot);
-    ctx.wingPivots.push({ pivot, side: e });
     const b = pivot;
     const wing = add(b, geo, m.white, 0, 0, 0, { rx: -e * 0.08, sz: e });
     // Painted tip with a tall winglet so the wing still reads edge-on from the side camera.
     add(wing, rbox(0.46, 0.09, 0.1, 0.03), ctx.paint, -0.14, 0, 2.4);
-    add(wing, rbox(0.42, 0.42, 0.06, 0.03), ctx.paint, -0.2, 0.19, 2.44, { rz: 0.12 });
+    const winglet = add(wing, rbox(0.42, 0.42, 0.06, 0.03), ctx.paint, -0.2, 0.19, 2.44, { rz: 0.12 });
+    ctx.wingPivots.push({ pivot, side: e, winglet });
     add(wing, rbox(0.62, 0.075, 0.12, 0.02), ctx.paint, -0.08, 0, 1.75);
     const le = Math.atan2(0.22, 2.42 - gl.rootZ);
     add(wing, rbox(0.1, 0.07, 2.42 - gl.rootZ, 0.03), ctx.paint, 0.36 - 0.11, 0, (2.42 + gl.rootZ) / 2 - 0.03, { ry: -le });
@@ -1362,12 +1362,19 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
   };
 
   // Wing hinge: 0 = folded back, 1 = spread. A springy approach gives the unfold a little pop.
-  const WING_FOLD = 1.35;
+  // Folded, the wings also telescope in (so the tips stay over the body, not trailing off the
+  // back) and the upright tip plates tuck away.
+  const WING_FOLD = 1.42;
   let wingTarget = 1;
   let wingPos = 1;
   let wingVel = 0;
   const applyWings = (): void => {
-    for (const w of ctx.wingPivots) w.pivot.rotation.y = -w.side * WING_FOLD * (1 - wingPos);
+    const span = 0.55 + 0.45 * THREE.MathUtils.clamp(wingPos, 0, 1.2);
+    for (const w of ctx.wingPivots) {
+      w.pivot.rotation.y = -w.side * WING_FOLD * (1 - wingPos);
+      w.pivot.scale.set(1, 1, span);
+      w.winglet.visible = wingPos > 0.55;
+    }
   };
 
   return {

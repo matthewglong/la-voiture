@@ -1,280 +1,67 @@
-// San Francisco street down to the Bay: road, sidewalks, pastel Victorian row houses, cross streets
-// with cable-car tracks, a parked cable car, the Embarcadero, the wooden pier and the kicker.
-// Everything is procedural and merged by material to keep draw calls low.
+// San Francisco around the race: an SF street grid on the hill, pastel Victorian row houses along
+// the course, race barriers with cheering crowds, cable-car lines, Lombard's crooked block, the
+// Embarcadero, the wooden pier and the kicker. Procedural, and merged by material to keep draw
+// calls low.
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { TRACK, groundHeightAtX } from '../track';
+import { COURSE, DECK_Y, ROAD_HW, pointAt, terrainBreaks, terrainY, type CoursePoint } from '../track';
+import { Crowd, type Spot } from './crowd';
+import { GeoBuilder, _e, _m4, _q, _s, _v, box, cyl, meshOf, obox, prism, rbox, shade, strip, type V3 } from './geo';
+import { BAND, LOMBARD_WALK, LOMBARD_X0, LOMBARD_X1, buildLombard } from './lombard';
 import { canvasTexture, makeRng } from './util';
 
 export interface City {
   group: THREE.Group;
-  update(dt: number, t: number): void;
+  /** Racers' positions, so the crowd cheers as they pass. */
+  update(dt: number, t: number, cars?: { x: number; z: number }[]): void;
 }
 
-type V3 = [number, number, number];
-type UV = [number, number];
-
 // ---------------------------------------------------------------------------------------------
-// Layout constants (metres). x runs down the hill, z is to the right when looking along +x.
+// Layout (metres). x runs down the hill towards the Bay, z is to the right looking along +x.
+// The course follows real grid streets: Greenwich St, a jog up Hyde St, then Lombard St.
 
-const T = TRACK;
-const INTERSECTIONS = T.segments.filter((s) => s.kind === 'intersection');
-const EMB_X0 = T.segments.find((s) => s.kind === 'embarcadero')!.x0;
-const SHORE_X = T.shoreX;
-const LIP = T.lip;
-const KICK_X = T.kickerX;
-const DECK_Y = T.deckY;
-const START_Y = T.startY;
+const C = COURSE;
+const SECS = C.sections;
+const START = SECS.find((s) => s.kind === 'start')!;
+const HYDE = SECS.find((s) => s.kind === 'hyde')!;
+const INTS = SECS.filter((s) => s.kind === 'intersection');
+const midX = (s: { xMin: number; xMax: number }): number => (s.xMin + s.xMax) / 2;
+const HYDE_X = HYDE.xMin;
+const GREENWICH_Z = C.points[0].z;
+const LARKIN_X = midX(INTS[0]);
+const LEAV_X = midX(INTS[1]);
+const MASON_X = midX(INTS[2]);
+const POLK_X = START.xMin - 22;
+const EMB_X = C.embX;
+const SHORE_X = C.shoreX;
+const LIP = C.lip;
+const KICK_X = C.kickerX;
+const START_Y = C.startY;
 
-const ROAD_HALF = 7;
-const WALK_OUT = 10;
+const RH = ROAD_HW;
+const WALK = 3;
 const CURB = 0.18;
 const HOUSE_DEPTH = 12;
-const CROSS_WALK = 3;
-const CROSS_EXTENT = 300;
-const WEST_X = -60;
-const TOP_STREET: [number, number] = [-72, -60];
-const PARALLEL_Z: [number, number] = [81, 91];
+const GRID_DZ = Math.abs(GREENWICH_Z);
+const X_STREETS = [-3, -2, -1, 0, 1, 2, 3].map((k) => k * GRID_DZ);
+const Z_STREETS = [POLK_X - 96, POLK_X, LARKIN_X, HYDE_X, LEAV_X, MASON_X];
+const GRID_X0 = POLK_X - 240;
+const GRID_Z = 3 * GRID_DZ + 70;
 const LAND_Z = 700;
 const LAND_X0 = -600;
 const SEAWALL_T = 1.2;
 const PROMENADE_X = SHORE_X - 5;
-const MEDIAN: [number, number] = [EMB_X0 + 11, EMB_X0 + 15];
+const MEDIAN: [number, number] = [EMB_X + 11, EMB_X + 15];
 const PIER_HALF = 8;
 const KICKER_HALF = 7;
+/** Lombard's crooked block replaces the plain street between Hyde and Leavenworth. */
+const CROOKED: [number, number] = [HYDE_X + RH, LEAV_X - RH];
 
-/** Ground height (flat along z). The kicker is not part of the ground. */
-function gy(x: number): number {
-  return groundHeightAtX(T, Math.min(x, SHORE_X));
-}
-
-const PROFILE_XS = [
-  ...new Set(T.segments.filter((s) => s.x1 <= SHORE_X + 1e-6).flatMap((s) => [s.x0, s.x1])),
-].sort((a, b) => a - b);
-
-/** x breakpoints of the piecewise-linear ground profile within [x0, x1]. */
-function profileXs(x0: number, x1: number): number[] {
-  return [x0, ...PROFILE_XS.filter((x) => x > x0 + 1e-6 && x < x1 - 1e-6), x1];
-}
-
-/** Arc length along the ground profile (for texture mapping without stretch on the slopes). */
-function arcAt(x: number): number {
-  if (x <= 0) return x;
-  for (const seg of T.segments) {
-    if (x <= seg.x1 || seg === T.segments[T.segments.length - 1]) {
-      return seg.s0 + (x - seg.x0) / Math.cos(seg.angle);
-    }
-  }
-  return x;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Geometry accumulation: every static piece is appended into one builder per material.
-
-const _col = new THREE.Color();
-
-function sub(a: V3, b: V3): V3 {
-  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-}
-function cross(a: V3, b: V3): V3 {
-  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-}
-function dot(a: V3, b: V3): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-function norm(a: V3): V3 {
-  const l = Math.hypot(a[0], a[1], a[2]) || 1;
-  return [a[0] / l, a[1] / l, a[2] / l];
-}
-
-const _nm = new THREE.Matrix3();
-const UNIT_BOX = (() => {
-  const g = new THREE.BoxGeometry(1, 1, 1);
-  const out = {
-    pos: Array.from(g.getAttribute('position').array as ArrayLike<number>),
-    nor: Array.from(g.getAttribute('normal').array as ArrayLike<number>),
-    uv: Array.from(g.getAttribute('uv').array as ArrayLike<number>),
-    idx: Array.from(g.getIndex()!.array as ArrayLike<number>),
-  };
-  g.dispose();
-  return out;
-})();
-
-class GeoBuilder {
-  private pos: number[] = [];
-  private nor: number[] = [];
-  private uvs: number[] = [];
-  private col: number[] = [];
-  private idx: number[] = [];
-
-  get vertexCount(): number {
-    return this.pos.length / 3;
-  }
-
-  private vert(p: V3, n: V3, uv: UV): void {
-    this.pos.push(p[0], p[1], p[2]);
-    this.nor.push(n[0], n[1], n[2]);
-    this.uvs.push(uv[0], uv[1]);
-    this.col.push(_col.r, _col.g, _col.b);
-  }
-
-  /** Quad a-b-c-d; flipped if needed so its normal points along `facing`. */
-  quad(
-    a: V3,
-    b: V3,
-    c: V3,
-    d: V3,
-    color: THREE.ColorRepresentation,
-    facing?: V3,
-    uv: [UV, UV, UV, UV] = [
-      [0, 0],
-      [1, 0],
-      [1, 1],
-      [0, 1],
-    ],
-  ): void {
-    let n = norm(cross(sub(b, a), sub(d, a)));
-    if (facing && dot(n, facing) < 0) {
-      [b, d] = [d, b];
-      uv = [uv[0], uv[3], uv[2], uv[1]];
-      n = [-n[0], -n[1], -n[2]];
-    }
-    _col.set(color);
-    const base = this.vertexCount;
-    this.vert(a, n, uv[0]);
-    this.vert(b, n, uv[1]);
-    this.vert(c, n, uv[2]);
-    this.vert(d, n, uv[3]);
-    this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-  }
-
-  tri(a: V3, b: V3, c: V3, color: THREE.ColorRepresentation, facing?: V3): void {
-    let n = norm(cross(sub(b, a), sub(c, a)));
-    if (facing && dot(n, facing) < 0) {
-      [b, c] = [c, b];
-      n = [-n[0], -n[1], -n[2]];
-    }
-    _col.set(color);
-    const base = this.vertexCount;
-    this.vert(a, n, [0, 0]);
-    this.vert(b, n, [1, 0]);
-    this.vert(c, n, [0, 1]);
-    this.idx.push(base, base + 1, base + 2);
-  }
-
-  /**
-   * Append a (temporary) geometry, transformed and painted one colour, or keeping its own
-   * vertex colours when `color` is null. Disposes it.
-   */
-  add(geo: THREE.BufferGeometry, color: THREE.ColorRepresentation | null, matrix?: THREE.Matrix4): void {
-    if (matrix) geo.applyMatrix4(matrix);
-    if (color !== null) _col.set(color);
-    const p = geo.getAttribute('position').array as ArrayLike<number>;
-    const n = geo.getAttribute('normal')?.array as ArrayLike<number> | undefined;
-    const uv = geo.getAttribute('uv')?.array as ArrayLike<number> | undefined;
-    const c = geo.getAttribute('color')?.array as ArrayLike<number> | undefined;
-    const count = p.length / 3;
-    const base = this.vertexCount;
-    for (let i = 0; i < count; i++) {
-      this.pos.push(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
-      if (n) this.nor.push(n[i * 3], n[i * 3 + 1], n[i * 3 + 2]);
-      else this.nor.push(0, 1, 0);
-      if (uv) this.uvs.push(uv[i * 2], uv[i * 2 + 1]);
-      else this.uvs.push(0, 0);
-      if (color === null && c) this.col.push(c[i * 3], c[i * 3 + 1], c[i * 3 + 2]);
-      else this.col.push(_col.r, _col.g, _col.b);
-    }
-    const index = geo.getIndex();
-    if (index) {
-      const ia = index.array as ArrayLike<number>;
-      for (let i = 0; i < ia.length; i++) this.idx.push(base + ia[i]);
-    } else for (let i = 0; i < count; i++) this.idx.push(base + i);
-    geo.dispose();
-  }
-
-  /** Append the unit box transformed by `matrix` (no allocation). */
-  unitBox(matrix: THREE.Matrix4, color: THREE.ColorRepresentation): void {
-    _col.set(color);
-    _nm.getNormalMatrix(matrix);
-    const e = matrix.elements;
-    const ne = _nm.elements;
-    const base = this.vertexCount;
-    const P = UNIT_BOX.pos;
-    const N = UNIT_BOX.nor;
-    const U = UNIT_BOX.uv;
-    for (let i = 0; i < P.length / 3; i++) {
-      const x = P[i * 3];
-      const y = P[i * 3 + 1];
-      const z = P[i * 3 + 2];
-      this.pos.push(e[0] * x + e[4] * y + e[8] * z + e[12], e[1] * x + e[5] * y + e[9] * z + e[13], e[2] * x + e[6] * y + e[10] * z + e[14]);
-      const nx = N[i * 3];
-      const ny = N[i * 3 + 1];
-      const nz = N[i * 3 + 2];
-      const tx = ne[0] * nx + ne[3] * ny + ne[6] * nz;
-      const ty = ne[1] * nx + ne[4] * ny + ne[7] * nz;
-      const tz = ne[2] * nx + ne[5] * ny + ne[8] * nz;
-      const l = Math.hypot(tx, ty, tz) || 1;
-      this.nor.push(tx / l, ty / l, tz / l);
-      this.uvs.push(U[i * 2], U[i * 2 + 1]);
-      this.col.push(_col.r, _col.g, _col.b);
-    }
-    for (const k of UNIT_BOX.idx) this.idx.push(base + k);
-  }
-
-  build(): THREE.BufferGeometry {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uvs, 2));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.setIndex(this.idx);
-    g.computeBoundingSphere();
-    g.computeBoundingBox();
-    return g;
-  }
-}
-
-const _m4 = new THREE.Matrix4();
-const _q = new THREE.Quaternion();
-const _e = new THREE.Euler();
-const _v = new THREE.Vector3();
-const _s = new THREE.Vector3();
-
-/** Axis-aligned box from min/max corners. */
-function box(b: GeoBuilder, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, color: THREE.ColorRepresentation, m?: THREE.Matrix4): void {
-  _m4.makeScale(Math.abs(x1 - x0), Math.abs(y1 - y0), Math.abs(z1 - z0)).setPosition((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-  if (m) _m4.premultiply(m);
-  b.unitBox(_m4, color);
-}
-
-/** Rounded box from min/max corners (the toy look). */
-function rbox(b: GeoBuilder, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, r: number, color: THREE.ColorRepresentation, m?: THREE.Matrix4, seg = 2): void {
-  const g = new RoundedBoxGeometry(Math.abs(x1 - x0), Math.abs(y1 - y0), Math.abs(z1 - z0), seg, r);
-  g.translate((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-  b.add(g, color, m);
-}
-
-/** Box of size (sx, sy, sz) centred at c, rotated by (rx, ry, rz). */
-function obox(b: GeoBuilder, c: V3, size: V3, rot: V3, color: THREE.ColorRepresentation, m?: THREE.Matrix4): void {
-  _m4.compose(_v.set(c[0], c[1], c[2]), _q.setFromEuler(_e.set(rot[0], rot[1], rot[2])), _s.set(size[0], size[1], size[2]));
-  if (m) _m4.premultiply(m);
-  b.unitBox(_m4, color);
-}
-
-/** Cylinder between two points. */
-function cyl(b: GeoBuilder, a: V3, c: V3, rTop: number, rBot: number, seg: number, color: THREE.ColorRepresentation, m?: THREE.Matrix4): void {
-  const dir = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
-  const len = dir.length();
-  const g = new THREE.CylinderGeometry(rTop, rBot, len, seg);
-  _q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-  _m4.compose(_v.set((a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2), _q, _s.set(1, 1, 1));
-  if (m) _m4.premultiply(m);
-  b.add(g, color, _m4);
-}
+/** City ground height (the hill is flat along z). */
+const gy = (x: number): number => terrainY(Math.min(x, SHORE_X));
 
 /**
- * A solid slab over [x0,x1]×[z0,z1] whose top follows `top(x)` along the ground profile.
- * UVs: top uses (z, arc length) / uvScale, sides use (arc length or z, y) / uvScale.
+ * A solid slab over [x0,x1]×[z0,z1] whose top follows `top(x)` up and down the hill.
+ * UVs: top uses (z, x) / uvScale, sides (x or z, y) / uvScale.
  */
 function slab(
   b: GeoBuilder,
@@ -288,15 +75,15 @@ function slab(
   uvScale = 1,
   sides = true,
 ): void {
-  const xs = profileXs(x0, x1);
+  const xs = [x0, ...terrainBreaks(x0, x1), x1];
   const up: V3 = [0, 1, 0];
   for (let i = 0; i < xs.length - 1; i++) {
     const xa = xs[i];
     const xb = xs[i + 1];
     const ya = top(xa);
     const yb = top(xb);
-    const sa = arcAt(xa) / uvScale;
-    const sb = arcAt(xb) / uvScale;
+    const sa = xa / uvScale;
+    const sb = xb / uvScale;
     b.quad([xa, ya, z1], [xb, yb, z1], [xb, yb, z0], [xa, ya, z0], color, up, [
       [z1 / uvScale, sa],
       [z1 / uvScale, sb],
@@ -334,33 +121,12 @@ function slab(
   }
 }
 
-/** Convex polygon (planar, 3D points) extruded along `dir`, with outward-facing sides. */
-function prism(b: GeoBuilder, poly: V3[], dir: V3, color: THREE.ColorRepresentation, m?: THREE.Matrix4, capColor?: THREE.ColorRepresentation): void {
-  const g = new GeoBuilder();
-  const top = poly.map((p) => [p[0] + dir[0], p[1] + dir[1], p[2] + dir[2]] as V3);
-  const cen: V3 = [0, 0, 0];
-  for (const p of poly) for (let k = 0; k < 3; k++) cen[k] += p[k] / poly.length;
-  const back: V3 = [-dir[0], -dir[1], -dir[2]];
-  for (let i = 1; i < poly.length - 1; i++) {
-    g.tri(poly[0], poly[i], poly[i + 1], capColor ?? color, back);
-    g.tri(top[0], top[i], top[i + 1], capColor ?? color, dir);
-  }
-  for (let i = 0; i < poly.length; i++) {
-    const j = (i + 1) % poly.length;
-    const mid: V3 = [(poly[i][0] + poly[j][0]) / 2, (poly[i][1] + poly[j][1]) / 2, (poly[i][2] + poly[j][2]) / 2];
-    g.quad(poly[i], poly[j], top[j], top[i], color, sub(mid, cen));
-  }
-  b.add(g.build(), null, m);
-}
-
-function meshOf(b: GeoBuilder, mat: THREE.Material, name: string, cast: boolean, receive: boolean): THREE.Mesh {
-  const mesh = new THREE.Mesh(b.build(), mat);
-  mesh.name = name;
-  mesh.castShadow = cast;
-  mesh.receiveShadow = receive;
-  mesh.matrixAutoUpdate = false;
-  mesh.updateMatrix();
-  return mesh;
+/** Course points between two arc lengths (every 0.5 m, inclusive), for strips that follow the road. */
+function coursePts(s0: number, s1: number, step = 0.5): CoursePoint[] {
+  const out: CoursePoint[] = [];
+  const n = Math.max(1, Math.ceil((s1 - s0) / step));
+  for (let i = 0; i <= n; i++) out.push(pointAt(C, s0 + ((s1 - s0) * i) / n));
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -590,7 +356,7 @@ function bannerTexture(): THREE.CanvasTexture {
   });
 }
 
-function signTexture(text: string, bg: string, fg: string, w = 512, h = 96): THREE.CanvasTexture {
+export function signTexture(text: string, bg: string, fg: string, w = 512, h = 96): THREE.CanvasTexture {
   return canvasTexture(w, h, (ctx) => {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
@@ -618,19 +384,76 @@ function laneLabelTexture(): THREE.CanvasTexture {
   });
 }
 
-const STREET_NAMES = ['HYDE ST', 'LOMBARD ST', 'CHESTNUT ST', 'BAY ST'];
+function brickTexture(): THREE.CanvasTexture {
+  // Tile = 2 m × 2 m of red herringbone brick (Lombard's paving).
+  return canvasTexture(
+    512,
+    512,
+    (ctx, w, h) => {
+      ctx.fillStyle = '#8e4a3c';
+      ctx.fillRect(0, 0, w, h);
+      const rng = makeRng(77);
+      const bw = 64;
+      const bh = 32;
+      const colors = ['#b5523b', '#a84b36', '#c05c43', '#9e4633', '#b8604a', '#a5563f'];
+      for (let row = -2; row < h / bh + 2; row++) {
+        for (let col = -2; col < w / bh + 2; col++) {
+          const x = col * bh * 2 + (row % 2) * bh;
+          const y = row * bh;
+          for (const [dx, dy, ww, hh] of [
+            [0, 0, bw, bh],
+            [bw, 0, bh, bw],
+          ] as const) {
+            ctx.fillStyle = colors[Math.floor(rng() * colors.length)];
+            ctx.fillRect(x + dx + 2, y + dy + 2, ww - 4, hh - 4);
+          }
+        }
+      }
+      for (let i = 0; i < 2500; i++) {
+        ctx.fillStyle = `rgba(40,20,15,${0.05 + rng() * 0.1})`;
+        ctx.fillRect(rng() * w, rng() * h, 2, 2);
+      }
+    },
+    { repeat: [1, 1] },
+  );
+}
 
-function streetSignTexture(): THREE.CanvasTexture {
-  const rows = STREET_NAMES.length;
+function barricadeTexture(): THREE.CanvasTexture {
+  // Orange and white stripes with ROAD CLOSED in the middle; one tile per board.
+  return canvasTexture(512, 96, (ctx, w, h) => {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#ff6a1f';
+    for (let x = -h; x < w + h; x += 64) {
+      ctx.beginPath();
+      ctx.moveTo(x, h);
+      ctx.lineTo(x + 32, h);
+      ctx.lineTo(x + 32 + h, 0);
+      ctx.lineTo(x + h, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(w * 0.22, 12, w * 0.56, h - 24);
+    ctx.font = '900 44px "Arial Rounded MT Bold", "Arial Black", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#1b1b1f';
+    ctx.fillText('ROAD CLOSED', w / 2, h / 2 + 2);
+  });
+}
+
+function namesTexture(names: string[], bg = '#12704a'): THREE.CanvasTexture {
+  const rows = names.length;
   return canvasTexture(512, 64 * rows, (ctx, w) => {
-    STREET_NAMES.forEach((name, r) => {
+    names.forEach((name, r) => {
       const y = r * 64;
-      ctx.fillStyle = '#12704a';
+      ctx.fillStyle = bg;
       ctx.fillRect(0, y, w, 64);
       ctx.strokeStyle = '#f4f4ee';
       ctx.lineWidth = 4;
       ctx.strokeRect(5, y + 5, w - 10, 54);
-      ctx.font = '800 38px "Arial Rounded MT Bold", "Helvetica Neue", Arial, sans-serif';
+      ctx.font = '800 36px "Arial Rounded MT Bold", "Helvetica Neue", Arial, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#f4f4ee';
@@ -639,10 +462,9 @@ function streetSignTexture(): THREE.CanvasTexture {
   });
 }
 
-/** A street-name plate: `alongZ` plates face ±x (readable from the main street). */
-function signPlate(row: number, alongZ: boolean): THREE.BufferGeometry {
-  const rows = STREET_NAMES.length;
-  const g = alongZ ? new THREE.BoxGeometry(0.05, 0.32, 1.6) : new THREE.BoxGeometry(1.6, 0.32, 0.05);
+/** A plate for row `row` of a names texture; `alongZ` plates face ±x. */
+function namePlate(row: number, rows: number, alongZ: boolean, len = 1.6): THREE.BufferGeometry {
+  const g = alongZ ? new THREE.BoxGeometry(0.05, 0.32, len) : new THREE.BoxGeometry(len, 0.32, 0.05);
   const n = g.getAttribute('normal');
   const uv = g.getAttribute('uv');
   const v0 = 1 - (row + 1) / rows;
@@ -680,10 +502,6 @@ const CONCRETE = '#dcd6c9';
 const DARK_WOOD = '#5c4633';
 const PINE = '#d6ab70';
 
-function shade(color: string, f: number): THREE.Color {
-  const c = new THREE.Color(color);
-  return c.multiplyScalar(f);
-}
 
 // ---------------------------------------------------------------------------------------------
 // Houses.
@@ -754,21 +572,38 @@ function wallWindows(s: HouseSinks, m: THREE.Matrix4, f: Face, len: number, yb: 
   }
 }
 
-function buildHouse(
-  s: HouseSinks,
-  x0: number,
-  x1: number,
-  side: 1 | -1,
-  rng: () => number,
-  exposeUphill = false,
-  exposeDownhill = false,
-): void {
-  const W = x1 - x0;
+/**
+ * Where a house stands: its frontage starts at (ox, oz) on the property line and runs along (ux, uz)
+ * for W metres; the house extends away from the street, to the left of that direction.
+ */
+interface Lot {
+  ox: number;
+  oz: number;
+  ux: number;
+  uz: number;
+  W: number;
+}
+
+function buildHouse(s: HouseSinks, lot: Lot, rng: () => number, exposeU0 = false, exposeUW = false): void {
+  const W = lot.W;
   const D = HOUSE_DEPTH;
-  const m = new THREE.Matrix4();
-  if (side > 0) m.makeTranslation(x0, 0, WALK_OUT);
-  else m.makeRotationY(Math.PI).setPosition(x1, 0, -WALK_OUT);
-  const uToX = (u: number): number => (side > 0 ? x0 + u : x1 - u);
+  // Local u runs along the frontage, w into the house: w = u x up.
+  const wx = -lot.uz;
+  const wz = lot.ux;
+  const m = new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(lot.ux, 0, lot.uz),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(wx, 0, wz),
+  );
+  m.setPosition(lot.ox, 0, lot.oz);
+  const uToX = (u: number): number => lot.ox + lot.ux * u;
+  const groundHi = Math.max(terrainY(lot.ox), terrainY(lot.ox + lot.ux * W));
+  const groundLo = Math.min(
+    terrainY(lot.ox),
+    terrainY(lot.ox + lot.ux * W),
+    terrainY(lot.ox + wx * D),
+    terrainY(lot.ox + lot.ux * W + wx * D),
+  );
 
   const color = HOUSE_COLORS[Math.floor(rng() * HOUSE_COLORS.length)];
   const accent = ACCENTS[Math.floor(rng() * ACCENTS.length)];
@@ -776,8 +611,8 @@ function buildHouse(
   const floors = rng() < 0.3 ? 2 : 3;
   const fh = 3.1;
   const queenAnne = rng() < 0.45;
-  const yb = gy(x0) + CURB + 0.35;
-  const yFound = gy(x1) + CURB - 0.5;
+  const yb = groundHi + CURB + 0.35;
+  const yFound = groundLo + CURB - 0.9;
   const wallTop = yb + floors * fh + (queenAnne ? 0.25 : 1.25);
 
   // Foundation / garage plinth and the main body.
@@ -794,9 +629,6 @@ function buildHouse(
   wallWindows(s, m, { ou: W, ow: D, du: -1, dw: 0, nu: 0, nw: 1, rotY: Math.PI }, W, yb, floors, fh, 2.6);
   const sideLeft: Face = { ou: 0, ow: D, du: 0, dw: -1, nu: -1, nw: 0, rotY: Math.PI / 2 };
   const sideRight: Face = { ou: W, ow: 0, du: 0, dw: 1, nu: 1, nw: 0, rotY: -Math.PI / 2 };
-  // Local u=0 is the uphill end on the right-hand side and the downhill end on the left-hand side.
-  const exposeU0 = side > 0 ? exposeUphill : exposeDownhill;
-  const exposeUW = side > 0 ? exposeDownhill : exposeUphill;
   if (exposeU0) wallWindows(s, m, sideLeft, D, yb, floors, fh, 3.0);
   if (exposeUW) wallWindows(s, m, sideRight, D, yb, floors, fh, 3.0);
 
@@ -811,7 +643,7 @@ function buildHouse(
   faceBox(s.trim, m, MAIN_FACE, da0 - 0.35, da1 + 0.35, yb + 2.6, yb + 2.78, -0.02, 0.5, trimAccent);
   // Stoop down to the sidewalk (the sidewalk drops along the facade on the slope).
   const doorX = uToX((da0 + da1) / 2);
-  const walk = gy(doorX) + CURB;
+  const walk = terrainY(doorX) + CURB;
   const rise = Math.max(0.2, yb - walk);
   const steps = Math.max(1, Math.round(rise / 0.2));
   for (let k = 0; k < steps; k++) {
@@ -941,35 +773,8 @@ function buildHouse(
   }
 }
 
-function buildHouses(s: HouseSinks, rng: () => number): void {
-  const blocks: [number, number][] = [];
-  let prev = TOP_STREET[1];
-  for (const seg of INTERSECTIONS) {
-    blocks.push([prev + CROSS_WALK, seg.x0 - CROSS_WALK]);
-    prev = seg.x1;
-  }
-  for (const [xa, xb] of blocks) {
-    for (const side of [1, -1] as const) {
-      const widths: number[] = [];
-      let total = 0;
-      while (total < xb - xa - 6) {
-        const w = 6 + rng() * 2;
-        widths.push(w);
-        total += w;
-      }
-      const scale = (xb - xa) / total;
-      let x = xa;
-      widths.forEach((w, i) => {
-        const ww = w * scale;
-        buildHouse(s, x, x + ww, side, rng, i === 0, i === widths.length - 1);
-        x += ww;
-      });
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------------------------
-// Background city blocks: pastel boxes with a tiled window texture.
+// Background buildings, trees and palms.
 
 function worldUvBox(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): THREE.BufferGeometry {
   const g = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
@@ -984,78 +789,6 @@ function worldUvBox(x0: number, x1: number, y0: number, y1: number, z0: number, 
     uv.setXY(i, along / 4, (p.getY(i) - floorY) / 3.2);
   }
   return g;
-}
-
-function buildBackground(walls: GeoBuilder, roofs: GeoBuilder, trees: GeoBuilder, rng: () => number): void {
-  // x ranges between cross streets (and the top street), each split into lots.
-  const ranges: [number, number][] = [[-300, TOP_STREET[0] - 3]];
-  let prev = TOP_STREET[1];
-  for (const seg of INTERSECTIONS) {
-    ranges.push([prev + 3, seg.x0 - 3]);
-    prev = seg.x1;
-  }
-  // Rows (|z| bands) of buildings behind the main-street houses, facing the parallel streets.
-  const rows: [number, number, number, number][] = [
-    // [zNear, zFar, minH, maxH]
-    [PARALLEL_Z[0] - 18, PARALLEL_Z[0] - 3, 8, 15],
-    [PARALLEL_Z[1] + 3, PARALLEL_Z[1] + 17, 9, 18],
-    [PARALLEL_Z[1] + 26, PARALLEL_Z[1] + 44, 10, 22],
-    [PARALLEL_Z[1] + 56, PARALLEL_Z[1] + 76, 10, 24],
-  ];
-  for (const [xa, xb] of ranges) {
-    for (const side of [1, -1]) {
-      for (const [zn, zf, h0, h1] of rows) {
-        let x = xa;
-        while (x < xb - 4) {
-          const w = Math.min(xb - x, 7 + rng() * 7);
-          const bx0 = x + 0.15;
-          const bx1 = x + w - 0.15;
-          const hi = gy(bx0) + CURB;
-          const lo = gy(bx1) - 0.5;
-          const hgt = h0 + rng() * (h1 - h0);
-          const depth = (zf - zn) * (0.75 + rng() * 0.25);
-          const z0 = side > 0 ? zn : -zn - depth;
-          const z1 = side > 0 ? zn + depth : -zn;
-          const color = shade(HOUSE_COLORS[Math.floor(rng() * HOUSE_COLORS.length)], 0.95);
-          walls.add(worldUvBox(bx0, bx1, lo, hi + hgt, z0, z1), color);
-          box(roofs, bx0 + 0.3, bx1 - 0.3, hi + hgt - 0.02, hi + hgt + 0.08, z0 + 0.3, z1 - 0.3, ROOF);
-          if (rng() < 0.3) {
-            const cx = bx0 + 1 + rng() * (bx1 - bx0 - 3);
-            const cz = z0 + 1 + rng() * (z1 - z0 - 3);
-            box(roofs, cx, cx + 1.4, hi + hgt, hi + hgt + 1.2, cz, cz + 1.4, '#9aa0a8');
-          }
-          x += w;
-        }
-      }
-      // Backyard trees between the main-street houses and the next row.
-      for (let x = xa + 4; x < xb - 3; x += 9 + rng() * 8) {
-        const z = side * (WALK_OUT + HOUSE_DEPTH + 6 + rng() * 30);
-        tree(trees, x, gy(x) - 0.4, z, 1.1 + rng() * 0.9, rng);
-      }
-    }
-  }
-  // Waterfront blocks along the Embarcadero beyond the grid (seen behind the pier in the side view).
-  const lastX0 = INTERSECTIONS[INTERSECTIONS.length - 1].x0;
-  const lastX1Prev = INTERSECTIONS[INTERSECTIONS.length - 2].x1;
-  for (const side of [1, -1]) {
-    for (const [x0, x1] of [
-      [lastX0 - 26, lastX0 - 3],
-      [lastX1Prev + 3, lastX1Prev + 24],
-    ] as const) {
-      let z = PARALLEL_Z[1] + 80;
-      while (z < 440) {
-        const w = 14 + rng() * 10;
-        const hgt = 7 + rng() * 9;
-        const top = gy(x0) + CURB + hgt;
-        const z0 = side > 0 ? z : -z - w;
-        const z1 = side > 0 ? z + w : -z;
-        const color = shade(HOUSE_COLORS[Math.floor(rng() * HOUSE_COLORS.length)], 0.95);
-        walls.add(worldUvBox(x0, x1, gy(x1) - 0.5, top, z0, z1), color);
-        box(roofs, x0 + 0.3, x1 - 0.3, top - 0.02, top + 0.08, z0 + 0.3, z1 - 0.3, ROOF);
-        z += w + 2 + rng() * 4;
-      }
-    }
-  }
 }
 
 function tree(b: GeoBuilder, x: number, y: number, z: number, s: number, rng: () => number): void {
@@ -1109,7 +842,7 @@ function palm(b: GeoBuilder, x: number, y: number, z: number, h: number, rng: ()
 // ---------------------------------------------------------------------------------------------
 // Cable car (Powell & Hyde): its own small group so it can be placed on the rails.
 
-function buildCableCar(signMat: THREE.Material, glassMat: THREE.Material): THREE.Group {
+export function buildCableCar(signMat: THREE.Material, glassMat: THREE.Material): THREE.Group {
   const group = new THREE.Group();
   group.name = 'cableCar';
   const paint = new GeoBuilder();
@@ -1208,6 +941,124 @@ function buildCableCar(signMat: THREE.Material, glassMat: THREE.Material): THREE
 }
 
 // ---------------------------------------------------------------------------------------------
+// The grid: blocks between the streets, each ringed by a sidewalk, with houses facing out.
+
+interface Block {
+  /** Kerb lines (the sidewalk ring sits inside them). */
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+  /** Sides without a sidewalk ring (Lombard's stairs are drawn with the crooked block). */
+  noWalk: Set<'n' | 's' | 'e' | 'w'>;
+}
+
+function gridBlocks(): Block[] {
+  const cols: [number, number][] = [[GRID_X0, Z_STREETS[0] - RH]];
+  for (let i = 0; i < Z_STREETS.length - 1; i++) cols.push([Z_STREETS[i] + RH, Z_STREETS[i + 1] - RH]);
+  cols.push([Z_STREETS[Z_STREETS.length - 1] + RH, EMB_X]);
+  const rows: [number, number][] = [[-GRID_Z, X_STREETS[0] - RH]];
+  for (let i = 0; i < X_STREETS.length - 1; i++) rows.push([X_STREETS[i] + RH, X_STREETS[i + 1] - RH]);
+  rows.push([X_STREETS[X_STREETS.length - 1] + RH, GRID_Z]);
+  const out: Block[] = [];
+  for (const [x0, x1] of cols) {
+    for (let [z0, z1] of rows) {
+      const noWalk = new Set<'n' | 's' | 'e' | 'w'>();
+      const crooked = Math.abs(x0 - CROOKED[0]) < 0.01 && Math.abs(x1 - CROOKED[1]) < 0.01;
+      if (crooked && Math.abs(z1 + RH) < 0.01) {
+        z1 = -BAND;
+        noWalk.add('n');
+      }
+      if (crooked && Math.abs(z0 - RH) < 0.01) {
+        z0 = BAND;
+        noWalk.add('s');
+      }
+      // No sidewalk facing the Embarcadero or the open ends of the grid.
+      if (Math.abs(x1 - EMB_X) < 0.01) noWalk.add('e');
+      if (Math.abs(x0 - GRID_X0) < 0.01) noWalk.add('w');
+      if (Math.abs(z0 + GRID_Z) < 0.01) noWalk.add('s');
+      if (Math.abs(z1 - GRID_Z) < 0.01) noWalk.add('n');
+      out.push({ x0, x1, z0, z1, noWalk });
+    }
+  }
+  return out;
+}
+
+/** Is this block side on the race course (it gets the detailed Victorian houses)? */
+function onCourse(b: Block, side: 'n' | 's' | 'e' | 'w'): boolean {
+  const overlapX = (a: number, c: number): boolean => b.x1 > a && b.x0 < c;
+  const overlapZ = (a: number, c: number): boolean => b.z1 > a && b.z0 < c;
+  if (side === 'n' || side === 's') {
+    const street = side === 'n' ? b.z1 + RH : b.z0 - RH;
+    const edge = side === 'n' ? b.z1 : b.z0;
+    // Greenwich from just behind the start to Hyde.
+    if (Math.abs(street - GREENWICH_Z) < 0.01 && overlapX(START.xMin - 30, HYDE_X)) return true;
+    // Lombard's crooked block and on down to the Embarcadero.
+    if (Math.abs(Math.abs(edge) - BAND) < 0.01 && overlapX(CROOKED[0], CROOKED[1])) return true;
+    if (Math.abs(street) < 0.01 && overlapX(LEAV_X, EMB_X)) return true;
+    return false;
+  }
+  const street = side === 'e' ? b.x1 + RH : b.x0 - RH;
+  return Math.abs(street - HYDE_X) < 0.01 && overlapZ(GREENWICH_Z, 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Street furniture.
+
+/** A crowd-control barrier panel from a to b (on the sidewalk), 1.1 m tall. */
+function barrierPanel(b: GeoBuilder, ax: number, az: number, bx: number, bz: number, y0: number, y1: number): void {
+  const len = Math.hypot(bx - ax, bz - az);
+  const ang = -Math.atan2(bz - az, bx - ax);
+  const cx = (ax + bx) / 2;
+  const cz = (az + bz) / 2;
+  const ym = (y0 + y1) / 2;
+  const col = '#dfe4ea';
+  // Rails, posts, bars and feet.
+  obox(b, [cx, ym + 1.05, cz], [len, 0.06, 0.06], [0, ang, 0], col);
+  obox(b, [cx, ym + 0.2, cz], [len, 0.05, 0.05], [0, ang, 0], col);
+  for (const f of [-0.5, 0.5]) {
+    const px = cx + Math.cos(-ang) * len * f * 0.98;
+    const pz = cz + Math.sin(-ang) * len * f * 0.98;
+    const py = f < 0 ? y0 : y1;
+    obox(b, [px, py + 0.55, pz], [0.06, 1.1, 0.06], [0, ang, 0], col);
+    obox(b, [px, py + 0.02, pz], [0.1, 0.04, 0.7], [0, ang, 0], '#8c939c');
+  }
+  for (let k = 1; k < 7; k++) {
+    const f = k / 7 - 0.5;
+    const px = cx + Math.cos(-ang) * len * f;
+    const pz = cz + Math.sin(-ang) * len * f;
+    obox(b, [px, ym + 0.62, pz], [0.025, 0.82, 0.025], [0, ang, 0], col);
+  }
+}
+
+/** A sawhorse barricade (two striped boards on A-frame legs) centred at (x, z), facing along `ang`. */
+function barricade(boards: GeoBuilder, legs: GeoBuilder, x: number, y: number, z: number, ang: number, len = 2.2): void {
+  for (const h of [0.62, 1.02]) {
+    const g = new THREE.BoxGeometry(len, 0.26, 0.05);
+    _m4.compose(_v.set(x, y + h, z), _q.setFromEuler(_e.set(0, ang, 0)), _s.set(1, 1, 1));
+    boards.add(g, '#ffffff', _m4);
+  }
+  for (const f of [-0.42, 0.42]) {
+    const px = x + Math.cos(-ang) * len * f;
+    const pz = z + Math.sin(-ang) * len * f;
+    for (const t of [-1, 1]) {
+      obox(legs, [px, y + 0.55, pz], [0.07, 1.15, 0.07], [t * 0.18, ang, 0], '#e8e8e2');
+    }
+  }
+}
+
+/** A stack of three racing tyres. */
+function tyreStack(b: GeoBuilder, x: number, y: number, z: number, i: number): void {
+  const colors = ['#1e1f22', '#e8322a', '#f4f4ef'];
+  for (let k = 0; k < 3; k++) {
+    const g = new THREE.TorusGeometry(0.32, 0.15, 6, 14);
+    g.rotateX(Math.PI / 2);
+    g.translate(x, y + 0.15 + k * 0.29, z);
+    b.add(g, k === 1 ? colors[1 + (i % 2)] : colors[0]);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Main build.
 
 export function buildCity(): City {
@@ -1238,6 +1089,16 @@ export function buildCity(): City {
   const plyMat = new THREE.MeshStandardMaterial({ map: plyTex, roughness: 0.72 });
   const stripeMat = new THREE.MeshStandardMaterial({ map: stripeTexture(), roughness: 0.5 });
   const coneMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.32, clearcoat: 0.8, clearcoatRoughness: 0.2 });
+  const brickMat = new THREE.MeshStandardMaterial({
+    map: brickTexture(),
+    roughness: 0.82,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const hedgeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
+  const gardenMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+  const barricadeMat = new THREE.MeshStandardMaterial({ map: barricadeTexture(), roughness: 0.55 });
 
   const asphalt = new GeoBuilder();
   const marks = new GeoBuilder();
@@ -1249,6 +1110,11 @@ export function buildCity(): City {
   const wood = new GeoBuilder();
   const planks = new GeoBuilder();
   const cones = new GeoBuilder();
+  const brick = new GeoBuilder();
+  const hedge = new GeoBuilder();
+  const garden = new GeoBuilder();
+  const boards = new GeoBuilder();
+  const crowdSpots: Spot[] = [];
 
   const ASPHALT = '#ffffff';
   const WHITE = '#f5f5ef';
@@ -1258,158 +1124,202 @@ export function buildCity(): City {
   const deep = (x: number): number => gy(x) - 0.9;
 
   // --- Land, seawall and waterfront ------------------------------------------------------------
-  slab(concrete, LAND_X0, SHORE_X - SEAWALL_T, -LAND_Z, LAND_Z, (x) => gy(x) - 0.4, () => -3, '#9fc27d', 8);
+  // The land, with Lombard's block cut out: its gardens and bricks follow the switchbacks down, not
+  // the hill's average slope, and the land would poke up through them in places.
+  const land = (x0: number, x1: number, z0: number, z1: number): void =>
+    slab(concrete, x0, x1, z0, z1, (x) => gy(x) - 0.4, () => -3, '#9fc27d', 8);
+  land(LAND_X0, LOMBARD_X0, -LAND_Z, LAND_Z);
+  land(LOMBARD_X1, SHORE_X - SEAWALL_T, -LAND_Z, LAND_Z);
+  land(LOMBARD_X0, LOMBARD_X1, BAND, LAND_Z);
+  land(LOMBARD_X0, LOMBARD_X1, -LAND_Z, -BAND);
   slab(concrete, SHORE_X - SEAWALL_T, SHORE_X, -LAND_Z, LAND_Z, () => DECK_Y - 0.02, () => -3, '#cfc6b5', 4);
   // Algae line and a coping lip along the seawall.
   box(concrete, SHORE_X, SHORE_X + 0.03, -0.35, 0.55, -LAND_Z, LAND_Z, '#5f6b58');
   box(concrete, SHORE_X - 0.1, SHORE_X + 0.25, DECK_Y - 0.28, DECK_Y - 0.008, -LAND_Z, LAND_Z, '#e3dccd');
 
-  // --- Streets -----------------------------------------------------------------------------------
-  // Main road from the top street to the Embarcadero.
-  slab(asphalt, WEST_X, EMB_X0, -ROAD_HALF, ROAD_HALF, road, deep, ASPHALT, 6);
-  // Top cross street.
-  slab(asphalt, TOP_STREET[0], TOP_STREET[1], -CROSS_EXTENT, CROSS_EXTENT, road, deep, ASPHALT, 6);
-  // Cross streets at each intersection (the main road covers |z| < ROAD_HALF).
-  for (const seg of INTERSECTIONS) {
-    slab(asphalt, seg.x0, seg.x1, ROAD_HALF, CROSS_EXTENT, road, deep, ASPHALT, 6);
-    slab(asphalt, seg.x0, seg.x1, -CROSS_EXTENT, -ROAD_HALF, road, deep, ASPHALT, 6);
-  }
-  // Parallel streets, split at the cross streets to avoid overlaps.
-  const crossXs: [number, number][] = [TOP_STREET, ...INTERSECTIONS.map((s) => [s.x0, s.x1] as [number, number])];
-  for (let i = 0; i < crossXs.length; i++) {
-    const xa = i === 0 ? -300 : crossXs[i - 1][1];
-    const xb = crossXs[i][0];
-    for (const sgn of [1, -1]) {
-      const z0 = sgn > 0 ? PARALLEL_Z[0] : -PARALLEL_Z[1];
-      const z1 = sgn > 0 ? PARALLEL_Z[1] : -PARALLEL_Z[0];
-      slab(asphalt, xa, xb, z0, z1, road, deep, ASPHALT, 6);
-      // Sidewalks along the parallel street.
-      slab(concrete, xa, xb, z0 - 3, z0, walkTop, deep, CONCRETE, 4);
-      slab(concrete, xa, xb, z1, z1 + 3, walkTop, deep, CONCRETE, 4);
+  // --- Streets: the x-streets run down the hill, the z-streets run across it (flat) -----------------
+  X_STREETS.forEach((zc) => {
+    const spans: [number, number][] = zc === 0 ? [[GRID_X0, CROOKED[0]], [CROOKED[1], EMB_X]] : [[GRID_X0, EMB_X]];
+    for (const [xa, xb] of spans) slab(asphalt, xa, xb, zc - RH, zc + RH, road, deep, ASPHALT, 6);
+  });
+  Z_STREETS.forEach((xc) => {
+    const zs = [-GRID_Z, ...X_STREETS.flatMap((z) => [z - RH, z + RH]), GRID_Z];
+    for (let i = 0; i < zs.length; i += 2) {
+      let za = zs[i];
+      let zb = zs[i + 1];
+      // The Lombard band meets Hyde St and Leavenworth St: the street runs up to the band's kerb.
+      if (za >= zb) continue;
+      slab(asphalt, xc - RH, xc + RH, za, zb, road, deep, ASPHALT, 6);
+      void za;
+      void zb;
     }
-  }
-  // The Embarcadero: two carriageways, palm median (gap for our road) and the promenade.
-  slab(asphalt, EMB_X0, MEDIAN[0], -LAND_Z, LAND_Z, road, deep, ASPHALT, 6);
-  slab(asphalt, MEDIAN[1], PROMENADE_X, -LAND_Z, LAND_Z, road, deep, ASPHALT, 6);
-  slab(asphalt, MEDIAN[0], MEDIAN[1], -9, 9, road, deep, ASPHALT, 6);
-  for (const sgn of [1, -1]) {
-    const z0 = sgn > 0 ? 9 : -LAND_Z;
-    const z1 = sgn > 0 ? LAND_Z : -9;
-    slab(concrete, MEDIAN[0], MEDIAN[1], z0, z1, () => DECK_Y + 0.25, deep, '#d8d1c2', 4);
-    slab(concrete, MEDIAN[0] + 0.4, MEDIAN[1] - 0.4, z0 + (sgn > 0 ? 0.4 : 0), z1 - (sgn > 0 ? 0 : 0.4), () => DECK_Y + 0.33, deep, '#78b35a', 4, false);
-  }
-  slab(concrete, PROMENADE_X, SHORE_X - SEAWALL_T, -LAND_Z, LAND_Z, () => DECK_Y, deep, '#e6dfd1', 4);
+  });
 
-  // Sidewalks along the main road, broken by the cross streets.
-  const walkRanges: [number, number][] = [];
-  let wPrev = WEST_X;
-  for (const seg of INTERSECTIONS) {
-    walkRanges.push([wPrev, seg.x0]);
-    wPrev = seg.x1;
+  // --- Sidewalks ring every block ------------------------------------------------------------------
+  const blocks = gridBlocks();
+  for (const b of blocks) {
+    const { x0, x1, z0, z1 } = b;
+    if (!b.noWalk.has('n')) slab(concrete, x0, x1, z1 - WALK, z1, walkTop, deep, CONCRETE, 4);
+    if (!b.noWalk.has('s')) slab(concrete, x0, x1, z0, z0 + WALK, walkTop, deep, CONCRETE, 4);
+    const za = b.noWalk.has('s') ? z0 : z0 + WALK;
+    const zb = b.noWalk.has('n') ? z1 : z1 - WALK;
+    if (!b.noWalk.has('w')) slab(concrete, x0, x0 + WALK, za, zb, walkTop, deep, CONCRETE, 4);
+    if (!b.noWalk.has('e')) slab(concrete, x1 - WALK, x1, za, zb, walkTop, deep, CONCRETE, 4);
   }
-  for (const [xa, xb] of walkRanges) {
-    slab(concrete, xa, xb, ROAD_HALF, WALK_OUT, walkTop, deep, CONCRETE, 4);
-    slab(concrete, xa, xb, -WALK_OUT, -ROAD_HALF, walkTop, deep, CONCRETE, 4);
-  }
-  // Cross-street sidewalks (both sides of every cross street).
-  for (const [xa, xb] of crossXs) {
-    for (const [c0, c1] of [
-      [xa - CROSS_WALK, xa],
-      [xb, xb + CROSS_WALK],
-    ] as const) {
-      if (c1 > EMB_X0 - 0.01) continue;
-      for (const [za, zb] of [
-        [WALK_OUT, PARALLEL_Z[0] - 3],
-        [PARALLEL_Z[1] + 3, CROSS_EXTENT],
-      ] as const) {
-        slab(concrete, c0, c1, za, zb, walkTop, deep, CONCRETE, 4);
-        slab(concrete, c0, c1, -zb, -za, walkTop, deep, CONCRETE, 4);
-      }
-    }
-  }
-  // Sidewalk behind the top street (the far side).
-  slab(concrete, TOP_STREET[0] - CROSS_WALK, TOP_STREET[0], -CROSS_EXTENT, CROSS_EXTENT, walkTop, deep, CONCRETE, 4);
 
-  // --- Road markings ---------------------------------------------------------------------------
+  // --- Road markings -------------------------------------------------------------------------------
   const markTop = (x: number): number => gy(x) + 0.012;
-  const lineRanges: [number, number][] = [];
-  let lPrev = WEST_X;
-  for (const seg of INTERSECTIONS) {
-    lineRanges.push([lPrev + 1, seg.x0 - 4]);
-    lPrev = seg.x1 + 4;
-  }
-  for (const [xa, xb] of lineRanges) {
-    for (const z of [-0.2, 0.2]) slab(marks, xa, xb, z - 0.07, z + 0.07, markTop, markTop, YELLOW, 1, false);
-    for (const z of [-6.35, 6.35]) slab(marks, xa, xb, z - 0.08, z + 0.08, markTop, markTop, WHITE, 1, false);
-  }
-  // Continental crosswalks either side of every intersection and at the Embarcadero.
-  const crosswalk = (xa: number, xb: number): void => {
-    for (let z = -6.3; z < 6.3; z += 1.25) slab(marks, xa, xb, z, z + 0.62, markTop, markTop, WHITE, 1, false);
-  };
-  for (const seg of INTERSECTIONS) {
-    crosswalk(seg.x0 - 3.6, seg.x0 - 0.8);
-    if (seg !== INTERSECTIONS[INTERSECTIONS.length - 1]) crosswalk(seg.x1 + 0.8, seg.x1 + 3.6);
-  }
-  crosswalk(EMB_X0 + 1, EMB_X0 + 3.8);
-  // Embarcadero lane lines along z.
-  for (const x of [EMB_X0 + 5.5, MEDIAN[1] + 5]) {
-    for (let z = -LAND_Z; z < LAND_Z; z += 9) {
-      if (Math.abs(z + 1.5) < 10) continue;
-      slab(marks, x - 0.08, x + 0.08, z, z + 3, markTop, markTop, WHITE, 1, false);
-    }
-  }
-  // Cross-street centre lines.
-  for (const [xa, xb] of crossXs) {
-    const xc = (xa + xb) / 2;
-    if (INTERSECTIONS.some((s) => s.x0 === xa)) continue; // cable-car tracks run down the middle
-    for (const sgn of [1, -1]) {
-      const z0 = sgn > 0 ? WALK_OUT + 4 : -CROSS_EXTENT;
-      const z1 = sgn > 0 ? CROSS_EXTENT : -WALK_OUT - 4;
-      for (const dz of [-0.2, 0.2]) slab(marks, xc + dz - 0.07, xc + dz + 0.07, z0, z1, markTop, markTop, YELLOW, 1, false);
-    }
-  }
-
-  // --- Cable-car tracks at each intersection ---------------------------------------------------
-  for (let i = 0; i < T.bumpX.length; i++) {
-    const bx = T.bumpX[i];
-    const y = gy(bx);
-    // Concrete strip, flush with the road, rails slightly proud so the bump reads.
-    slab(concrete, bx - 1.0, bx + 1.0, -CROSS_EXTENT, CROSS_EXTENT, (x) => gy(x) + 0.025, deep, '#c9c4b8', 4, false);
-    for (const dx of [-0.535, 0.535]) box(metal, bx + dx - 0.045, bx + dx + 0.045, y - 0.05, y + 0.07, -CROSS_EXTENT, CROSS_EXTENT, '#e6e9ee');
-    box(marks, bx - 0.03, bx + 0.03, y + 0.027, y + 0.04, -CROSS_EXTENT, CROSS_EXTENT, '#1a1a1d');
-    // Manhole-ish plates along the slot.
-    for (let z = -CROSS_EXTENT + 5; z < CROSS_EXTENT; z += 18) {
-      if (Math.abs(z) < 8) continue;
-      box(marks, bx - 0.28, bx + 0.28, y + 0.027, y + 0.04, z, z + 0.56, '#6c6e73');
-    }
-  }
-
-  // --- Street signs on the corners: cross-street plates face the chase camera ---------------------
-  {
-    const plates = new GeoBuilder();
-    INTERSECTIONS.forEach((seg, i) => {
-      for (const zs of [1, -1]) {
-        const x = seg.x0 - 1.2;
-        const z = zs * (ROAD_HALF + 1.0);
-        const y = gy(x) + CURB;
-        cyl(metal, [x, y, z], [x, y + 3.6, z], 0.06, 0.07, 8, '#1f4a3a');
-        const a = signPlate(i + 1, true);
-        a.translate(x, y + 3.25, z);
-        plates.add(a, '#ffffff');
-        const b = signPlate(0, false);
-        b.translate(x, y + 3.62, z);
-        plates.add(b, '#ffffff');
+  const clear = (x: number): boolean => Z_STREETS.some((xc) => Math.abs(x - xc) < RH + 4);
+  X_STREETS.forEach((zc) => {
+    let xa = GRID_X0 + 2;
+    for (let x = GRID_X0 + 2; x <= EMB_X - 2; x += 1) {
+      const skip = clear(x) || (zc === 0 && x > CROOKED[0] - 2 && x < CROOKED[1] + 2) || x > EMB_X - 5;
+      if (skip || x >= EMB_X - 2.5) {
+        if (x - xa > 3) {
+          for (const dz of [-0.2, 0.2]) slab(marks, xa, x, zc + dz - 0.07, zc + dz + 0.07, markTop, markTop, YELLOW, 1, false);
+          const courseStreet = (zc === GREENWICH_Z && xa < HYDE_X) || (zc === 0 && xa > CROOKED[1]);
+          if (courseStreet) for (const dz of [-6.35, 6.35]) slab(marks, xa, x, zc + dz - 0.08, zc + dz + 0.08, markTop, markTop, WHITE, 1, false);
+        }
+        xa = x + 1;
       }
-    });
-    const signs = meshOf(plates, new THREE.MeshStandardMaterial({ map: streetSignTexture(), roughness: 0.45 }), 'streetSigns', true, false);
-    group.add(signs);
+    }
+  });
+  Z_STREETS.forEach((xc) => {
+    if ([HYDE_X, LARKIN_X, LEAV_X, MASON_X].includes(xc)) return; // cable-car tracks run down the middle
+    const zs = [-GRID_Z, ...X_STREETS.flatMap((z) => [z - RH, z + RH]), GRID_Z];
+    for (let i = 0; i < zs.length; i += 2) {
+      const za = zs[i] + 4;
+      const zb = zs[i + 1] - 4;
+      if (zb - za < 3) continue;
+      for (const dx of [-0.2, 0.2]) slab(marks, xc + dx - 0.07, xc + dx + 0.07, za, zb, markTop, markTop, YELLOW, 1, false);
+    }
+  });
+  // Continental crosswalks across the course at every intersection it crosses.
+  for (const cw of C.crosswalks) {
+    const pts = coursePts(cw.s0, cw.s1, 0.5);
+    for (let d = -6.3; d < 6.3; d += 1.25) strip(marks, pts, d, d + 0.62, (i) => pts[i].y + 0.012, WHITE);
   }
 
-  // --- Start line, lane labels and the start gantry ---------------------------------------------
-  const startX0 = 2.6;
-  const startX1 = 3.4;
+  // --- Cable-car lines: along Hyde St, and across the course at Larkin, Leavenworth and Mason ------------
+  for (const xc of [HYDE_X, LARKIN_X, LEAV_X, MASON_X]) {
+    const zs = [-GRID_Z, GRID_Z];
+    const y = gy(xc);
+    slab(concrete, xc - 1.0, xc + 1.0, zs[0], zs[1], (x) => gy(x) + 0.025, deep, '#c9c4b8', 4, false);
+    for (const dx of [-0.535, 0.535]) box(metal, xc + dx - 0.045, xc + dx + 0.045, y - 0.05, y + 0.07, zs[0], zs[1], '#e6e9ee');
+    box(marks, xc - 0.03, xc + 0.03, y + 0.027, y + 0.04, zs[0], zs[1], '#1a1a1d');
+    for (let z = zs[0] + 5; z < zs[1]; z += 18) box(marks, xc - 0.28, xc + 0.28, y + 0.027, y + 0.04, z, z + 0.56, '#6c6e73');
+  }
+
+  // --- Race furniture: barriers and crowds along the course, barricades across side streets -------
+  const courseSecs = SECS.filter((s) => s.kind === 'start' || s.kind === 'block' || s.kind === 'hyde');
+  for (const sec of courseSecs) {
+    const s0 = sec.s0 + (sec.kind === 'start' ? 0.5 : 0.6);
+    const s1 = sec.s1 - 0.6;
+    const n = Math.max(1, Math.round((s1 - s0) / 2.4));
+    for (const side of [1, -1]) {
+      const d = side * (RH + 0.45);
+      for (let i = 0; i < n; i++) {
+        const a = pointAt(C, s0 + ((s1 - s0) * i) / n);
+        const c = pointAt(C, s0 + ((s1 - s0) * (i + 1)) / n);
+        const ax = a.x - a.tz * d;
+        const az = a.z + a.tx * d;
+        const cx = c.x - c.tz * d;
+        const cz = c.z + c.tx * d;
+        barrierPanel(metal, ax, az, cx, cz, walkTop(ax), walkTop(cx));
+      }
+      // The crowd, two deep in places.
+      for (let s = s0 + rng() * 2; s < s1; s += 1.1 + rng() * 1.8) {
+        if (rng() < 0.18) continue;
+        const dd = side * (RH + 1.2 + rng() * 1.3);
+        const p = pointAt(C, s);
+        const x = p.x - p.tz * dd;
+        const z = p.z + p.tx * dd;
+        crowdSpots.push({ x, y: walkTop(x), z, face: p.heading - side * Math.PI / 2 + (rng() - 0.5) * 0.8 });
+      }
+    }
+  }
+  // Barricades where the course crosses a street, and behind the start.
+  for (const sec of INTS) {
+    for (const side of [1, -1]) {
+      const d = side * (RH + 0.8);
+      for (let s = sec.s0 + 1.1; s < sec.s1 - 0.6; s += 2.3) {
+        const p = pointAt(C, s);
+        const x = p.x - p.tz * d;
+        const z = p.z + p.tx * d;
+        barricade(boards, metal, x, gy(x), z, -p.heading);
+      }
+      for (let k = 0; k < 9; k++) {
+        const s = sec.s0 + 1 + rng() * (sec.s1 - sec.s0 - 2);
+        const dd = side * (RH + 2 + rng() * 5);
+        const p = pointAt(C, s);
+        const x = p.x - p.tz * dd;
+        const z = p.z + p.tx * dd;
+        crowdSpots.push({ x, y: gy(x), z, face: p.heading - side * Math.PI / 2 + (rng() - 0.5) * 0.6 });
+      }
+    }
+  }
+  {
+    const p = pointAt(C, 0);
+    for (let d = -RH + 1.1; d < RH; d += 2.3) {
+      barricade(boards, metal, p.x - 0.6, gy(p.x), p.z + d, Math.PI / 2);
+    }
+  }
+  // Tyre walls round the outside of the Hyde St corners.
+  for (const sec of SECS.filter((s) => s.kind === 'corner')) {
+    let i = 0;
+    for (let s = sec.s0 - 1; s <= sec.s1 + 1; s += 0.72) {
+      const p = pointAt(C, s);
+      const side = p.curv > 0 || (s < sec.s0 + 0.01 && pointAt(C, sec.s0 + 1).curv > 0) ? -1 : 1;
+      const d = side * (RH + 0.45);
+      const x = p.x - p.tz * d;
+      const z = p.z + p.tx * d;
+      tyreStack(cones, x, gy(x), z, i++);
+    }
+    // Fans in the corner, behind the tyres.
+    for (let k = 0; k < 16; k++) {
+      const s = sec.s0 + rng() * (sec.s1 - sec.s0);
+      const p = pointAt(C, s);
+      const side = p.curv > 0 ? -1 : 1;
+      const dd = side * (RH + 2.2 + rng() * 4);
+      const x = p.x - p.tz * dd;
+      const z = p.z + p.tx * dd;
+      crowdSpots.push({ x, y: gy(x), z, face: p.heading - side * Math.PI / 2 });
+    }
+  }
+
+  // --- Street signs at the corners the course passes ----------------------------------------------
+  {
+    const names = ['LARKIN ST', 'HYDE ST', 'LEAVENWORTH ST', 'MASON ST', 'GREENWICH ST', 'LOMBARD ST'];
+    const plates = new GeoBuilder();
+    const put = (x: number, z: number, row: number, alongZ: boolean, row2: number): void => {
+      const y = gy(x) + CURB;
+      cyl(metal, [x, y, z], [x, y + 3.6, z], 0.06, 0.07, 8, '#1f4a3a');
+      const a = namePlate(row, names.length, alongZ);
+      a.translate(x, y + 3.25, z);
+      plates.add(a, '#ffffff');
+      const b = namePlate(row2, names.length, !alongZ);
+      b.translate(x, y + 3.62, z);
+      plates.add(b, '#ffffff');
+    };
+    // Cross-street names face the approaching racers.
+    put(LARKIN_X - RH - 1.2, GREENWICH_Z + RH + 1.0, 0, true, 4);
+    put(LARKIN_X - RH - 1.2, GREENWICH_Z - RH - 1.0, 0, true, 4);
+    put(HYDE_X - RH - 1.2, GREENWICH_Z + RH + 1.0, 1, true, 4);
+    put(HYDE_X - RH - 1.0, -RH - 1.2, 5, false, 1);
+    put(LEAV_X - RH - 1.2, RH + 1.0, 2, true, 5);
+    put(LEAV_X - RH - 1.2, -RH - 1.0, 2, true, 5);
+    put(MASON_X - RH - 1.2, RH + 1.0, 3, true, 5);
+    put(MASON_X - RH - 1.2, -RH - 1.0, 3, true, 5);
+    group.add(meshOf(plates, new THREE.MeshStandardMaterial({ map: namesTexture(names), roughness: 0.45 }), 'streetSigns', true, false));
+  }
+
+  // --- Start line, grid labels and the start gantry -----------------------------------------------
+  const startS = C.startS;
+  const sp = pointAt(C, startS);
+  const startX0 = sp.x - 0.4;
+  const startX1 = sp.x + 0.4;
   const startGeo = new GeoBuilder();
-  slab(startGeo, startX0, startX1, -ROAD_HALF + 0.2, ROAD_HALF - 0.2, markTop, markTop, '#ffffff', 1, false);
+  slab(startGeo, startX0, startX1, GREENWICH_Z - RH + 0.2, GREENWICH_Z + RH - 0.2, markTop, markTop, '#ffffff', 1, false);
   const startLine = meshOf(
     startGeo,
     new THREE.MeshStandardMaterial({
@@ -1423,12 +1333,11 @@ export function buildCity(): City {
     false,
     true,
   );
-  // The slab maps u=z, v=arc: remap to the full texture.
   {
     const uv = startLine.geometry.getAttribute('uv');
     const p = startLine.geometry.getAttribute('position');
     for (let i = 0; i < uv.count; i++) {
-      uv.setXY(i, (p.getZ(i) + ROAD_HALF - 0.2) / (2 * (ROAD_HALF - 0.2)), (p.getX(i) - startX0) / (startX1 - startX0));
+      uv.setXY(i, (p.getZ(i) - GREENWICH_Z + RH - 0.2) / (2 * (RH - 0.2)), (p.getX(i) - startX0) / (startX1 - startX0));
     }
     uv.needsUpdate = true;
   }
@@ -1436,9 +1345,9 @@ export function buildCity(): City {
 
   const laneTex = laneLabelTexture();
   const laneMat = new THREE.MeshStandardMaterial({ map: laneTex, transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false });
-  for (const [i, z] of [
-    [0, -3],
-    [1, 3],
+  for (const [i, slot] of [
+    [0, C.grid[0]],
+    [1, C.grid[1]],
   ] as const) {
     const g = new THREE.PlaneGeometry(3.0, 3.0);
     const uv = g.getAttribute('uv');
@@ -1446,7 +1355,8 @@ export function buildCity(): City {
     g.rotateX(-Math.PI / 2);
     g.rotateY(-Math.PI / 2);
     const label = new THREE.Mesh(g, laneMat);
-    label.position.set(-3.2, START_Y + 0.014, z);
+    const lp = pointAt(C, slot.s - 3.2);
+    label.position.set(lp.x, lp.y + 0.014, lp.z + slot.d);
     label.receiveShadow = true;
     label.name = `laneLabel${i + 1}`;
     group.add(label);
@@ -1454,59 +1364,124 @@ export function buildCity(): City {
 
   const gantry = new THREE.Group();
   gantry.name = 'startGantry';
+  const flags: { mesh: THREE.Mesh; base: Float32Array; phase: number }[] = [];
   {
     const gb = new GeoBuilder();
     const yb = START_Y + CURB;
     const topY = START_Y + 8.1;
-    for (const z of [-8.7, 8.7]) {
-      rbox(gb, startX0 - 0.25, startX0 + 0.25, yb, topY + 0.3, z - 0.25, z + 0.25, 0.08, '#f7f7f2');
-      box(gb, startX0 - 0.4, startX0 + 0.4, yb, yb + 0.3, z - 0.4, z + 0.4, '#2b2f36');
+    const gz = GREENWICH_Z;
+    for (const dz of [-8.7, 8.7]) {
+      rbox(gb, startX0 - 0.25, startX0 + 0.25, yb, topY + 0.3, gz + dz - 0.25, gz + dz + 0.25, 0.08, '#f7f7f2');
+      box(gb, startX0 - 0.4, startX0 + 0.4, yb, yb + 0.3, gz + dz - 0.4, gz + dz + 0.4, '#2b2f36');
     }
-    rbox(gb, startX0 - 0.3, startX0 + 0.3, topY - 0.45, topY + 0.1, -9.0, 9.0, 0.08, '#2b2f36');
+    rbox(gb, startX0 - 0.3, startX0 + 0.3, topY - 0.45, topY + 0.1, gz - 9.0, gz + 9.0, 0.08, '#2b2f36');
     const mat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.35, clearcoat: 0.6 });
     gantry.add(meshOf(gb, mat, 'gantryFrame', true, true));
-    const banner = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 1.75, 13.6),
-      new THREE.MeshStandardMaterial({ map: bannerTexture(), roughness: 0.55 }),
-    );
-    banner.position.set(startX0, topY - 1.45, 0);
+    const banner = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.75, 13.6), new THREE.MeshStandardMaterial({ map: bannerTexture(), roughness: 0.55 }));
+    banner.position.set(startX0, topY - 1.45, gz);
     banner.castShadow = true;
     banner.name = 'gantryBanner';
     gantry.add(banner);
+    // Waving chequered flags on the gantry posts.
+    const flagMat = new THREE.MeshStandardMaterial({ map: checkerTexture(6, 4), roughness: 0.6, side: THREE.DoubleSide });
+    for (const [i, dz] of [
+      [0, -8.7],
+      [1, 8.7],
+    ] as const) {
+      const g = new THREE.PlaneGeometry(1.8, 1.2, 12, 4);
+      g.translate(0.9, 0, 0);
+      const mesh = new THREE.Mesh(g, flagMat);
+      mesh.position.set(startX0, START_Y + 8.1 + 0.9, gz + dz);
+      mesh.rotation.y = dz < 0 ? 0.35 : -0.35 + Math.PI;
+      mesh.castShadow = true;
+      mesh.name = `startFlag${i + 1}`;
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.8, 8), new THREE.MeshStandardMaterial({ color: '#d8dce2', metalness: 0.8, roughness: 0.3 }));
+      pole.position.set(startX0, START_Y + 8.1 + 0.9, gz + dz);
+      gantry.add(pole);
+      gantry.add(mesh);
+      flags.push({ mesh, base: Float32Array.from(g.getAttribute('position').array as ArrayLike<number>), phase: i * 1.7 });
+    }
   }
   group.add(gantry);
 
-  // Waving checkered flags on the gantry posts.
-  const flagMat = new THREE.MeshStandardMaterial({ map: checkerTexture(6, 4), roughness: 0.6, side: THREE.DoubleSide });
-  const flags: { mesh: THREE.Mesh; base: Float32Array; phase: number }[] = [];
-  for (const [i, z] of [
-    [0, -8.7],
-    [1, 8.7],
-  ] as const) {
-    const g = new THREE.PlaneGeometry(1.8, 1.2, 12, 4);
-    g.translate(0.9, 0, 0);
-    const mesh = new THREE.Mesh(g, flagMat);
-    mesh.position.set(startX0, START_Y + 8.1 + 0.9, z);
-    mesh.rotation.y = z < 0 ? 0.35 : -0.35 + Math.PI;
-    mesh.castShadow = true;
-    mesh.name = `startFlag${i + 1}`;
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.8, 8), new THREE.MeshStandardMaterial({ color: '#d8dce2', metalness: 0.8, roughness: 0.3 }));
-    pole.position.set(startX0, START_Y + 8.1 + 0.9, z);
-    gantry.add(pole);
-    gantry.add(mesh);
-    flags.push({ mesh, base: Float32Array.from(g.getAttribute('position').array as ArrayLike<number>), phase: i * 1.7 });
+  // --- Houses: Victorians facing the course, simpler blocks everywhere else ------------------------
+  for (const b of blocks) {
+    const sides = (['s', 'n', 'e', 'w'] as const).map((side) => ({ side, course: onCourse(b, side) }));
+    const walkOf = (side: 'n' | 's' | 'e' | 'w'): number => (b.noWalk.has(side) ? (side === 'n' || side === 's') && Math.abs(Math.abs(side === 'n' ? b.z1 : b.z0) - BAND) < 0.01 ? LOMBARD_WALK : 0 : WALK);
+    const lx0 = b.x0 + walkOf('w');
+    const lx1 = b.x1 - walkOf('e');
+    const lz0 = b.z0 + walkOf('s');
+    const lz1 = b.z1 - walkOf('n');
+    if (lx1 - lx0 < 8 || lz1 - lz0 < 8) continue;
+    // Far from the course, the city is just a backdrop.
+    const far = Math.min(Math.abs(b.z0 + b.z1) / 2 - Math.abs(GREENWICH_Z) / 2, 1e9) > 150 || b.x1 < START.xMin - 120;
+    const depthOf = (course: boolean): number => (course ? HOUSE_DEPTH : 10 + rng() * 5);
+    const nsDepth = { n: 0, s: 0 };
+    for (const { side, course } of sides) {
+      if (side !== 'n' && side !== 's') continue;
+      const D = depthOf(course);
+      nsDepth[side] = D;
+      const lot = side === 's' ? { ox: lx0, oz: lz0, ux: 1, uz: 0, len: lx1 - lx0 } : { ox: lx1, oz: lz1, ux: -1, uz: 0, len: lx1 - lx0 };
+      if (course) rowHouses(houses, lot, rng);
+      else if (!far || rng() < 0.9) rowBlocks(facades, houses.walls, lot, D, rng);
+    }
+    for (const { side, course } of sides) {
+      if (side !== 'e' && side !== 'w') continue;
+      const D = depthOf(course);
+      const za = lz0 + nsDepth.s;
+      const zb = lz1 - nsDepth.n;
+      if (zb - za < 6) continue;
+      const lot = side === 'e' ? { ox: lx1, oz: za, ux: 0, uz: 1, len: zb - za } : { ox: lx0, oz: zb, ux: 0, uz: -1, len: zb - za };
+      if (course) rowHouses(houses, lot, rng);
+      else rowBlocks(facades, houses.walls, lot, D, rng);
+    }
+    // Backyard trees.
+    const inner = { x0: lx0 + HOUSE_DEPTH + 2, x1: lx1 - HOUSE_DEPTH - 2, z0: lz0 + HOUSE_DEPTH + 2, z1: lz1 - HOUSE_DEPTH - 2 };
+    if (!far && inner.x1 > inner.x0 && inner.z1 > inner.z0) {
+      const n = Math.floor(((inner.x1 - inner.x0) * (inner.z1 - inner.z0)) / 120);
+      for (let i = 0; i < Math.min(n, 8); i++) {
+        const x = inner.x0 + rng() * (inner.x1 - inner.x0);
+        const z = inner.z0 + rng() * (inner.z1 - inner.z0);
+        tree(foliage, x, gy(x) - 0.4, z, 1.0 + rng() * 0.8, rng);
+      }
+    }
   }
 
-  // --- Houses and the city behind them ----------------------------------------------------------
-  buildHouses(houses, rng);
-  buildBackground(facades, houses.walls, foliage, rng);
+  // --- Lombard St's crooked block -------------------------------------------------------------------
+  buildLombard({ brick, hedge, garden, flowers: hedge, concrete, metal }, rng);
+  {
+    // "The crookedest street" sign at the top of the block.
+    const x = LOMBARD_X0 + 1.5;
+    const z = -BAND - 1.2;
+    const y = gy(x) + CURB;
+    cyl(metal, [x, y, z], [x, y + 3.2, z], 0.07, 0.08, 8, '#1f4a3a');
+    const tex = namesTexture(['LOMBARD ST', 'CROOKEDEST STREET'], '#8a2d2d');
+    const plates = new GeoBuilder();
+    const a = namePlate(0, 2, true, 2.2);
+    a.translate(x, y + 3.0, z);
+    plates.add(a, '#ffffff');
+    const b2 = namePlate(1, 2, true, 2.2);
+    b2.translate(x, y + 2.62, z);
+    plates.add(b2, '#ffffff');
+    group.add(meshOf(plates, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45 }), 'lombardSign', true, false));
+    void LOMBARD_X1;
+  }
 
-  // Street trees along the main sidewalks (clear of the lanes).
-  for (const [xa, xb] of walkRanges) {
-    for (const side of [1, -1]) {
-      for (let x = xa + 7 + rng() * 4; x < xb - 6; x += 14 + rng() * 6) {
-        tree(foliage, x, gy(x) + CURB, side * 9.0, 0.75 + rng() * 0.2, rng);
-      }
+  // --- The Embarcadero: two carriageways, a palm median (with a gap for our road) and the promenade.
+  slab(asphalt, EMB_X, MEDIAN[0], -LAND_Z, LAND_Z, road, deep, ASPHALT, 6);
+  slab(asphalt, MEDIAN[1], PROMENADE_X, -LAND_Z, LAND_Z, road, deep, ASPHALT, 6);
+  slab(asphalt, MEDIAN[0], MEDIAN[1], -9, 9, road, deep, ASPHALT, 6);
+  for (const sgn of [1, -1]) {
+    const z0 = sgn > 0 ? 9 : -LAND_Z;
+    const z1 = sgn > 0 ? LAND_Z : -9;
+    slab(concrete, MEDIAN[0], MEDIAN[1], z0, z1, () => DECK_Y + 0.25, deep, '#d8d1c2', 4);
+    slab(concrete, MEDIAN[0] + 0.4, MEDIAN[1] - 0.4, z0 + (sgn > 0 ? 0.4 : 0), z1 - (sgn > 0 ? 0 : 0.4), () => DECK_Y + 0.33, deep, '#78b35a', 4, false);
+  }
+  slab(concrete, PROMENADE_X, SHORE_X - SEAWALL_T, -LAND_Z, LAND_Z, () => DECK_Y, deep, '#e6dfd1', 4);
+  for (const x of [EMB_X + 5.5, MEDIAN[1] + 5]) {
+    for (let z = -LAND_Z; z < LAND_Z; z += 9) {
+      if (Math.abs(z + 1.5) < 10) continue;
+      slab(marks, x - 0.08, x + 0.08, z, z + 3, markTop, markTop, WHITE, 1, false);
     }
   }
 
@@ -1517,7 +1492,7 @@ export function buildCity(): City {
       palm(foliage, medX + (rng() - 0.5) * 0.6, DECK_Y + 0.33, sgn * z, 8 + rng() * 3, rng);
     }
     for (let z = 12; z < 420; z += 24) {
-      for (const x of [EMB_X0 + 1.2, PROMENADE_X + 1.2]) {
+      for (const x of [EMB_X + 1.2, PROMENADE_X + 1.2]) {
         const zz = sgn * z;
         cyl(metal, [x, DECK_Y, zz], [x, DECK_Y + 6, zz], 0.08, 0.12, 8, '#23443a');
         cyl(metal, [x, DECK_Y + 6, zz], [x + (x < medX ? 0.9 : -0.9), DECK_Y + 6.3, zz], 0.05, 0.05, 6, '#23443a');
@@ -1688,13 +1663,16 @@ export function buildCity(): City {
   // A few cones at the pier entrance on the promenade.
   for (const z of [-9.4, -8.6, 8.6, 9.4]) cone(SHORE_X - 2.2, DECK_Y, z);
 
-  // --- Cable car parked on the first cross street -------------------------------------------------
-  const signMat = new THREE.MeshStandardMaterial({ map: signTexture('POWELL & HYDE', '#1d1d22', '#f6e7b8'), roughness: 0.5 });
-  const cableCar = buildCableCar(signMat, glassMat);
-  const ccX = T.bumpX[0];
-  cableCar.position.set(ccX, gy(ccX) + 0.07, 13.2);
-  cableCar.rotation.y = -Math.PI / 2;
-  group.add(cableCar);
+  // --- A cable car waiting on Mason St (the Powell-Hyde one runs up Hyde St in the race).
+  const signMat = new THREE.MeshStandardMaterial({ map: signTexture('POWELL & MASON', '#1d1d22', '#f6e7b8'), roughness: 0.5 });
+  const parked = buildCableCar(signMat, glassMat);
+  parked.position.set(MASON_X, gy(MASON_X) + 0.07, 34);
+  parked.rotation.y = -Math.PI / 2;
+  group.add(parked);
+
+  // --- The crowd ---------------------------------------------------------------------------------------
+  const crowd = new Crowd(crowdSpots, rng);
+  group.add(crowd.group);
 
   // --- Assemble --------------------------------------------------------------------------------------
   group.add(meshOf(concrete, concreteMat, 'concrete', false, true));
@@ -1710,8 +1688,12 @@ export function buildCity(): City {
   group.add(meshOf(planks, plankMat, 'pierDeck', true, true));
   group.add(meshOf(stripes, stripeMat, 'kickerStripes', true, true));
   group.add(meshOf(cones, coneMat, 'cones', true, true));
+  group.add(meshOf(brick, brickMat, 'lombardBrick', false, true));
+  group.add(meshOf(hedge, hedgeMat, 'hedges', true, true));
+  group.add(meshOf(garden, gardenMat, 'lombardGarden', false, true));
+  group.add(meshOf(boards, barricadeMat, 'barricades', true, true));
 
-  const update = (_dt: number, t: number): void => {
+  const update = (dt: number, t: number, cars: { x: number; z: number }[] = []): void => {
     for (const f of flags) {
       const pos = f.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
       const arr = pos.array as Float32Array;
@@ -1724,7 +1706,68 @@ export function buildCity(): City {
       pos.needsUpdate = true;
       f.mesh.geometry.computeVertexNormals();
     }
+    crowd.update(dt, t, cars);
   };
 
   return { group, update };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Frontages.
+
+interface Frontage {
+  ox: number;
+  oz: number;
+  ux: number;
+  uz: number;
+  len: number;
+}
+
+/** Victorian row houses filling a frontage (the first and last show their side walls). */
+function rowHouses(s: HouseSinks, f: Frontage, rng: () => number): void {
+  const widths: number[] = [];
+  let total = 0;
+  while (total < f.len - 6) {
+    const w = 6 + rng() * 2;
+    widths.push(w);
+    total += w;
+  }
+  if (widths.length === 0) return;
+  const scale = f.len / total;
+  let u = 0;
+  widths.forEach((w, i) => {
+    const ww = w * scale;
+    buildHouse(s, { ox: f.ox + f.ux * u, oz: f.oz + f.uz * u, ux: f.ux, uz: f.uz, W: ww }, rng, i === 0, i === widths.length - 1);
+    u += ww;
+  });
+}
+
+/** Plain pastel buildings with a tiled window texture, filling a frontage to a depth. */
+function rowBlocks(walls: GeoBuilder, roofs: GeoBuilder, f: Frontage, depth: number, rng: () => number): void {
+  const wx = -f.uz;
+  const wz = f.ux;
+  let u = 0;
+  while (u < f.len - 4) {
+    const w = Math.min(f.len - u, 7 + rng() * 7);
+    const a = u + 0.15;
+    const b = u + w - 0.15;
+    const xs = [f.ox + f.ux * a, f.ox + f.ux * b, f.ox + f.ux * a + wx * depth, f.ox + f.ux * b + wx * depth];
+    const zs = [f.oz + f.uz * a, f.oz + f.uz * b, f.oz + f.uz * a + wz * depth, f.oz + f.uz * b + wz * depth];
+    const x0 = Math.min(...xs);
+    const x1 = Math.max(...xs);
+    const z0 = Math.min(...zs);
+    const z1 = Math.max(...zs);
+    const hi = Math.max(gy(x0), gy(x1)) + CURB;
+    const lo = Math.min(gy(x0), gy(x1)) - 0.5;
+    const hgt = 8 + rng() * 11;
+    const color = shade(HOUSE_COLORS[Math.floor(rng() * HOUSE_COLORS.length)], 0.95);
+    walls.add(worldUvBox(x0, x1, lo, hi + hgt, z0, z1), color);
+    box(roofs, x0 + 0.3, x1 - 0.3, hi + hgt - 0.02, hi + hgt + 0.08, z0 + 0.3, z1 - 0.3, ROOF);
+    if (rng() < 0.3 && x1 - x0 > 4 && z1 - z0 > 4) {
+      const cx = x0 + 1 + rng() * (x1 - x0 - 3);
+      const cz = z0 + 1 + rng() * (z1 - z0 - 3);
+      box(roofs, cx, cx + 1.4, hi + hgt, hi + hgt + 1.2, cz, cz + 1.4, '#9aa0a8');
+    }
+    u += w;
+  }
 }

@@ -17,6 +17,8 @@ export interface BuildHandlers {
   /** Preview a config on a player's car (null restores the fitted car). */
   onHover(player: PlayerIndex, config: CarConfig | null): void;
   onName(player: PlayerIndex, name: string): void;
+  /** Player 2 only: hand the car to the CPU (or take it back). */
+  onCpu(player: PlayerIndex): void;
 }
 
 export interface LastRun {
@@ -32,6 +34,8 @@ export interface BuildView {
   round: number;
   /** Each player's result in the last race (null in round 1). */
   lastRuns: [LastRun | null, LastRun | null];
+  /** Which players the CPU drives. */
+  cpu: [boolean, boolean];
 }
 
 export type GarageAction = 'prevTab' | 'nextTab' | 'prevPart' | 'nextPart' | 'ready';
@@ -85,9 +89,18 @@ const RANGE = {
   drag: sumMax((o) => o.cdA ?? 0),
   power: maxOf('engine', (o) => o.power ?? 0),
   fuel: maxOf('fuel', (o) => o.energy ?? 0),
-  grip: maxOf('wheels', (o) => o.mu ?? 0) * maxOf('chassis', (o) => o.gripMul ?? 1),
-  bump: maxOf('wheels', (o) => o.bumpLoss ?? 0),
+  grip: maxOf('wheels', (o) => o.mu ?? 0) * 1.1,
 };
+
+/** Steering feel, 0..1: how quickly the nose answers (chassis, slowed by weight) and how tight it turns. */
+export function handlingScore(s: CarStats): number {
+  return Math.min(1, (s.yawResponse / 16) * 0.6 + (3.2 / s.turnRadius) * 0.4);
+}
+
+/** Best braking, in g: the tyres' grip, or the brakes themselves on a heavy car. */
+export function brakingG(s: CarStats): number {
+  return Math.min(s.mu, s.brakeForce / (s.mass * G));
+}
 
 interface StatRow {
   key: string;
@@ -103,9 +116,11 @@ interface StatRow {
 
 function statRows(s: CarStats): StatRow[] {
   const lift = liftShare(s);
+  const burn = s.power > 0 ? s.energy / s.power : 0;
+  const handling = handlingScore(s);
+  const brake = brakingG(s);
   return [
     { key: 'mass', label: 'Mass', frac: s.mass / RANGE.mass, raw: s.mass, text: `${Math.round(s.mass)} kg`, cost: true },
-    { key: 'drag', label: 'Drag', frac: s.cdA / RANGE.drag, raw: s.cdA, text: `${s.cdA.toFixed(2)} m²`, cost: true },
     {
       key: 'power',
       label: 'Power',
@@ -119,10 +134,21 @@ function statRows(s: CarStats): StatRow[] {
       label: 'Fuel',
       frac: Math.sqrt(s.energy / RANGE.fuel),
       raw: s.energy,
-      text: `${Math.round(s.energy / 1000)} kJ`,
+      // How long the engine can be floored.
+      text: burn >= 99.5 ? '99+ s gas' : `${burn < 9.95 ? burn.toFixed(1) : Math.round(burn)} s gas`,
       cost: false,
     },
-    { key: 'grip', label: 'Grip', frac: s.mu / RANGE.grip, raw: s.mu, text: `μ ${s.mu.toFixed(2)}`, cost: false },
+    {
+      key: 'grip',
+      label: 'Grip',
+      frac: s.mu / RANGE.grip,
+      raw: s.mu,
+      text: `μ ${s.mu.toFixed(2)}${s.traction > s.mu * 1.2 ? ' 4WD' : ''}`,
+      cost: false,
+    },
+    { key: 'handling', label: 'Handling', frac: handling, raw: handling, text: `${Math.round(handling * 10)}/10`, cost: false },
+    { key: 'brakes', label: 'Brakes', frac: brake / 1.3, raw: brake, text: `${brake.toFixed(2)} g`, cost: false },
+    { key: 'drag', label: 'Drag', frac: s.cdA / RANGE.drag, raw: s.cdA, text: `${s.cdA.toFixed(2)} m²`, cost: true },
     {
       key: 'lift',
       label: 'Lift',
@@ -130,14 +156,6 @@ function statRows(s: CarStats): StatRow[] {
       frac: lift,
       raw: lift,
       text: `${Math.round(lift * 100)}% wt`,
-      cost: false,
-    },
-    {
-      key: 'bump',
-      label: 'Bump resist.',
-      frac: 1 - (s.bumpLoss / RANGE.bump) * 0.9,
-      raw: -s.bumpLoss,
-      text: `−${(s.bumpLoss * 100).toFixed(s.bumpLoss < 0.01 ? 1 : 0)}%/bump`,
       cost: false,
     },
   ];
@@ -213,6 +231,7 @@ interface PanelRefs {
   readyCard: HTMLElement;
   readyWait: HTMLElement;
   readyBtn: HTMLButtonElement;
+  cpuBtn: HTMLButtonElement | null;
 }
 
 export class BuildUI {
@@ -237,6 +256,12 @@ export class BuildUI {
     this.banner = el('div', 'banner', bottom);
     this.banner.id = 'garage-banner';
     el('div', 'title-card', bottom, 'Click a part to fit it, click it again to remove it');
+    const drive = el('div', 'title-card drive', bottom);
+    drive.append('Race: ');
+    el('b', 'p1', drive, 'W A S D + SPACE');
+    drive.append(' · ');
+    el('b', 'p2', drive, '← ↑ → ↓ + ENTER');
+    drive.append(' · gamepads too');
     this.panels = [this.makePanel(0), this.makePanel(1)];
   }
 
@@ -262,6 +287,14 @@ export class BuildUI {
       if (e.key === 'Enter' || e.key === 'Escape') name.blur();
       e.stopPropagation();
     });
+    let cpuBtn: HTMLButtonElement | null = null;
+    if (p === 1) {
+      cpuBtn = el('button', 'cpu-btn', head, '🤖 CPU');
+      cpuBtn.type = 'button';
+      cpuBtn.id = 'cpu-p2';
+      cpuBtn.title = 'Let the computer drive Player 2';
+      cpuBtn.addEventListener('click', () => this.h.onCpu(p));
+    }
     const money = el('div', 'money', head);
     money.id = `money-p${p + 1}`;
     money.title = 'Money left';
@@ -337,6 +370,7 @@ export class BuildUI {
       readyCard,
       readyWait,
       readyBtn,
+      cpuBtn,
     };
   }
 
@@ -352,7 +386,9 @@ export class BuildUI {
 
     const ready = PLAYERS.filter((p) => view.garage.builds[p].ready);
     this.banner.replaceChildren();
-    if (ready.length === 1) {
+    if (view.cpu[1] && !view.garage.builds[0].ready) {
+      this.banner.append(`${view.round === 1 ? 'Build' : 'Tweak'} your car, then hit READY to race the CPU`);
+    } else if (ready.length === 1) {
       const p = ready[0];
       // Only the name sits in the pill, so a long name is cut without losing "is ready".
       el('span', 'who', this.banner, view.names[p]).style.background = view.colors[p];
@@ -418,8 +454,16 @@ export class BuildUI {
     refs.readyCard.classList.toggle('hidden', !b.ready);
     refs.readyWait.textContent = `Waiting for ${view.names[1 - p]}…`;
 
-    refs.readyBtn.replaceChildren(b.ready ? 'Edit car' : 'Ready');
-    el('kbd', '', refs.readyBtn, GARAGE_KEYS[p].ready.label);
+    const cpu = view.cpu[p];
+    refs.root.classList.toggle('cpu', cpu);
+    if (refs.cpuBtn) {
+      refs.cpuBtn.setAttribute('aria-pressed', String(cpu));
+      refs.cpuBtn.textContent = cpu ? '🤖 CPU ON' : '🤖 CPU';
+      refs.cpuBtn.title = cpu ? 'The computer drives Player 2: click to drive it yourself' : 'Let the computer drive Player 2';
+    }
+    refs.readyBtn.replaceChildren(cpu ? 'CPU is ready' : b.ready ? 'Edit car' : 'Ready');
+    if (!cpu) el('kbd', '', refs.readyBtn, GARAGE_KEYS[p].ready.label);
+    refs.readyBtn.disabled = cpu;
     refs.readyBtn.setAttribute('aria-pressed', String(b.ready));
 
     if (b.ready) this.hover[p] = null;

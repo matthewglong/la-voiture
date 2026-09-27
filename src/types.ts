@@ -69,6 +69,12 @@ export interface PartOption {
   jet?: boolean;
   /** Engine: maximum thrust (N) for a jet. */
   thrustCap?: number;
+  /** Engine: top speed on standard wheels (m/s); the push fades out as it nears it. */
+  topSpeed?: number;
+  /** Wheels: gearing, which scales a wheel-driven engine's top speed. */
+  gearing?: number;
+  /** Wheels: share of the power they can't put down that is burned anyway (wheelspin). */
+  spinWaste?: number;
   /** Fuel tank: energy (J). */
   energy?: number;
   /** Booster: kinetic energy added at the lip (J). */
@@ -77,7 +83,29 @@ export interface PartOption {
   kite?: KiteSpec;
   /** Paint: CSS hex colour. */
   color?: string;
+  /** Chassis: footprint length and body width (m). */
+  length?: number;
+  bodyWidth?: number;
+  /** Chassis: distance from the centreline to the wheel hubs, before the wheel width (m). */
+  halfTrack?: number;
+  /** Chassis: tightest turning circle radius (m). */
+  turnRadius?: number;
+  /** Chassis: how quickly the car answers the wheel (1/s), before the mass effect. */
+  yawRate?: number;
+  /** Wheels: tyre width (m), which widens the footprint. */
+  wheelWidth?: number;
+  /** Wheels: most braking force the brakes can deliver (N). */
+  brakeForce?: number;
+  /** Wheels: how much of a spin-out the tyres shrug off (0..1). */
+  spinResist?: number;
+  /** Wing: downforce area on the road (m²): extra grip that grows with speed. */
+  downforce?: number;
+  /** Nose: what a hit with it does to the other car. */
+  ram?: RamKind;
 }
+
+/** Bull bar: shoves hard. Wedge: scoops the other car up. Spike: no special effect, just slippery. */
+export type RamKind = 'bull' | 'wedge' | 'spike';
 
 export interface CarStats {
   /** Total mass (kg). */
@@ -92,8 +120,10 @@ export interface CarStats {
   apexCdA: number;
   /** Cap on the open wings' lift, as a multiple of the car's weight. */
   apexTrim: number;
-  /** Tyre grip coefficient (wheels × chassis multiplier). */
+  /** Tyre grip for cornering and braking (the wheels, a little less on heavy cars). */
   mu: number;
+  /** Grip for putting power down (4WD multiplies it). */
+  traction: number;
   /** Engine power (W). */
   power: number;
   /** Fuel energy (J). */
@@ -101,11 +131,31 @@ export interface CarStats {
   isJet: boolean;
   /** Maximum jet thrust (N). Infinity for wheel-driven engines. */
   thrustCap: number;
+  /** Speed at which the engine stops pushing (m/s). Gravity can still take the car past it. */
+  topSpeed: number;
+  /** Share of the power the tyres can't use that is burned anyway (wheelspin). */
+  spinWaste: number;
   crr: number;
   bumpLoss: number;
   nitroJ: number;
   kite: KiteSpec | null;
   price: number;
+  /** Footprint (m) for collisions. */
+  length: number;
+  width: number;
+  /** Tightest turning radius (m). */
+  turnRadius: number;
+  /** Steering response (1/s): chassis agility, slowed by mass. */
+  yawResponse: number;
+  /** Braking force (N), limited in use by grip. */
+  brakeForce: number;
+  /** Downforce area on the road (m²). */
+  downforce: number;
+  ram: RamKind;
+  /** Vertical launch speed of the Jump item (m/s): heavier cars jump lower. */
+  jumpSpeed: number;
+  /** Share of a spin-out the tyres shrug off (0..1). */
+  spinResist: number;
 }
 
 export type PlayerIndex = 0 | 1;

@@ -14,8 +14,17 @@ export interface WindVoice {
   stop(): void;
 }
 
+export interface SkidVoice {
+  /** 0..1 how hard the tyres are sliding. */
+  set(amount: number): void;
+  stop(): void;
+}
+
+export type HornKind = 'kart' | 'tub' | 'sedan' | 'pickup';
+
 const NOOP_ENGINE: EngineVoice = { set: () => {}, stop: () => {} };
 const NOOP_WIND: WindVoice = { set: () => {}, stop: () => {} };
+const NOOP_SKID: SkidVoice = { set: () => {}, stop: () => {} };
 
 export class Sound {
   private ctx: AudioContext | null = null;
@@ -275,6 +284,243 @@ export class Sound {
       const at = 0.2 + Math.random() * 1.4;
       this.tone(1700 + Math.random() * 500, 0.35, 'sine', 0.06, at, 2600 + Math.random() * 500);
     }
+  }
+
+  /** A filtered noise burst: the building block of crunches, splats and whooshes. */
+  private burst(
+    pan: number,
+    type: BiquadFilterType,
+    f0: number,
+    f1: number,
+    dur: number,
+    peak: number,
+    q = 1,
+    at = 0,
+  ): void {
+    if (!this.ctx || !this.master) return;
+    const t = this.ctx.currentTime + at;
+    const n = this.noiseSource();
+    if (!n) return;
+    const f = this.ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.setValueAtTime(f0, t);
+    f.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    f.Q.value = q;
+    const g = this.envGain(peak, 0.004, dur, at)!;
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = pan;
+    n.connect(f).connect(g).connect(p).connect(this.master);
+    n.start(t);
+    n.stop(t + dur + 0.1);
+  }
+
+  private panTone(pan: number, freq: number, dur: number, type: OscillatorType, peak: number, at = 0, glideTo?: number): void {
+    if (!this.ctx || !this.master) return;
+    const o = this.ctx.createOscillator();
+    o.type = type;
+    const t = this.ctx.currentTime + at;
+    o.frequency.setValueAtTime(freq, t);
+    if (glideTo) o.frequency.exponentialRampToValueAtTime(glideTo, t + dur);
+    const g = this.envGain(peak, 0.005, dur, at)!;
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = pan;
+    o.connect(g).connect(p).connect(this.master);
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  }
+
+  /** Driving through an item box: a sparkly upward arpeggio. */
+  itemBox(pan = 0): void {
+    [880, 1109, 1319, 1760].forEach((f, i) => this.panTone(pan, f, 0.12, 'triangle', 0.08, i * 0.045));
+    this.burst(pan, 'highpass', 5000, 9000, 0.25, 0.06);
+  }
+
+  /** The roulette settles on an item. */
+  itemReady(pan = 0): void {
+    this.panTone(pan, 1568, 0.09, 'square', 0.05);
+    this.panTone(pan, 2093, 0.18, 'triangle', 0.08, 0.07);
+  }
+
+  rouletteTick(pan = 0): void {
+    this.panTone(pan, 2200, 0.025, 'square', 0.025);
+  }
+
+  /** Jump: a springy boing. */
+  boing(pan = 0, heavy = false): void {
+    if (!this.ctx || !this.master) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    o.type = 'sine';
+    const base = heavy ? 150 : 220;
+    o.frequency.setValueAtTime(base, t);
+    o.frequency.exponentialRampToValueAtTime(base * 3.4, t + 0.22);
+    const lfo = this.ctx.createOscillator();
+    lfo.frequency.value = 18;
+    const lg = this.ctx.createGain();
+    lg.gain.value = base * 0.35;
+    lfo.connect(lg).connect(o.frequency);
+    const g = this.envGain(0.3, 0.005, 0.45)!;
+    const p = this.ctx.createStereoPanner();
+    p.pan.value = pan;
+    o.connect(g).connect(p).connect(this.master);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + 0.5);
+    lfo.stop(t + 0.5);
+  }
+
+  /** Determination: a rising power chord. */
+  grit(pan = 0): void {
+    for (const [f, d] of [
+      [220, 0],
+      [277, 0.04],
+      [330, 0.08],
+      [440, 0.12],
+    ] as const) {
+      this.panTone(pan, f, 0.5, 'sawtooth', 0.045, d, f * 1.5);
+    }
+    this.burst(pan, 'bandpass', 600, 3000, 0.5, 0.12, 1.5);
+  }
+
+  /** Poo dropped: a wet little plop. */
+  plop(pan = 0): void {
+    this.panTone(pan, 420, 0.12, 'sine', 0.25, 0, 90);
+    this.burst(pan, 'lowpass', 1400, 200, 0.12, 0.2, 3);
+  }
+
+  /** Driving through poo: a splat and a spinning whirr. */
+  splat(pan = 0): void {
+    this.burst(pan, 'lowpass', 2600, 150, 0.35, 0.6, 2);
+    this.panTone(pan, 180, 0.2, 'sine', 0.3, 0, 60);
+    for (let i = 0; i < 4; i++) this.panTone(pan, 700 - i * 90, 0.12, 'triangle', 0.05, 0.12 + i * 0.16, 500 - i * 70);
+  }
+
+  /** Two cars colliding: a metallic toy bonk. */
+  bonk(pan = 0, size = 1): void {
+    const k = Math.min(1.4, 0.5 + size);
+    for (const [f, a] of [
+      [310, 0.22],
+      [523, 0.12],
+      [792, 0.08],
+    ] as const) {
+      this.panTone(pan, f, 0.28, 'triangle', a * k, 0, f * 0.8);
+    }
+    this.burst(pan, 'bandpass', 1800, 700, 0.12, 0.3 * k, 1.2);
+  }
+
+  /** Hitting something heavy (a Waymo, the cable car): a crunch. */
+  crunch(pan = 0, size = 1): void {
+    const k = Math.min(1.5, 0.6 + size * 0.5);
+    this.burst(pan, 'bandpass', 900, 250, 0.4, 0.55 * k, 0.9);
+    this.burst(pan, 'highpass', 3000, 6000, 0.18, 0.18 * k, 1, 0.02);
+    this.panTone(pan, 90, 0.3, 'sine', 0.4 * k, 0, 45);
+  }
+
+  /** A Waymo's polite little chime after it's been knocked. */
+  robotChime(pan = 0): void {
+    this.panTone(pan, 1047, 0.12, 'sine', 0.07, 0.25);
+    this.panTone(pan, 784, 0.12, 'sine', 0.07, 0.4);
+    this.panTone(pan, 1319, 0.2, 'sine', 0.07, 0.55);
+  }
+
+  /** A wobbly toy tourist toppling over: a cartoon "whoa". */
+  whoa(pan = 0): void {
+    this.panTone(pan, 520, 0.35, 'triangle', 0.14, 0, 260);
+    this.panTone(pan, 780, 0.3, 'sine', 0.05, 0.05, 390);
+    this.burst(pan, 'bandpass', 900, 500, 0.12, 0.12, 2);
+  }
+
+  /** A loose traffic cone: a hollow plastic tock. */
+  tock(pan = 0): void {
+    this.panTone(pan, 660, 0.08, 'square', 0.06, 0, 420);
+    this.burst(pan, 'bandpass', 1500, 900, 0.06, 0.12, 4);
+  }
+
+  /** Scraping or thumping a wall. */
+  scrape(pan = 0, size = 1): void {
+    this.burst(pan, 'bandpass', 2200, 900, 0.18, Math.min(0.35, 0.08 + 0.05 * size), 1.8);
+    this.panTone(pan, 110, 0.15, 'sine', Math.min(0.4, 0.1 + 0.05 * size), 0, 50);
+  }
+
+  /** The cable car's bell: ding-ding. */
+  bell(pan = 0): void {
+    for (const at of [0, 0.22]) {
+      for (const [f, a] of [
+        [1480, 0.1],
+        [2220, 0.05],
+        [3310, 0.03],
+      ] as const) {
+        this.panTone(pan, f, 0.6, 'sine', a, at);
+      }
+    }
+  }
+
+  /** Honk: each chassis has its own horn. */
+  horn(kind: HornKind, pan = 0): void {
+    const chords: Record<HornKind, [number[], OscillatorType, number]> = {
+      kart: [[880, 1109], 'square', 0.16],
+      tub: [[1400], 'sine', 0.2],
+      sedan: [[392, 494], 'sawtooth', 0.25],
+      pickup: [[196, 247, 294], 'sawtooth', 0.4],
+    };
+    const [fs, type, dur] = chords[kind];
+    for (const f of fs) this.panTone(pan, f, dur, type, 0.06);
+    if (kind === 'tub') this.panTone(pan, 1800, 0.12, 'sine', 0.08, 0.05, 1200); // squeak
+  }
+
+  /** Rocket start (or a bogged-down engine). */
+  rocket(pan = 0, good = true): void {
+    if (good) {
+      this.burst(pan, 'bandpass', 300, 2600, 0.6, 0.4, 1.4);
+      this.panTone(pan, 330, 0.4, 'sawtooth', 0.08, 0, 990);
+    } else {
+      for (let i = 0; i < 4; i++) this.panTone(pan, 90, 0.08, 'square', 0.12, i * 0.13, 60);
+    }
+  }
+
+  /** A HYPE pickup: a quick bright blip (bigger for bigger gains). */
+  hype(pan = 0, amount = 5): void {
+    const k = Math.min(1, amount / 12);
+    this.panTone(pan, 660 + 400 * k, 0.12, 'triangle', 0.06 + 0.05 * k, 0, 1320 + 600 * k);
+  }
+
+  /** A near miss: air whooshing past. */
+  whoosh(pan = 0): void {
+    this.burst(pan, 'bandpass', 500, 2800, 0.35, 0.22, 2);
+  }
+
+  /** Tyres sliding: a looping screech whose level follows the slide. */
+  skid(pan: number): SkidVoice {
+    const ctx = this.ctx;
+    if (!ctx || !this.master) return NOOP_SKID;
+    const n = this.noiseSource()!;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 1900;
+    bp.Q.value = 7;
+    const bp2 = ctx.createBiquadFilter();
+    bp2.type = 'bandpass';
+    bp2.frequency.value = 3100;
+    bp2.Q.value = 9;
+    const g = ctx.createGain();
+    g.gain.value = 0;
+    const p = ctx.createStereoPanner();
+    p.pan.value = pan;
+    n.connect(bp).connect(g);
+    n.connect(bp2).connect(g);
+    g.connect(p).connect(this.master);
+    n.start();
+    return {
+      set: (amount) => {
+        const now = ctx.currentTime;
+        g.gain.setTargetAtTime(Math.min(1, amount) * 0.22, now, 0.05);
+        bp.frequency.setTargetAtTime(1700 + amount * 500, now, 0.1);
+      },
+      stop: () => {
+        g.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+        setTimeout(() => n.stop(), 300);
+      },
+    };
   }
 
   engine(kind: EngineKind, pan: number): EngineVoice {

@@ -5,8 +5,9 @@ import { canvasTexture } from './util';
 
 export interface Bay {
   group: THREE.Group;
-  /** Pass the camera so the distance labels can fade when viewed end-on. */
-  update(dt: number, t: number, camera?: THREE.Camera): void;
+  update(t: number): void;
+  /** Before each view is drawn: the distance labels show side-on and hide end-on. */
+  labelsFor(camera: THREE.Camera): void;
   /** Move the session-record flag buoy; null hides it. */
   setBest(distance: number | null, holder?: string, color?: string): void;
   /** Small wave height used to bob floating things. */
@@ -153,7 +154,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     phase: number;
   }
   const floaters: Floater[] = [];
-  const labelMats: THREE.SpriteMaterial[] = [];
+  const labels: THREE.Sprite[] = [];
   for (let d = BUOY_SPACING; d <= BUOY_MAX; d += BUOY_SPACING) {
     const big = d % 50 === 0;
     for (const z of TRACK.laneZ) {
@@ -179,7 +180,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     }
     // Labels float between the lanes so the two rows never overlap on screen.
     const label = makeLabel(big ? `${d} m` : `${d}`, big, big ? 4.2 : 2.1);
-    labelMats.push(label.material);
+    labels.push(label);
     label.position.set(lip.x + d, big ? 6.2 : 2.6, 0);
     // Drawn after the (transparent) flight trails so trails never scribble over the numbers.
     label.renderOrder = 5;
@@ -240,17 +241,18 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     0.09 * Math.sin(t * 1.3 + x * 0.21 + z * 0.13) + 0.05 * Math.sin(t * 2.1 - x * 0.17 + z * 0.29);
 
   // Looking down the lanes (chase and build views) the labels line up into one cluttered stack,
-  // so they fade; side-on, where the distances are read, they are fully opaque.
-  let labelOpacity = 1;
+  // so they go; side-on, where the distances are read, they are fully opaque. Per view (the halves
+  // of a split can look different ways); the camera rigs already ease the turn.
   const viewDir = new THREE.Vector3();
-  const update = (dt: number, t: number, camera?: THREE.Camera): void => {
-    if (camera) {
-      camera.getWorldDirection(viewDir);
-      const along = Math.abs(viewDir.x);
-      const target = THREE.MathUtils.clamp((0.9 - along) / 0.35, 0.1, 1);
-      labelOpacity += (target - labelOpacity) * (1 - Math.exp(-5 * dt));
-      for (const m of labelMats) m.opacity = labelOpacity;
+  const labelsFor = (camera: THREE.Camera): void => {
+    camera.getWorldDirection(viewDir);
+    const opacity = THREE.MathUtils.clamp((0.88 - Math.abs(viewDir.x)) / 0.3, 0, 1);
+    for (const l of labels) {
+      l.material.opacity = opacity;
+      l.visible = opacity > 0.02;
     }
+  };
+  const update = (t: number): void => {
     normals.offset.set(t * 0.012, t * 0.007);
     normals2.offset.set(-t * 0.009, t * 0.011);
     for (const f of floaters) {
@@ -271,5 +273,5 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     }
   };
 
-  return { group, update, setBest, waveHeight };
+  return { group, update, labelsFor, setBest, waveHeight };
 }

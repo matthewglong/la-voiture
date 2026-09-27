@@ -30,9 +30,14 @@ const CHASSIS: OptionDef[] = [
     id: 'kart',
     name: 'Go-kart',
     price: 0,
-    mass: 200,
-    cdA: 0.85,
-    tagline: 'Light and slim, but drag hurts light cars more in flight',
+    mass: 195,
+    cdA: 0.76,
+    length: 2.3,
+    bodyWidth: 1.3,
+    halfTrack: 0.58,
+    turnRadius: 3.2,
+    yawRate: 13,
+    tagline: 'Turns on a dime, but gets shoved around and drag hurts light cars in flight',
   },
   {
     id: 'tub',
@@ -40,8 +45,13 @@ const CHASSIS: OptionDef[] = [
     price: 5,
     mass: 250,
     cdA: 1.05,
-    clA: 1.7,
-    tagline: 'Flat bottom makes it a lifting body, but heavier and draggier than a kart',
+    clA: 1.45,
+    length: 2.7,
+    bodyWidth: 1.5,
+    halfTrack: 0.72,
+    turnRadius: 3.8,
+    yawRate: 8,
+    tagline: 'A lifting body that floats in the air, but it wallows through the turns',
   },
   {
     id: 'sedan',
@@ -49,16 +59,27 @@ const CHASSIS: OptionDef[] = [
     price: 15,
     mass: 660,
     cdA: 0.9,
-    tagline: 'Balanced and slippery for its size, but 660\u00a0kg needs a strong engine',
+    length: 4.3,
+    bodyWidth: 1.72,
+    halfTrack: 0.8,
+    turnRadius: 4.6,
+    yawRate: 10,
+    tagline: 'Planted and slippery, holds its own in a shove, but 660\u00a0kg needs a strong engine',
   },
   {
     id: 'pickup',
     name: 'Pickup 4x4',
     price: 25,
-    mass: 1210,
-    cdA: 1.05,
+    mass: 1000,
+    cdA: 0.95,
     gripMul: 1.35,
-    tagline: '4WD grip and momentum shrug off drag, but heavy and a quarter of your budget',
+    gearing: 1.1,
+    length: 5.1,
+    bodyWidth: 1.92,
+    halfTrack: 0.9,
+    turnRadius: 5.4,
+    yawRate: 8.5,
+    tagline: 'A tall-geared 4WD bulldozer that wins every shove, but slow to turn, stop and jump',
   },
 ];
 
@@ -71,7 +92,12 @@ const WHEELS: OptionDef[] = [
     mu: 0.85,
     crr: 0.009,
     bumpLoss: 0.25,
-    tagline: 'Light and free-rolling, but they spin under power and lose 25% at each track',
+    gearing: 0.82,
+    spinWaste: 1,
+    wheelWidth: 0.13,
+    brakeForce: 6500,
+    spinResist: 0,
+    tagline: 'Free-rolling and light, but they spin away fuel, slide, and lose 25% at each track',
   },
   {
     id: 'standard',
@@ -81,7 +107,12 @@ const WHEELS: OptionDef[] = [
     mu: 0.95,
     crr: 0.021,
     bumpLoss: 0.07,
-    tagline: 'Good grip and only lose 7% at each track, for a little weight',
+    gearing: 1,
+    spinWaste: 0.3,
+    wheelWidth: 0.24,
+    brakeForce: 9500,
+    spinResist: 0.2,
+    tagline: 'Good grip for turns and brakes, and only 7% lost at each track',
   },
   {
     id: 'monster',
@@ -92,7 +123,12 @@ const WHEELS: OptionDef[] = [
     crr: 0.024,
     bumpLoss: 0.005,
     cdA: 0.35,
-    tagline: 'Huge grip and roll right over the tracks, but heavy, draggy and slow-rolling',
+    gearing: 1.18,
+    spinWaste: 0.15,
+    wheelWidth: 0.5,
+    brakeForce: 13000,
+    spinResist: 0.5,
+    tagline: 'Huge grip, brakes and gearing, roll over tracks, but heavy and draggy',
   },
 ];
 
@@ -102,26 +138,29 @@ const ENGINES: OptionDef[] = [
     name: 'Lawnmower',
     price: 0,
     mass: 30,
-    power: 2500,
-    tagline: 'Free and light, but only 2.5\u00a0kW: it putters down the hill',
+    power: 5000,
+    topSpeed: 17,
+    tagline: 'Free, light and frugal, but only 5\u00a0kW: it putters along',
   },
   {
     id: 'v8',
     name: 'V8',
     price: 20,
     mass: 250,
-    power: 185_000,
-    tagline: '185\u00a0kW of shove for $20, but wheel-driven: bad tyres just spin',
+    power: 130_000,
+    topSpeed: 32,
+    tagline: '130\u00a0kW of shove for $20, but wheel-driven: bad tyres just spin',
   },
   {
     id: 'jet',
     name: 'Jet',
     price: 35,
     mass: 350,
-    power: 200_000,
+    power: 140_000,
     jet: true,
-    thrustCap: 17_500,
-    tagline: 'Thrust ignores grip, so no wheelspin, but heavy, pricey and capped off the line',
+    thrustCap: 12_000,
+    topSpeed: 33,
+    tagline: 'Thrust ignores grip and pushes even in the air, but heavy and pricey',
   },
 ];
 
@@ -131,24 +170,24 @@ const FUEL: OptionDef[] = [
     name: 'Jerry can',
     price: 0,
     mass: 10,
-    energy: 120_000,
-    tagline: 'Light and free: plenty for a lawnmower, a sip for a V8',
+    energy: 250_000,
+    tagline: 'Light and free: a whole race for a lawnmower, one burst for a V8',
   },
   {
     id: 'tank',
     name: 'Standard',
     price: 10,
     mass: 60,
-    energy: 460_000,
-    tagline: '460\u00a0kJ: a few seconds of V8 or jet for 60\u00a0kg',
+    energy: 1_400_000,
+    tagline: '1.4\u00a0MJ: a race of careful gas plus the run to the kicker, for 60\u00a0kg',
   },
   {
     id: 'big',
     name: 'Oversized',
     price: 20,
     mass: 230,
-    energy: 760_000,
-    tagline: '760\u00a0kJ, the most push, but 230\u00a0kg to haul and leftovers are wasted',
+    energy: 2_600_000,
+    tagline: '2.6\u00a0MJ to floor it all race, but 230\u00a0kg to haul and leftovers are wasted',
   },
 ];
 
@@ -161,7 +200,8 @@ const WINGS: OptionDef[] = [
     mass: 10,
     clA: 0.7,
     cdA: 0.1,
-    tagline: 'A little lift for a little drag',
+    downforce: 2.4,
+    tagline: 'Downforce for grip in fast turns and a little lift in the air, for a little drag',
   },
   {
     id: 'glider',
@@ -178,9 +218,33 @@ const WINGS: OptionDef[] = [
 ];
 
 const NOSES: OptionDef[] = [
-  { id: 'blunt', name: 'Blunt', price: 0, mass: 0, cdA: 0.5, tagline: 'Free, but pushes a wall of air' },
-  { id: 'wedge', name: 'Wedge', price: 8, mass: 20, cdA: 0.1, tagline: 'Cuts most of the drag for a little weight' },
-  { id: 'cone', name: 'Cone', price: 15, mass: 40, cdA: 0.0, tagline: 'No extra drag at all, but the priciest and heaviest' },
+  {
+    id: 'blunt',
+    name: 'Blunt',
+    price: 0,
+    mass: 0,
+    cdA: 0.5,
+    ram: 'bull',
+    tagline: 'A free bull bar that shoves rivals hard, but it pushes a wall of air',
+  },
+  {
+    id: 'wedge',
+    name: 'Wedge',
+    price: 8,
+    mass: 20,
+    cdA: 0.1,
+    ram: 'wedge',
+    tagline: 'Scoops rivals off their wheels and cuts most of the drag',
+  },
+  {
+    id: 'cone',
+    name: 'Cone',
+    price: 15,
+    mass: 40,
+    cdA: 0.0,
+    ram: 'spike',
+    tagline: 'No extra drag at all, but the priciest and heaviest, and no bite in a shove',
+  },
 ];
 
 const BOOSTERS: OptionDef[] = [
@@ -272,6 +336,7 @@ export function computeStats(config: CarConfig): CarStats {
   const engine = getOption('engine', config.engine);
   const fuel = getOption('fuel', config.fuel);
   const booster = getOption('booster', config.booster);
+  const nose = getOption('nose', config.nose);
 
   let mass = 0;
   let cdA = 0;
@@ -280,8 +345,10 @@ export function computeStats(config: CarConfig): CarStats {
   let apexCdA = 0;
   let apexTrim = 0;
   let price = 0;
+  let downforce = 0;
   for (const o of opts) {
     mass += o.mass;
+    downforce += o.downforce ?? 0;
     cdA += o.cdA ?? 0;
     if (o.opensAtApex) {
       apexClA += o.clA ?? 0;
@@ -298,15 +365,42 @@ export function computeStats(config: CarConfig): CarStats {
     apexClA,
     apexCdA,
     apexTrim,
-    mu: (wheels.mu ?? 0.9) * (chassis.gripMul ?? 1),
+    // Tyres lose a little grip under load, so heavy cars corner and brake a little worse.
+    mu: (wheels.mu ?? 0.9) * loadFactor(mass),
+    traction: (wheels.mu ?? 0.9) * (chassis.gripMul ?? 1) * loadFactor(mass),
     power: engine.power ?? 0,
     energy: fuel.energy ?? 0,
     isJet: engine.jet === true,
     thrustCap: engine.jet ? (engine.thrustCap ?? Infinity) : Infinity,
+    // Wheel size is the gearing: small wheels rev the engine out sooner. A jet doesn't care.
+    topSpeed: (engine.topSpeed ?? 30) * (engine.jet ? 1 : (wheels.gearing ?? 1) * (chassis.gearing ?? 1)),
     crr: wheels.crr ?? 0.015,
     bumpLoss: wheels.bumpLoss ?? 0.05,
     nitroJ: booster.nitroJ ?? 0,
     kite: booster.kite ?? null,
     price,
+    length: chassis.length ?? 3,
+    width: Math.max(chassis.bodyWidth ?? 1.6, 2 * ((chassis.halfTrack ?? 0.7) + (wheels.wheelWidth ?? 0.2))),
+    turnRadius: chassis.turnRadius ?? 4,
+    // Heavier cars answer the wheel more slowly.
+    yawResponse: (chassis.yawRate ?? 9) * Math.pow(450 / mass, 0.2),
+    brakeForce: wheels.brakeForce ?? 9000,
+    downforce,
+    ram: nose.ram ?? 'bull',
+    jumpSpeed: jumpSpeedFor(mass),
+    spinResist: wheels.spinResist ?? 0,
+    spinWaste: wheels.spinWaste ?? 0.5,
   };
+}
+
+/** Tyre load sensitivity: grip per kilogram falls slowly with weight (1 at 450 kg). */
+export function loadFactor(mass: number): number {
+  return Math.pow(450 / mass, 0.1);
+}
+
+/** The Jump item's take-off speed: a fixed spring, so heavier cars jump lower (about 3 m to 1.8 m,
+ *  enough for anything to clear a hedge). */
+export function jumpSpeedFor(mass: number): number {
+  const h = Math.min(3.2, Math.max(1.8, 3.1 * Math.sqrt(450 / mass)));
+  return Math.sqrt(2 * 9.81 * h);
 }
