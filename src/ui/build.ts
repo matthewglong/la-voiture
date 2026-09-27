@@ -193,7 +193,8 @@ export class BuildUI {
     el('div', 'dot', head, `P${p + 1}`);
     const name = el('input', '', head);
     name.type = 'text';
-    name.maxLength = 16;
+    // Generous box limit: cleanName() trims whitespace first, then cuts to 16 characters.
+    name.maxLength = 40;
     name.spellcheck = false;
     name.id = `name-p${p + 1}`;
     name.setAttribute('aria-label', `Player ${p + 1} name`);

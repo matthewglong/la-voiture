@@ -5,7 +5,8 @@ import { canvasTexture } from './util';
 
 export interface Bay {
   group: THREE.Group;
-  update(dt: number, t: number): void;
+  /** Pass the camera so the distance labels can fade when viewed end-on. */
+  update(dt: number, t: number, camera?: THREE.Camera): void;
   /** Move the session-record flag buoy; null hides it. */
   setBest(distance: number | null, holder?: string, color?: string): void;
   /** Small wave height used to bob floating things. */
@@ -152,6 +153,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     phase: number;
   }
   const floaters: Floater[] = [];
+  const labelMats: THREE.SpriteMaterial[] = [];
   for (let d = BUOY_SPACING; d <= BUOY_MAX; d += BUOY_SPACING) {
     const big = d % 50 === 0;
     for (const z of TRACK.laneZ) {
@@ -177,6 +179,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     }
     // Labels float between the lanes so the two rows never overlap on screen.
     const label = makeLabel(big ? `${d} m` : `${d}`, big, big ? 4.2 : 2.1);
+    labelMats.push(label.material);
     label.position.set(lip.x + d, big ? 6.2 : 2.6, 0);
     // Drawn after the (transparent) flight trails so trails never scribble over the numbers.
     label.renderOrder = 5;
@@ -236,7 +239,18 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
   const waveHeight = (x: number, z: number, t: number): number =>
     0.09 * Math.sin(t * 1.3 + x * 0.21 + z * 0.13) + 0.05 * Math.sin(t * 2.1 - x * 0.17 + z * 0.29);
 
-  const update = (_dt: number, t: number): void => {
+  // Looking down the lanes (chase and build views) the labels line up into one cluttered stack,
+  // so they fade; side-on, where the distances are read, they are fully opaque.
+  let labelOpacity = 1;
+  const viewDir = new THREE.Vector3();
+  const update = (dt: number, t: number, camera?: THREE.Camera): void => {
+    if (camera) {
+      camera.getWorldDirection(viewDir);
+      const along = Math.abs(viewDir.x);
+      const target = THREE.MathUtils.clamp((0.9 - along) / 0.35, 0.1, 1);
+      labelOpacity += (target - labelOpacity) * (1 - Math.exp(-5 * dt));
+      for (const m of labelMats) m.opacity = labelOpacity;
+    }
     normals.offset.set(t * 0.012, t * 0.007);
     normals2.offset.set(-t * 0.009, t * 0.011);
     for (const f of floaters) {

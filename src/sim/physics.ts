@@ -146,6 +146,7 @@ export class CarSim {
     const c = seg.cos;
     const sn = seg.sin;
     let v = st.speed;
+    const v0 = v;
 
     const normal = m * G * c;
     let force = -m * G * sn;
@@ -210,7 +211,11 @@ export class CarSim {
     st.fuelFrac = k.energy > 0 ? st.fuelJ / k.energy : 0;
     const lip = this.track.lip;
     if (s >= lip.s) {
-      this.launch(v, events);
+      // Launch at the exact lip crossing inside this step (as the splash is interpolated), so the
+      // launch speed doesn't depend on where the fixed step happens to land.
+      const f = s > sPrev ? (lip.s - sPrev) / (s - sPrev) : 1;
+      st.t -= dt * (1 - f);
+      this.launch(v0 + (v - v0) * f, events);
       return;
     }
 

@@ -44,8 +44,9 @@ Where this file and the prompt disagree, the prompt's intent was followed and th
 - Lift (wings, bathtub body, kite) only acts in flight. The kite's lift is ½ρ·ClA_kite·|v_air|²
   capped at its limit, added to the body/wing lift along the same "perpendicular, rotated towards up"
   direction; its extra drag only applies once open (at the lip).
-- The splash point is interpolated inside the last step, so distances don't jump in 1/120 s steps.
-  The score is clamped at ≥ 0.
+- Both the lip crossing and the splash are interpolated inside their step (position, speed and
+  time), so launch speeds and distances don't jitter with where the fixed 1/120 s step happens to
+  land. The score is clamped at ≥ 0.
 - The game and `simulateToEnd` share `CarSim.step(DT)` with a fixed 1/120 s step; the game only
   changes how many steps run per frame, so results match `simulateToEnd` bit for bit.
 - **Bit-exact across JS engines.** `Math.cos`, `Math.sin` and `Math.hypot` are not correctly rounded
@@ -70,12 +71,17 @@ spirit as the spec's kite that opens at the lip:
 - **Trim cap.** Their lift, together with a kite's, is capped at `trim` × the car's weight: the wings
   settle into a steady glide instead of ballooning. A kite that already pulls harder keeps its own
   capped lift.
-- The cap is also what keeps "a headwind shortens distances" true for gliders. Uncapped, extra
-  airspeed meant extra lift, and gliders flew *further* into a headwind.
+- The cap also keeps "a headwind shortens distances" true for gliders in the strongest headwind.
+  Uncapped, extra airspeed meant extra lift, and gliders flew *further* into a headwind.
 - Result: a ballistic climb, then a visibly flatter, longer descent on light cars. Heavy cars barely
   change ("great on light cars").
-- A tailwind can still shorten a *slow* glider's flight a little (less airspeed, less lift once
-  open). `npm run balance` reports these cases; a headwind never lengthens any flight.
+- The −8 m/s headwind shortens every one of the 2,428 builds. Slow gliders are the exception to
+  "wind in your favour means further":
+  - A handful whose wings open below their trim speed can gain up to ~1.7 m from a *moderate*
+    headwind: extra airspeed adds lift faster than drag.
+  - A tailwind can cost such a glider up to ~5 m: less airspeed, less lift.
+  - `npm run balance` sweeps every headwind and reports both effects. They follow from the spec's
+    airspeed = v − wind and only touch slow glider builds.
 
 Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exactly.
 
@@ -110,9 +116,11 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
 - The "central banner" sits bottom-centre, above the key hint. The in-world "LA VOITURE" start
   gantry then stays visible under the wind forecast rather than hidden behind the UI.
 - Small text never drops below ~11 px (panels, taglines, HUD) so 1280×720 on a TV stays legible.
-- Buttons drop keyboard focus after a click, and the game's keys call `preventDefault`, so Enter never
-  re-presses the last clicked button (e.g. the sound toggle).
+- Buttons drop keyboard focus after a mouse click, and the game's keys call `preventDefault`, so
+  Enter never re-presses the last clicked button (e.g. the sound toggle). A button reached with Tab
+  keeps its native Enter/Space press.
 - Names are trimmed, cut to 16 characters and trimmed again; an empty name falls back to "Player N".
+  The name box accepts up to 40 raw characters so leading spaces don't eat into the 16.
 - Name tags over the cars stack instead of overlapping when the cars are side by side.
 - The Bay reflects a sky-only PMREM environment (the rest of the scene keeps the RoomEnvironment
   studio look for glossy toys). At grazing angles, the studio reflection read as oily streaks on the
@@ -120,6 +128,9 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   distance moiré.
 - The best-distance flag is taller than the 50 m markers, and distance labels draw above the
   flight trails.
+- Distance labels fade when the camera looks down the lanes (chase and build views). From behind,
+  they line up into one cluttered stack over the kicker; side-on, where distances are read, they
+  are fully opaque.
 - The results card sits at the bottom of the screen and the results camera aims so the splash zone,
   both trajectories and the record buoy sit above it.
 
@@ -136,9 +147,10 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   needs more than ~135 m of distance; after that the lip, then the trailing car, drop out.
 - **Straggler follow-up:** if one car splashes while the other is still well up the hill, the
   camera holds the splash for ~1.6 s, swings back to chase the remaining car, then goes side-on
-  again as that car nears the lip (otherwise the slow car was invisible for most of its run).
+  again 55 m of track before the lip. The side framing includes any running car within 65 m of the
+  lip, so the hand-over never loses it. Without this, the slow car was invisible for most of its run.
 - **Results:** a slow side-on hold on the splash zone. If nobody launched (both stalled), it stays
-  on the stalled cars instead.
+  on the stalled cars instead, framed above the results card.
 - **Rematch / New players** cut back to the start line behind a short white fade. A blended camera
   move from the Bay to the start line flew through the houses.
 
@@ -201,7 +213,8 @@ choice for some build and wind"):
 
 It also fails on:
 
-- any build that flies further into a headwind than in calm air;
+- any build that flies further into the strongest headwind than in calm air (moderate headwinds
+  and tailwinds are swept and reported);
 - glider wings that don't visibly glide (flatter water entry and longer airtime on two reference
   go-karts);
 - sensible builds taking over 15 s to reach the lip;
@@ -262,117 +275,118 @@ Top 10% = 243 builds per wind
 
 ## Top 15, headwind -8 m/s
   #   dist m    $  lip m/s  run s  air s  waste  build
-  1    109.6  100     33.3   10.0    3.9     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Nitro
-  2    108.4   98     30.2   11.4    4.5     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Wedge · Nitro
-  3    107.7   95     35.4    9.6    3.5     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Nitro
-  4    105.8   93     32.8   10.0    3.8     0%  Bathtub · Standard · Jet · Oversized · None · Wedge · Nitro
+  1    109.8  100     33.3   10.0    3.9     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Nitro
+  2    108.6   98     30.3   11.4    4.5     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Wedge · Nitro
+  3    107.9   95     35.4    9.6    3.5     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Nitro
+  4    105.9   93     32.8   10.0    3.8     0%  Bathtub · Standard · Jet · Oversized · None · Wedge · Nitro
   5    104.6   96     33.9    9.8    3.6     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Wedge · Nitro
-  6    104.4   90     31.9    9.6    4.1     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Kite
-  7    104.0   88     34.8    9.7    3.5     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Nitro
-  8    103.8   98     30.9    9.7    4.3     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Cone · Kite
+  6    104.5   90     31.9    9.6    4.1     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Kite
+  7    104.2   88     34.8    9.7    3.5     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Nitro
+  8    103.9   98     30.9    9.7    4.3     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Cone · Kite
   9    103.6   98     29.1   10.0    4.4     0%  Go-kart · Standard · Jet · Oversized · Glider wings · Wedge · None
- 10    103.1   95     29.8   10.0    4.5     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Kite
- 11    101.5  100     28.7   10.5    4.4     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Cone · None
- 12    101.0   95     32.3   10.6    3.7     0%  Bathtub · Monster · V8 · Oversized · None · Cone · Nitro
- 13    100.1   83     31.1    9.6    4.1     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Kite
- 14    100.0   98     26.5   10.9    4.8     0%  Bathtub · Monster · V8 · Oversized · Glider wings · Wedge · None
+ 10    103.3   95     29.8   10.0    4.5     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Kite
+ 11    101.6  100     28.8   10.5    4.4     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Cone · None
+ 12    101.1   95     32.3   10.5    3.7     0%  Bathtub · Monster · V8 · Oversized · None · Cone · Nitro
+ 13    100.2   83     31.2    9.6    4.1     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Kite
+ 14    100.1   98     26.5   10.9    4.8     0%  Bathtub · Monster · V8 · Oversized · Glider wings · Wedge · None
  15     99.8  100     29.0   11.0    4.4     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Blunt · Nitro
 DNFs in this wind: 35
 
 ## Top 15, calm (0 m/s)
   #   dist m    $  lip m/s  run s  air s  waste  build
-  1    134.6   98     33.4   10.9    4.8     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Wedge · Nitro
-  2    129.9  100     33.5   10.3    4.7     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Blunt · Nitro
-  3    129.1   98     32.4    9.6    4.7     0%  Go-kart · Standard · Jet · Oversized · Glider wings · Wedge · None
+  1    134.7   98     33.4   10.9    4.8     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Wedge · Nitro
+  2    130.1  100     33.5   10.3    4.7     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Blunt · Nitro
+  3    129.3   98     32.4    9.6    4.7     0%  Go-kart · Standard · Jet · Oversized · Glider wings · Wedge · None
   4    127.4  100     32.6   10.1    4.6     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Cone · None
-  5    123.3   90     34.5    9.3    4.4     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Kite
-  6    123.1  100     36.0    9.7    4.0     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Nitro
-  7    123.0   93     32.1   10.1    4.5     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Wedge · None
-  8    122.9   98     33.7    9.4    4.5     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Cone · Kite
-  9    122.0   95     37.7    9.4    3.7     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Nitro
- 10    121.6   95     32.8    9.6    4.6     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Kite
- 11    121.4  100     29.9   10.8    5.1     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Cone · Kite
- 12    120.8   83     34.1    9.3    4.4     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Kite
- 13    120.6  100     30.2    9.8    5.1     0%  Go-kart · Standard · Jet · Oversized · Glider wings · Blunt · Kite
- 14    120.6   93     35.7    9.7    3.9     0%  Bathtub · Standard · Jet · Oversized · None · Wedge · Nitro
- 15    120.5   90     31.5   11.2    4.6     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Blunt · Nitro
+  5    123.4   90     34.5    9.3    4.4     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Kite
+  6    123.3  100     36.0    9.7    4.0     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Nitro
+  7    123.1   98     33.8    9.4    4.5     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Cone · Kite
+  8    122.9   93     32.2   10.1    4.5     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Wedge · None
+  9    122.2   95     37.7    9.4    3.7     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Nitro
+ 10    121.8   95     32.8    9.6    4.6     0%  Bathtub · Standard · Jet · Oversized · None · Cone · Kite
+ 11    121.6  100     29.9   10.8    5.1     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Cone · Kite
+ 12    121.0   83     34.1    9.3    4.4     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Kite
+ 13    120.8  100     30.2    9.8    5.1     0%  Go-kart · Standard · Jet · Oversized · Glider wings · Blunt · Kite
+ 14    120.8   93     35.7    9.7    3.9     0%  Bathtub · Standard · Jet · Oversized · None · Wedge · Nitro
+ 15    120.7   90     31.5   11.2    4.6     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Blunt · Nitro
 DNFs in this wind: 0
 
 ## Top 15, tailwind +8 m/s
   #   dist m    $  lip m/s  run s  air s  waste  build
-  1    144.8   98     36.0   10.5    4.6     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Wedge · Nitro
-  2    144.3  100     37.1    9.9    4.5     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Blunt · Nitro
+  1    144.9   98     36.0   10.5    4.6     0%  Go-kart · Standard · V8 · Oversized · Glider wings · Wedge · Nitro
+  2    144.5  100     37.1    9.9    4.5     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Blunt · Nitro
   3    138.6   90     36.6    9.1    4.5     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Kite
-  4    137.0   83     36.4    9.1    4.5     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Kite
-  5    137.0  100     33.6    9.4    4.9     0%  Go-kart · Standard · Jet · Oversized · Glider wings · Blunt · Kite
+  4    137.2  100     33.6    9.4    4.9     0%  Go-kart · Standard · Jet · Oversized · Glider wings · Blunt · Kite
+  5    137.1   83     36.4    9.1    4.5     0%  Go-kart · Standard · Jet · Oversized · None · Wedge · Kite
   6    136.8   95     34.0    9.9    4.8     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Blunt · Kite
   7    136.8   98     36.0    9.2    4.6     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Cone · Kite
-  8    136.4   85     36.7    9.6    4.4     0%  Go-kart · Monster · V8 · Oversized · None · Cone · Kite
-  9    135.3   93     36.2    9.7    4.5     0%  Go-kart · Monster · V8 · Oversized · Spoiler · Cone · Kite
- 10    135.3   91     35.8    9.2    4.5     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Wedge · Kite
- 11    135.0  100     35.6    9.8    4.3     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Cone · None
- 12    134.6   95     39.5    9.2    3.9     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Nitro
- 13    134.5   78     36.4    9.6    4.4     0%  Go-kart · Monster · V8 · Oversized · None · Wedge · Kite
- 14    134.5  100     36.6    9.5    4.4     0%  Go-kart · Monster · Jet · Oversized · None · Cone · Kite
+  8    136.5   85     36.7    9.6    4.5     0%  Go-kart · Monster · V8 · Oversized · None · Cone · Kite
+  9    135.6   93     36.2    9.6    4.5     0%  Go-kart · Monster · V8 · Oversized · Spoiler · Cone · Kite
+ 10    135.6   91     35.9    9.2    4.5     0%  Go-kart · Standard · Jet · Oversized · Spoiler · Wedge · Kite
+ 11    135.2  100     35.7    9.7    4.3     0%  Go-kart · Monster · V8 · Oversized · Glider wings · Cone · None
+ 12    134.7   95     39.6    9.2    3.9     0%  Go-kart · Standard · Jet · Oversized · None · Cone · Nitro
+ 13    134.6  100     36.6    9.4    4.4     0%  Go-kart · Monster · Jet · Oversized · None · Cone · Kite
+ 14    134.6   78     36.4    9.6    4.4     0%  Go-kart · Monster · V8 · Oversized · None · Wedge · Kite
  15    134.4   95     38.5    9.8    4.0     0%  Bathtub · Monster · V8 · Oversized · None · Cone · Nitro
 DNFs in this wind: 0
 
 ## Options: best rank and appearances in the top 10% (243 builds)
 slot       option         best  (wind)   top@-8   top@0  top@+8
 Chassis    Go-kart           1     (0)      108     124     128
-Chassis    Bathtub           1    (-8)       98      92      95
-Chassis    Sedan            59    (-8)       31      27      20
+Chassis    Bathtub           1    (-8)       97      92      95
+Chassis    Sedan            60    (-8)       32      27      20
 Chassis    Pickup 4x4      161    (-8)        6       0       0
 Wheels     Tiny             77    (-8)       34      21      10
-Wheels     Standard          1    (-8)      123     126     128
-Wheels     Monster           2     (0)       86      96     105
+Wheels     Standard          1    (-8)      124     126     128
+Wheels     Monster           2     (0)       85      96     105
 Engine     Lawnmower        63     (0)       30      25      21
-Engine     V8                1     (0)      119     118     122
-Engine     Jet               1    (-8)       94     100     100
+Engine     V8                1     (0)      118     118     122
+Engine     Jet               1    (-8)       95     100     100
 Fuel tank  Jerry can        63     (0)       17      13      12
-Fuel tank  Standard         49     (0)       48      60      63
-Fuel tank  Oversized         1    (-8)      178     170     168
-Wing       None              1    (-8)       99      96     101
-Wing       Spoiler           5    (-8)       73      71      77
+Fuel tank  Standard         49     (0)       49      60      63
+Fuel tank  Oversized         1    (-8)      177     170     168
+Wing       None              1    (-8)      100      96     102
+Wing       Spoiler           5    (-8)       72      71      76
 Wing       Glider wings      1     (0)       71      76      65
-Nose       Blunt             2     (0)       58      76      87
+Nose       Blunt             2     (0)       57      76      87
 Nose       Wedge             1     (0)       95      86      85
-Nose       Cone              1    (-8)       90      81      71
+Nose       Cone              1    (-8)       91      81      71
 Booster    None              3     (0)       57      59      64
-Booster    Nitro             1    (-8)      124     113     108
-Booster    Kite              3    (+8)       62      71      71
+Booster    Nitro             1    (-8)      125     113     108
+Booster    Kite              3    (+8)       61      71      71
 
 ## Best pick for its slot (other six slots fixed, any wind)
-Chassis    Go-kart       1033 contexts
-Chassis    Bathtub       206 contexts
-Chassis    Sedan         143 contexts
-Chassis    Pickup 4x4    563 contexts
+Chassis    Go-kart       1036 contexts
+Chassis    Bathtub       210 contexts
+Chassis    Sedan         139 contexts
+Chassis    Pickup 4x4    566 contexts
 Wheels     Tiny          34 contexts
-Wheels     Standard      1041 contexts
+Wheels     Standard      1043 contexts
 Wheels     Monster       1365 contexts
-Engine     Lawnmower     696 contexts
-Engine     V8            735 contexts
-Engine     Jet           1093 contexts
-Fuel tank  Jerry can     472 contexts
-Fuel tank  Standard      340 contexts
-Fuel tank  Oversized     1599 contexts
+Engine     Lawnmower     697 contexts
+Engine     V8            736 contexts
+Engine     Jet           1095 contexts
+Fuel tank  Jerry can     462 contexts
+Fuel tank  Standard      339 contexts
+Fuel tank  Oversized     1602 contexts
 Wing       None          free: on the price/distance Pareto front
-Wing       Spoiler       26 contexts
-Wing       Glider wings  1915 contexts
+Wing       Spoiler       24 contexts
+Wing       Glider wings  1916 contexts
 Nose       Blunt         free: on the price/distance Pareto front
-Nose       Wedge         310 contexts
-Nose       Cone          2061 contexts
+Nose       Wedge         308 contexts
+Nose       Cone          2064 contexts
 Booster    None          free: on the price/distance Pareto front
-Booster    Nitro         2195 contexts
+Booster    Nitro         2196 contexts
 Booster    Kite          199 contexts
 
 ## Wind
-Builds that fly further into a headwind than in calm air: 0
-Builds that fly shorter with a tailwind than in calm air: 10 (e.g. Go-kart · Tiny · Lawnmower · Oversized · Glider wings · Wedge · Nitro: 64.9 / 77.9 / 75.9 m)
+Builds that fly further into the strongest headwind (-8 m/s) than in calm air: 0
+Builds that fly further into some moderate headwind (-7.5 to -0.5 m/s) than in calm air: 13 (worst: Bathtub · Tiny · Lawnmower · Oversized · Glider wings · Cone · Nitro at -4.5 m/s: +1.74 m)
+Builds that fly shorter with a tailwind than in calm air: 10 (worst: Bathtub · Tiny · Lawnmower · Standard · Glider wings · Cone · Nitro: 97.8 m calm, 92.4 m at +8 m/s)
 
 ## Glide (calm air): go-kart with glider wings vs the same kart with none
-Go-kart · Tiny · Lawnmower · Jerry can · Glider wings · Wedge · Nitro: 95.1 vs 79.7 m, air 4.3 vs 3.1 s, water entry 26° vs 37°
-Go-kart · Standard · V8 · Oversized · Glider wings · Cone · None: 113.0 vs 88.6 m, air 4.4 vs 3.2 s, water entry 23° vs 35°
+Go-kart · Tiny · Lawnmower · Jerry can · Glider wings · Wedge · Nitro: 95.2 vs 79.8 m, air 4.4 vs 3.1 s, water entry 26° vs 37°
+Go-kart · Standard · V8 · Oversized · Glider wings · Cone · None: 113.1 vs 88.7 m, air 4.4 vs 3.2 s, water entry 23° vs 35°
 
 ## Run-up pacing (calm air)
 V8 or jet with a Standard or Oversized tank (894 builds): median 12.0 s, 90% within 14.9 s
@@ -380,13 +394,13 @@ Lawnmower or jerry-can builds (1534 builds, coasting most of the way): median 21
 
 ## All-$0 build (Go-kart · Tiny · Lawnmower · Jerry can · None · Blunt · None)
 headwind -8 m/s      5.9 m  lip 4.5 m/s, run 26.9 s, air 1.6 s, wasted 44% fuel
-calm (0 m/s)         20.8 m  lip 12.0 m/s, run 21.5 s, air 2.0 s, wasted 55% fuel
-tailwind +8 m/s      35.0 m  lip 17.2 m/s, run 19.2 s, air 2.3 s, wasted 60% fuel
+calm (0 m/s)         20.8 m  lip 12.1 m/s, run 21.5 s, air 2.0 s, wasted 55% fuel
+tailwind +8 m/s      35.1 m  lip 17.2 m/s, run 19.2 s, air 2.3 s, wasted 60% fuel
 
 ## Checks
 - Distinct #1 builds across winds: 2
 - Distinct chassis in each wind's top 5: -8: 2, 0: 1, +8: 1 (union: 2)
 - Run-up time, top 10%: 9.0-28.3 s (all finishers: 9.0-28.7 s)
 - Flight time, top 10%: 3.0-5.4 s (all finishers: 1.4-5.4 s)
-- PASS: every performance option reaches the top 10% in some wind and is the best pick for its slot in some build, the winner changes with wind, a headwind always shortens the flight, glider wings visibly glide, sensible builds reach the lip in about 8-15 s, no flight lasts over 6.5 s, the all-$0 build reaches the lip in every wind and splashes 5-25 m out in calm air, best builds fly 80-180 m, no NaNs.
+- PASS: every performance option reaches the top 10% in some wind and is the best pick for its slot in some build, the winner changes with wind, the strongest headwind shortens every flight, glider wings visibly glide, sensible builds reach the lip in about 8-15 s, no flight lasts over 6.5 s, the all-$0 build reaches the lip in every wind and splashes 5-25 m out in calm air, best builds fly 80-180 m, no NaNs.
 ```

@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { TRACK, roadHeightAtX } from '../track';
 import { damp } from './util';
 
-export type CameraMode = 'build' | 'countdown' | 'chase' | 'side' | 'results';
+export type CameraMode = 'build' | 'countdown' | 'chase' | 'stalled' | 'side' | 'results';
 
 export interface CameraTarget {
   pos: THREE.Vector3;
@@ -133,7 +133,7 @@ export class CameraRig {
     const live = targets.filter((c) => c.active);
     const pool = live.length > 0 ? live : targets;
 
-    if (this.mode === 'countdown' || this.mode === 'chase') {
+    if (this.mode === 'countdown' || this.mode === 'chase' || this.mode === 'stalled') {
       // Behind and above the trailing car, looking at a point ahead of the midpoint, so both cars
       // stay in frame as they separate (beyond 45 m the view follows the leader).
       const xs = pool.map((c) => c.pos.x);
@@ -146,7 +146,8 @@ export class CameraRig {
       const up = 4.6 + sep * 0.32;
       const cam = this.tmp.set(trailX - back, Math.max(trailY, sampleY(trailX - back)) + up, 0);
       const midX = (trailX + lead) / 2 + 5;
-      g.focus.set(midX, sampleY(midX) + 1.2, 0);
+      // Stalled results: aim below the cars so they sit above the results card.
+      g.focus.set(midX, sampleY(midX) + 1.2 - (this.mode === 'stalled' ? 7 : 0), 0);
       const dx = g.focus.x - cam.x;
       const dy = cam.y - g.focus.y;
       g.dist = Math.hypot(dx, dy);
@@ -159,7 +160,8 @@ export class CameraRig {
     // Cars still on the hill (or stalled there) don't drag the view back up the street.
     const lip = TRACK.lip;
     const flown = targets.filter((c) => c.inFlight || c.splashed);
-    const near = targets.filter((c) => c.active && c.pos.x > lip.x - 45);
+    // Matches the straggler hand-over in main.ts (55 m of track before the lip), plus a margin.
+    const near = targets.filter((c) => c.active && c.pos.x > lip.x - 65);
     const framed = [...new Set([...flown, ...near])];
     const side = framed.length > 0 ? framed : pool;
     const xs = side.map((c) => c.pos.x);

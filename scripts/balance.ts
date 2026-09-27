@@ -208,18 +208,39 @@ out('');
 // less airspeed means less lift once its wings are open. That is reported, not failed.)
 let windWrong = 0;
 let tailShort = 0;
-let tailExample = '';
+let tailWorst = { loss: 0, text: '' };
 for (const b of builds) {
   const [dh, dc, dt] = distByKey.get(b.key)!;
   if (dh > dc + 0.05) windWrong++;
   if (dc > dt + 0.05) {
     tailShort++;
-    if (!tailExample) tailExample = `${label(b.config)}: ${dh.toFixed(1)} / ${dc.toFixed(1)} / ${dt.toFixed(1)} m`;
+    if (dc - dt > tailWorst.loss) {
+      tailWorst = { loss: dc - dt, text: `${label(b.config)}: ${dc.toFixed(1)} m calm, ${dt.toFixed(1)} m at +8 m/s` };
+    }
   }
 }
+// Sweep every headwind the game can roll (in 0.5 m/s steps): a slow glider flying below its trim
+// speed can gain a little lift from a moderate headwind.
+let moderateGain = 0;
+let worstGain = { gain: 0, text: '' };
+for (const b of builds) {
+  const calm = distByKey.get(b.key)![1];
+  let best = 0;
+  let bestWind = 0;
+  for (let w = -7.5; w < 0; w += 0.5) {
+    const g = simulateToEnd(computeStats(b.config), w).distance - calm;
+    if (g > best) {
+      best = g;
+      bestWind = w;
+    }
+  }
+  if (best > 0.05) moderateGain++;
+  if (best > worstGain.gain) worstGain = { gain: best, text: `${label(b.config)} at ${bestWind} m/s: +${best.toFixed(2)} m` };
+}
 out(`## Wind`);
-out(`Builds that fly further into a headwind than in calm air: ${windWrong}`);
-out(`Builds that fly shorter with a tailwind than in calm air: ${tailShort}${tailExample ? ` (e.g. ${tailExample})` : ''}`);
+out(`Builds that fly further into the strongest headwind (-8 m/s) than in calm air: ${windWrong}`);
+out(`Builds that fly further into some moderate headwind (-7.5 to -0.5 m/s) than in calm air: ${moderateGain}${worstGain.text ? ` (worst: ${worstGain.text})` : ''}`);
+out(`Builds that fly shorter with a tailwind than in calm air: ${tailShort}${tailWorst.text ? ` (worst: ${tailWorst.text})` : ''}`);
 out('');
 
 // Glider wings spring open at the top of the arc and must visibly glide on a go-kart:
@@ -359,7 +380,7 @@ notes.push(`Flight time, top ${Math.round(TOP_FRACTION * 100)}%: ${range(airTime
 out('## Checks');
 for (const n of notes) out(`- ${n}`);
 if (failures.length === 0) {
-  out('- PASS: every performance option reaches the top 10% in some wind and is the best pick for its slot in some build, the winner changes with wind, a headwind always shortens the flight, glider wings visibly glide, sensible builds reach the lip in about 8-15 s, no flight lasts over 6.5 s, the all-$0 build reaches the lip in every wind and splashes 5-25 m out in calm air, best builds fly 80-180 m, no NaNs.');
+  out('- PASS: every performance option reaches the top 10% in some wind and is the best pick for its slot in some build, the winner changes with wind, the strongest headwind shortens every flight, glider wings visibly glide, sensible builds reach the lip in about 8-15 s, no flight lasts over 6.5 s, the all-$0 build reaches the lip in every wind and splashes 5-25 m out in calm air, best builds fly 80-180 m, no NaNs.');
 } else {
   for (const f of failures) out(`- FAIL: ${f}`);
 }

@@ -445,7 +445,7 @@ function finishRace(): void {
   };
   state = 'RESULTS';
   stateTime = 0;
-  rig.setMode(firstLaunchSeen ? 'results' : 'chase');
+  rig.setMode(firstLaunchSeen ? 'results' : 'stalled');
   hud.showCars(false);
   for (const p of PLAYERS) hud.setTag(p, 0, 0, false);
   hud.showResults(
@@ -498,6 +498,8 @@ window.addEventListener('keydown', (e) => {
     sound.toggleMute();
     return;
   }
+  // A button reached with Tab keeps its native Enter/Space press (mouse clicks blur buttons).
+  if ((e.key === 'Enter' || e.key === ' ') && target?.closest('button')) return;
   if (e.key === 'Enter' || e.key === ' ' || /^[1-9]$/.test(e.key)) e.preventDefault();
   if (state === 'BUILD') {
     if (/^[1-9]$/.test(e.key)) {
@@ -695,7 +697,7 @@ function frame(): void {
   splashes.update(gdt);
   city.update(dt, t);
   landmarks.update(dt, t);
-  bay.update(dt, t);
+  bay.update(dt, t, camera);
   world.render();
   if (++frames === 3) api.ready = true;
 }
