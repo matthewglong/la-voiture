@@ -37,16 +37,17 @@ const maxOf = (slot: keyof typeof PARTS, f: (o: (typeof PARTS)['chassis'][number
 const sumMax = (f: (o: (typeof PARTS)['chassis'][number]) => number): number =>
   SLOT_ORDER.reduce((a, s) => a + maxOf(s, f), 0);
 
-/** Kite lift expressed as an equivalent lift area at a typical 30 m/s launch. */
-function kiteEquivalent(k: CarStats['kite']): number {
-  if (!k) return 0;
-  return Math.min(k.clA, k.liftCap / (0.5 * RHO * 30 * 30));
-}
-
-/** Glider wings as an equivalent lift area at 30 m/s, capped by their trim (so light cars show more). */
-function glideEquivalent(s: CarStats): number {
-  if (s.apexClA <= 0) return 0;
-  return Math.min(s.apexClA, (s.apexTrim * s.mass * G) / (0.5 * RHO * 30 * 30));
+/**
+ * Lift at a typical 30 m/s as a share of the car's weight, composed like the physics: body and
+ * fixed wings, plus the kite and glider wings together (glider capped by its trim, kite by its
+ * maximum pull). The same wings therefore read higher on a light car.
+ */
+function liftShare(s: CarStats): number {
+  const q = 0.5 * RHO * 30 * 30;
+  const weight = s.mass * G;
+  let extra = s.kite ? Math.min(s.kite.clA * q, s.kite.liftCap) : 0;
+  if (s.apexClA > 0) extra = Math.min(extra + s.apexClA * q, Math.max(extra, s.apexTrim * weight));
+  return (s.clA * q + extra) / weight;
 }
 
 const RANGE = {
@@ -55,10 +56,6 @@ const RANGE = {
   power: maxOf('engine', (o) => o.power ?? 0),
   fuel: maxOf('fuel', (o) => o.energy ?? 0),
   grip: maxOf('wheels', (o) => o.mu ?? 0) * maxOf('chassis', (o) => o.gripMul ?? 1),
-  lift:
-    maxOf('chassis', (o) => o.clA ?? 0) +
-    maxOf('wing', (o) => o.clA ?? 0) +
-    Math.max(...PARTS.booster.map((o) => kiteEquivalent(o.kite ?? null))),
   bump: maxOf('wheels', (o) => o.bumpLoss ?? 0),
 };
 
@@ -75,7 +72,7 @@ interface StatRow {
 }
 
 function statRows(s: CarStats): StatRow[] {
-  const lift = s.clA + glideEquivalent(s) + kiteEquivalent(s.kite);
+  const lift = liftShare(s);
   return [
     { key: 'mass', label: 'Mass', frac: s.mass / RANGE.mass, raw: s.mass, text: `${Math.round(s.mass)} kg`, cost: true },
     { key: 'drag', label: 'Drag', frac: s.cdA / RANGE.drag, raw: s.cdA, text: `${s.cdA.toFixed(2)} m²`, cost: true },
@@ -99,9 +96,10 @@ function statRows(s: CarStats): StatRow[] {
     {
       key: 'lift',
       label: 'Lift',
-      frac: lift / RANGE.lift,
+      // A full bar means lift equal to the car's weight at 30 m/s.
+      frac: lift,
       raw: lift,
-      text: `${lift.toFixed(1)} m²`,
+      text: `${Math.round(lift * 100)}% wt`,
       cost: false,
     },
     {

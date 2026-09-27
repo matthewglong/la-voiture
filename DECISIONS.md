@@ -109,12 +109,13 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   name tags over the cars and the flight trails; the drafted Paint colours the car body.
 - Hovering a card previews the part on the car **and** on the stat bars (striped ghost bar,
   green/red value when it is better/worse).
-- The Lift bar shows an equivalent lift area at a typical 30 m/s. It counts body and spoiler lift,
-  glider wings (capped by their trim, so a heavier car shows less) and the kite (capped by its
-  maximum pull).
+- The Lift bar shows lift at a typical 30 m/s as a share of the car's weight ("65% wt"; a full bar
+  means lift equal to weight). It is composed exactly like the physics: body and spoiler lift, plus
+  the kite and glider wings together (wings capped by their trim, the kite by its maximum pull).
+  The same wings read higher on a light car (a go-kart shows 65%, a pickup 45%), matching where
+  they help most.
 - Stat bars: Power and Fuel use a square-root scale so the lawnmower and jerry can are still
-  visible; the Lift bar counts the kite as its lift area at a typical 30 m/s launch; Bump resistance
-  shows the kinetic energy lost per cable-car crossing.
+  visible; Bump resistance shows the kinetic energy lost per cable-car crossing.
 - Toppers have 1–2 kg of mass (the table says "small"), and `computeStats` includes it, so the game
   and `simulateToEnd` stay identical. The balance check uses the no-topper default.
 - **"New players"** resets names, the round counter, the first picker (P1), last round's cars and
