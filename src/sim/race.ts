@@ -3,6 +3,8 @@
 // fixed step and a seeded RNG; no Three.js or DOM imports (the bots and the balance check use it).
 import {
   COURSE,
+  KICKER_ANGLE,
+  KICKER_GRADE,
   WALL_HEIGHT,
   heightAt,
   indexAt,
@@ -24,14 +26,52 @@ import { DT, G, MAX_FLIGHT_TIME, RHO, makeRng, stepFlightBody } from './physics'
 /** Launch-speed bonus at full HYPE. */
 export const HYPE_BOOST = 0.15;
 export const HYPE_MAX = 100;
-/** Out of fuel, a car can still limp along on this much power. */
-const LIMP_POWER = 5000;
 const REVERSE_FORCE = 2600;
 const REVERSE_MAX = 5;
-const MAX_YAW = 3.3;
-/** Full lock turns the nose this much faster than the tyres can follow: a gentle drift. */
-const OVERSTEER = 1.4;
+export const MAX_YAW = 3.3;
+/** Arcade tyres: cornering grip is this multiple of the tyres' friction (braking and traction are not). */
+export const CORNER_GRIP = 1.6;
+/** Full lock turns the nose this much faster than the tyres can follow: a touch of oversteer. */
+export const OVERSTEER = 1.15;
 const AIR_YAW = 0.9;
+// Drifting: tap the brake while turning at speed and the tail steps out. The slide's arc is set by
+// the wheel (Mario Kart style), not by a fragile slip angle, so it's easy to steer on keys.
+/** Slowest speed a drift can start at, and the speed it gives up at (m/s). */
+export const DRIFT_MIN = 8;
+const DRIFT_END = 5;
+/** A drift starts when the brake goes down this recently (s) with the wheel turned: a tap, not a
+ *  brake held from before the corner. After one ends, the next can't start for a moment. */
+const DRIFT_TAP = 0.2;
+const DRIFT_COOL = 0.3;
+/** Yaw kick that throws the tail out (rad/s). */
+const DRIFT_KICK = 2.2;
+/** The nose's angle to the direction of travel: wheel let go, and turned into the slide (rad). */
+const DRIFT_SLIP = 0.3;
+const DRIFT_SLIP_MAX = 0.62;
+/** How hard the nose chases that angle (1/s), and the fastest it may yaw (rad/s). */
+const DRIFT_HOLD = 8;
+const DRIFT_YAW = 4.2;
+/** Sideways grip while sliding with the wheel turned into it (× the tyres' friction): tighter than
+ *  plain cornering (CORNER_GRIP), which is what makes a drift the fast way round. */
+export const DRIFT_GRIP = 2.4;
+/** Share of that the slide keeps with the wheel let go (a wider arc) and counter-steered. */
+const DRIFT_BITE = 0.55;
+const DRIFT_BITE_OUT = 0.1;
+/** Speed a slide scrubs off, at full bite (× the tyres' load). */
+const DRIFT_SCRUB = 0.3;
+/** Share of the tyres' traction left for the engine while they slide sideways. */
+const DRIFT_TRACTION = 0.55;
+/** Seconds without steering into the slide before the tyres grip again. */
+const DRIFT_RELEASE = 0.3;
+/** Seconds of boost a flat-out drift earns per second. */
+export const DRIFT_CHARGE = 0.5;
+// Boost: a rocket push from the bottle while the boost key is held.
+/** Push at full thrust (m/s², the same for every car). */
+export const BOOST_ACC = 6;
+/** How far past the engine's top speed boost can take the car (× top speed); it fades on the way. */
+export const BOOST_TOP = 1.1;
+/** Item top-up: share of the bottle it refills. */
+export const TOPUP = 0.5;
 /** How much the wind shifts an engine's top speed (m/s per m/s of tailwind). */
 const WIND_TOP = 0.3;
 /** How fast the nose eases back along the road when nobody is steering (rad/s). */
@@ -41,12 +81,20 @@ const STEER_RATE = 8;
 const WALL_E = 0.18;
 /** The furthest a wall pushes a car out in one step (m): overlaps resolve as a quick slide. */
 const WALL_PUSH = 0.25;
+/** Impact speed (m/s, into the wall) beyond which a wall hit is a crash that costs extra. */
+const WALL_HARD = 8;
 const CAR_E = 0.35;
 /** After the first car finishes, the other has this long to reach the lip. */
 export const STRAGGLER_TIME = 25;
 export const MAX_RACE_TIME = 150;
 const ROULETTE_TIME = 0.9;
+/** Items a car can hold at once. */
+export const ITEM_SLOTS = 2;
 const GRIT_TIME = 12;
+/** Seagull: flying speed (m/s), how long it pesters the car it lands on, and how long it may hunt. */
+const GULL_SPEED = 44;
+const GULL_TIME = 1.8;
+const GULL_LIFE = 8;
 const SPIN_TIME = 1.05;
 const WAYMO_MASS = 2300;
 const PED_R = 0.42;
@@ -58,15 +106,29 @@ const BOX_R = 1.25;
 const STUCK_TIME = 6;
 /** Share of the Jump's spring that goes into the launch when it's used on the kicker. */
 const KICKER_JUMP = 0.5;
+/** The kicker holds its full angle (KICKER_ANGLE, 25°) for the first car to reach it, then drops
+ *  this fast (2°/s) down to this (12°): every second behind costs a chasing car about 5% of its
+ *  distance, and at most about a third. */
+export const RAMP_RATE = (2 * Math.PI) / 180;
+export const RAMP_MIN = (12 * Math.PI) / 180;
 /** Seconds of driving the wrong way before the marshals turn the car round. */
 const WRONG_WAY_TIME = 5;
 
 // ---------------------------------------------------------------------------------------------
 // Types
 
-export type ItemKind = 'jump' | 'grit' | 'poo';
+export type ItemKind = 'jump' | 'grit' | 'poo' | 'topup' | 'refill' | 'gull';
 
-export const ITEM_NAMES: Record<ItemKind, string> = { jump: 'Jump', grit: 'Determination', poo: 'Poo' };
+export const ITEM_KINDS: readonly ItemKind[] = ['jump', 'grit', 'poo', 'topup', 'refill', 'gull'];
+
+export const ITEM_NAMES: Record<ItemKind, string> = {
+  jump: 'Jump',
+  grit: 'Determination',
+  poo: 'Poo',
+  topup: 'Boost top-up',
+  refill: 'Full boost',
+  gull: 'Seagull',
+};
 
 export interface CarInput {
   throttle: number;
@@ -75,9 +137,13 @@ export interface CarInput {
   steer: number;
   /** True on the step the item key goes down. */
   item: boolean;
+  /** Boost key held. */
+  boost?: boolean;
+  /** True on the step the swap key goes down (switch to the other held item). */
+  swap?: boolean;
 }
 
-export const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, item: false };
+export const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, item: false, boost: false, swap: false };
 
 export type CarPhase = 'grid' | 'race' | 'flight' | 'splashed' | 'dnf';
 
@@ -92,6 +158,9 @@ export interface Tally {
   pooLanded: number;
   air: number;
   drift: number;
+  /** Seconds of boost earned by drifting, and spent. */
+  driftBoost: number;
+  boostUsed: number;
   nearMiss: number;
   overtakes: number;
   shortcuts: number;
@@ -99,6 +168,9 @@ export interface Tally {
   topSpeed: number;
   rocket: boolean;
   lead: number;
+  /** Seagulls landed on the rival, and seagulls shooed away with Determination. */
+  gulls: number;
+  shooed: number;
 }
 
 export interface RaceCar {
@@ -121,19 +193,40 @@ export interface RaceCar {
   steer: number;
   throttle: number;
   brake: number;
-  fuelJ: number;
-  fuelFrac: number;
+  /** Seconds of boost left in the bottle, and as a share of it. */
+  boost: number;
+  boostFrac: number;
+  /** The boost is firing this step. */
+  boosting: boolean;
   engineOn: boolean;
   wheelspin: boolean;
-  /** Tyres sliding (drift); slip angle in radians. */
+  /** Tyres sliding; slip angle (nose minus direction of travel) in radians. */
   sliding: boolean;
   slip: number;
-  item: ItemKind | null;
+  /** Drifting left (-1) or right (1), or not (0); for how long; seconds since the wheel last
+   *  turned into it; how fast the slide is swinging the car round (rad/s); how hard it's biting
+   *  (0..1, from the wheel); boost it has earned; seconds before the next can start. */
+  drift: number;
+  driftT: number;
+  driftOff: number;
+  driftTurn: number;
+  driftBite: number;
+  driftGain: number;
+  driftCool: number;
+  /** Seconds the drift has been in the air (a short hop keeps it). */
+  driftAir: number;
+  /** Seconds since the brake last went down (Infinity while it's up). */
+  brakeTap: number;
+  /** Held items (at most ITEM_SLOTS) and which one the item key uses. */
+  items: ItemKind[];
+  sel: number;
   /** Seconds left on the item roulette. */
   roulette: number;
   /** Seconds of Determination left (it also ends on the first hit). */
   grit: number;
   spin: number;
+  /** Seconds left with a seagull flapping on the windscreen. */
+  gullT: number;
   /** Length of the current spin-out (grippy wheels shorten it). */
   spinDur: number;
   spinHeading0: number;
@@ -151,10 +244,12 @@ export interface RaceCar {
   flightTime: number;
   launchSpeed: number;
   launchBoost: number;
-  wastedFuelFrac: number;
+  /** The kicker's angle when the car went off it (radians). */
+  launchRamp: number;
+  /** Share of the bottle still unspent at the lip (wasted). */
+  wastedBoostFrac: number;
   distance: number;
   maxHeight: number;
-  fuelEmptyAt: number | null;
   wheelspinTime: number;
   bumpsHit: number;
   splashT: number | null;
@@ -269,6 +364,24 @@ export interface ItemBox {
   hidden: number;
 }
 
+/** A seagull from the item: it flies down the course (over the road, not through the houses) to the
+ *  rival, flaps on their windscreen for a moment and flies off. */
+export interface Gull {
+  id: number;
+  owner: PlayerIndex;
+  target: PlayerIndex;
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  /** Course position it flies above. */
+  s: number;
+  d: number;
+  age: number;
+  state: 'hunt' | 'perch' | 'leave';
+  stateT: number;
+}
+
 export interface CableCar {
   x: number;
   y: number;
@@ -300,14 +413,16 @@ export interface LooseCone {
   ground: number;
 }
 
-export type Obstacle = 'waymo' | 'ped' | 'poo' | 'cable' | 'cone';
+export type Obstacle = 'waymo' | 'ped' | 'poo' | 'cable' | 'cone' | 'gull';
 
 export type RaceEvent =
   | { type: 'go'; t: number }
   | { type: 'rocket'; t: number; p: PlayerIndex; good: boolean }
   | { type: 'bump'; t: number; p: PlayerIndex; s: number; keLostJ: number }
-  | { type: 'fuelEmpty'; t: number; p: PlayerIndex; s: number }
-  | { type: 'fuelLow'; t: number; p: PlayerIndex; s: number }
+  | { type: 'drift'; t: number; p: PlayerIndex; dir: number }
+  | { type: 'driftEnd'; t: number; p: PlayerIndex; time: number; gain: number }
+  | { type: 'boostEmpty'; t: number; p: PlayerIndex; s: number }
+  | { type: 'boostGain'; t: number; p: PlayerIndex; amount: number; full: boolean }
   | { type: 'takeoff'; t: number; p: PlayerIndex; speed: number }
   | { type: 'land'; t: number; p: PlayerIndex; impact: number; air: number }
   | { type: 'wall'; t: number; p: PlayerIndex; impact: number; x: number; y: number; z: number }
@@ -318,6 +433,8 @@ export type RaceEvent =
   | { type: 'box'; t: number; p: PlayerIndex; id: number; got: boolean }
   | { type: 'item'; t: number; p: PlayerIndex; item: ItemKind }
   | { type: 'use'; t: number; p: PlayerIndex; item: ItemKind; x: number; y: number; z: number }
+  | { type: 'swap'; t: number; p: PlayerIndex; item: ItemKind }
+  | { type: 'gull'; t: number; p: PlayerIndex; by: PlayerIndex; shooed: boolean; x: number; y: number; z: number }
   | { type: 'honk'; t: number; p: PlayerIndex }
   | { type: 'spinout'; t: number; p: PlayerIndex; by: PlayerIndex | null }
   | { type: 'shortcut'; t: number; p: PlayerIndex; s: number; gained: number }
@@ -325,7 +442,8 @@ export type RaceEvent =
   | { type: 'rescue'; t: number; p: PlayerIndex }
   | { type: 'bell'; t: number }
   | { type: 'pierFirst'; t: number; p: PlayerIndex }
-  | { type: 'launch'; t: number; p: PlayerIndex; speed: number; speedBeforeNitro: number; wastedFuelFrac: number; boost: number }
+  | { type: 'launch'; t: number; p: PlayerIndex; speed: number; speedBeforeNitro: number; wastedBoostFrac: number; boost: number; ramp: number }
+  | { type: 'rampDrop'; t: number; p: PlayerIndex }
   | { type: 'wingsOpen'; t: number; p: PlayerIndex; x: number; y: number }
   | { type: 'splash'; t: number; p: PlayerIndex; distance: number; x: number; z: number; speed: number }
   | { type: 'dnf'; t: number; p: PlayerIndex; s: number; reason: 'timeout' | 'straggler' };
@@ -347,12 +465,13 @@ export interface CarResult {
   flightTime: number;
   launchSpeed: number;
   launchBoost: number;
+  /** The kicker's angle at launch (radians). */
+  launchRamp: number;
   hype: number;
-  wastedFuelFrac: number;
+  wastedBoostFrac: number;
   wheelspinTime: number;
   maxHeight: number;
   bumpsHit: number;
-  fuelEmptyAt: number | null;
   /** Angle below the horizontal at which the car hit the water (degrees). */
   entryDeg: number;
   tally: Tally;
@@ -380,6 +499,8 @@ function newTally(): Tally {
     pooLanded: 0,
     air: 0,
     drift: 0,
+    driftBoost: 0,
+    boostUsed: 0,
     nearMiss: 0,
     overtakes: 0,
     shortcuts: 0,
@@ -387,6 +508,8 @@ function newTally(): Tally {
     topSpeed: 0,
     rocket: false,
     lead: 0,
+    gulls: 0,
+    shooed: 0,
   };
 }
 
@@ -476,6 +599,7 @@ export class RaceSim {
   readonly poos: Poo[] = [];
   readonly boxes: ItemBox[] = [];
   readonly cones: LooseCone[] = [];
+  readonly gulls: Gull[] = [];
   cable: CableCar | null = null;
   readonly opts: Required<RaceOptions>;
   /** Sim time since construction (the countdown runs on the grid). */
@@ -494,6 +618,13 @@ export class RaceSim {
   private leader: PlayerIndex = 0;
   /** Who reached the pier first (a HYPE bonus for winning the race to it). */
   pierFirst: PlayerIndex | null = null;
+  /** The kicker's angle now (radians): full until the first car goes off it, then dropping. */
+  rampAngle = KICKER_ANGLE;
+  /** Race time the first car went off the kicker (the ramp has been dropping since), or null. */
+  rampDropAt: number | null = null;
+  /** The kicker's rise as a share of its full height, and where the (flat) pier hands over to it. */
+  private rampScale = 1;
+  private readonly rampFrom: number;
   /** Lombard's block (gardens between the switchbacks): its x extent and where its side walls are. */
   private readonly garden: { x0: number; x1: number; zWall: number; gate: number };
 
@@ -504,6 +635,7 @@ export class RaceSim {
       ? { x0: lomb.xMin + 0.5, x1: lomb.xMax - 0.5, zWall: LOMBARD.bandHalf - 0.9, gate: 7.5 }
       : { x0: Infinity, x1: -Infinity, zWall: Infinity, gate: 0 };
     this.wind = wind;
+    this.rampFrom = course.marks.kickerS0 - 1;
     this.opts = { seed: opts.seed ?? 1, obstacles: opts.obstacles ?? true, items: opts.items ?? true, hype: opts.hype ?? true };
     this.rng = makeRng(this.opts.seed * 7919 + 17);
     this.tmp = { ...course.points[0] };
@@ -536,16 +668,28 @@ export class RaceSim {
       steer: 0,
       throttle: 0,
       brake: 0,
-      fuelJ: stats.energy,
-      fuelFrac: stats.energy > 0 ? 1 : 0,
+      boost: stats.boostCap,
+      boostFrac: stats.boostCap > 0 ? 1 : 0,
+      boosting: false,
       engineOn: false,
       wheelspin: false,
       sliding: false,
       slip: 0,
-      item: null,
+      drift: 0,
+      driftT: 0,
+      driftOff: 0,
+      driftTurn: 0,
+      driftBite: 0,
+      driftGain: 0,
+      driftCool: 0,
+      driftAir: 0,
+      brakeTap: Infinity,
+      items: [],
+      sel: 0,
       roulette: 0,
       grit: 0,
       spin: 0,
+      gullT: 0,
       spinDur: SPIN_TIME,
       spinHeading0: 0,
       spinDir: 1,
@@ -560,10 +704,10 @@ export class RaceSim {
       flightTime: 0,
       launchSpeed: 0,
       launchBoost: 0,
-      wastedFuelFrac: 0,
+      launchRamp: KICKER_ANGLE,
+      wastedBoostFrac: 0,
       distance: 0,
       maxHeight: this.course.lip.y,
-      fuelEmptyAt: null,
       wheelspinTime: 0,
       bumpsHit: 0,
       splashT: null,
@@ -770,6 +914,26 @@ export class RaceSim {
     return this.cars.every((c) => c.phase === 'splashed' || c.phase === 'dnf');
   }
 
+  /** Road height at s, with the kicker at its angle right now. */
+  roadY(s: number): number {
+    const h = heightAt(this.course, s);
+    return this.rampScale === 1 || s <= this.rampFrom ? h : this.course.deckY + (h - this.course.deckY) * this.rampScale;
+  }
+
+  /** The road's grade at a course point (the kicker's is its slope right now). */
+  gradeAt(pt: CoursePoint): number {
+    return this.rampScale === 1 || pt.s <= this.rampFrom ? pt.grade : pt.grade * this.rampScale;
+  }
+
+  /** The kicker drops once the first car is off it: whoever is behind launches lower. */
+  private updateRamp(): void {
+    if (this.rampDropAt === null || this.rampAngle <= RAMP_MIN) return;
+    this.rampAngle = Math.max(RAMP_MIN, KICKER_ANGLE - RAMP_RATE * (this.raceT - this.rampDropAt));
+    this.rampScale = Math.tan(this.rampAngle) / KICKER_GRADE;
+    // Poo dropped on the ramp goes down with it.
+    for (const q of this.poos) if (q.s > this.rampFrom) q.y = this.roadY(q.s);
+  }
+
   /** GO: release the cars. Throttle held from a beat before GO gives a rocket start. */
   start(): RaceEvent[] {
     const ev: RaceEvent[] = [{ type: 'go', t: this.t }];
@@ -817,6 +981,7 @@ export class RaceSim {
       return ev;
     }
     this.raceT += dt;
+    this.updateRamp();
     this.updateWorld(dt, ev);
     for (const car of this.cars) {
       if (car.phase === 'race') this.drive(car, inputs[car.p] ?? NO_INPUT, dt, ev);
@@ -849,12 +1014,12 @@ export class RaceSim {
       flightTime: c.flightTime,
       launchSpeed: c.launchSpeed,
       launchBoost: c.launchBoost,
+      launchRamp: c.launchRamp,
       hype: c.hype,
-      wastedFuelFrac: c.wastedFuelFrac,
+      wastedBoostFrac: c.wastedBoostFrac,
       wheelspinTime: c.wheelspinTime,
       maxHeight: c.maxHeight,
       bumpsHit: c.bumpsHit,
-      fuelEmptyAt: c.fuelEmptyAt,
       entryDeg: c.entryDeg,
       tally: { ...c.tally },
     }));
@@ -879,6 +1044,8 @@ export class RaceSim {
     car.steer += clamp(want - car.steer, -STEER_RATE * dt, STEER_RATE * dt);
     let T = clamp(inp.throttle, 0, 1);
     let B = clamp(inp.brake, 0, 1);
+    if (B > 0.5) car.brakeTap = car.brakeTap === Infinity ? 0 : car.brakeTap + dt;
+    else car.brakeTap = Infinity;
     let S = car.steer;
     if (car.stun > 0) {
       car.stun -= dt;
@@ -891,6 +1058,12 @@ export class RaceSim {
       B = 0;
       S = 0;
     }
+    // A seagull on the windscreen: you can't see where you're going, so you lift and weave.
+    if (car.gullT > 0) {
+      car.gullT -= dt;
+      T = Math.min(T, 0.45);
+      S = clamp(S + 0.5 * Math.sin(this.raceT * 7.1 + car.p * 2.3), -1, 1);
+    }
     car.throttle = T;
     car.brake = B;
     if (car.rocketWindow > 0) {
@@ -902,17 +1075,42 @@ export class RaceSim {
     }
 
     const pt = pointAt(C, car.s, this.tmp);
-    const grade = car.grounded ? pt.grade : 0;
+    const grade = car.grounded ? this.gradeAt(pt) : 0;
     const cosT = 1 / Math.sqrt(1 + grade * grade);
     const speed2 = car.vx * car.vx + car.vz * car.vz;
     const down = car.grounded ? 0.5 * RHO * k.downforce * speed2 : 0;
     const N = car.grounded ? m * G * cosT + down : 0;
     const mu = k.mu;
 
-    // --- Yaw.
     let fx = Math.cos(car.heading);
     let fz = Math.sin(car.heading);
     let vf = car.vx * fx + car.vz * fz;
+
+    // --- Drift: tap the brake while turning at speed and the tail steps out. Hold the wheel into the
+    // slide for a tight arc; let it go for a wider one, and after a moment the tyres grip again.
+    if (car.drift === 0) {
+      car.driftCool = Math.max(0, car.driftCool - dt);
+      const tap = car.brakeTap <= DRIFT_TAP;
+      if (car.grounded && car.spin <= 0 && car.stun <= 0 && tap && Math.abs(want) > 0.5 && vf > DRIFT_MIN && car.driftCool <= 0) {
+        car.drift = want > 0 ? 1 : -1;
+        car.driftT = 0;
+        car.driftOff = 0;
+        car.driftTurn = 0;
+        car.driftGain = 0;
+        car.driftAir = 0;
+        car.yawRate += car.drift * DRIFT_KICK;
+        ev.push({ type: 'drift', t: this.t, p: car.p, dir: car.drift });
+      }
+    } else {
+      car.driftT += dt;
+      const into = S * car.drift;
+      car.driftOff = into > 0.3 ? 0 : car.driftOff + dt;
+      car.driftAir = car.grounded ? 0 : car.driftAir + dt;
+      const over = car.driftAir > 0.35 || car.spin > 0 || car.stun > 0 || Math.sqrt(speed2) < DRIFT_END || car.driftOff > DRIFT_RELEASE;
+      if (over) this.endDrift(car, ev);
+    }
+
+    // --- Yaw.
     if (car.spin > 0) {
       car.spin -= dt;
       const u = 1 - Math.max(car.spin, 0) / car.spinDur;
@@ -921,9 +1119,20 @@ export class RaceSim {
       car.yawRate = (target - car.heading) / dt;
       car.heading = target;
       if (car.spin <= 0) car.heading = wrapAngle(car.heading);
+    } else if (car.grounded && car.drift !== 0) {
+      // Drifting: the nose holds an angle to the direction of travel (more with the wheel turned into
+      // the slide, less as it's let go, none by the time the tyres grip again) while the slide
+      // swings the whole car round.
+      const beta = wrapAngle(car.heading - Math.atan2(car.vz, car.vx));
+      const into = clamp(S * car.drift, -1, 1);
+      const settle = 1 - clamp(car.driftOff / DRIFT_RELEASE, 0, 1);
+      const slip = (into >= 0 ? DRIFT_SLIP + (DRIFT_SLIP_MAX - DRIFT_SLIP) * into : DRIFT_SLIP * (1 + into)) * settle;
+      const wTarget = clamp(car.driftTurn + DRIFT_HOLD * (car.drift * slip - beta), -DRIFT_YAW, DRIFT_YAW);
+      car.yawRate += (wTarget - car.yawRate) * (1 - Math.exp(-k.yawResponse * dt));
+      car.heading += car.yawRate * dt;
     } else if (car.grounded) {
       const v = Math.abs(vf);
-      const gripAcc = (mu * N) / m;
+      const gripAcc = (mu * CORNER_GRIP * N) / m;
       const wKin = v / k.turnRadius;
       const wGrip = (gripAcc / Math.max(v, 2)) * OVERSTEER;
       const wMax = Math.min(wKin, wGrip, MAX_YAW);
@@ -935,6 +1144,10 @@ export class RaceSim {
         const off = wrapAngle(pt.heading - car.heading);
         if (Math.abs(off) < 0.45) car.heading += Math.sign(off) * Math.min(Math.abs(off), ASSIST * dt);
       }
+    } else if (car.drift !== 0) {
+      // A hop mid-drift: nothing to slide on, so the car holds its angle and carries on.
+      car.yawRate *= Math.exp(-12 * dt);
+      car.heading += car.yawRate * dt;
     } else {
       car.yawRate += (S * AIR_YAW - car.yawRate) * (1 - Math.exp(-2.5 * dt));
       car.heading += car.yawRate * dt;
@@ -945,50 +1158,44 @@ export class RaceSim {
     const rz = fx;
     vf = car.vx * fx + car.vz * fz;
 
-    // --- Engine (the jet pushes even in the air).
+    // --- Engine (the jet pushes even in the air). The gas is free: it never runs dry.
     let engineF = 0;
     let spinning = false;
     const onPower = car.grounded || k.isJet;
-    if (T > 0 && onPower) {
-      if (car.fuelJ > 0 && k.power > 0) {
-        // Near its top speed the engine runs out of revs (or the jet out of thrust). A headwind loads
-        // the engine and lowers the speed it can reach; a tailwind raises it. An engine on its rev
-        // limiter burns little: holding the gas at top speed down a hill doesn't drain the tank.
-        const top = k.topSpeed + WIND_TOP * this.wind;
-        const rev = vf <= 0.6 * top ? 1 : Math.max(0, (top - vf) / (0.4 * top));
-        let power = T * k.power * Math.max(0.08, rev);
-        // Good tyres waste little of the power they can't put down; tiny ones spin it all away.
-        if (!k.isJet && car.grounded) {
-          const usable = k.traction * N * Math.max(Math.abs(vf), 1);
-          if (power > usable) power = usable + (power - usable) * k.spinWaste;
-        }
-        const want = power * dt;
-        const burn = Math.min(car.fuelJ, want);
-        const frac = want > 0 ? burn / want : 0;
-        const demand = ((T * k.power) / Math.max(Math.abs(vf), 1)) * frac * rev;
-        if (k.isJet) engineF = Math.min(demand, k.thrustCap * T);
-        else {
-          const grip = k.traction * N;
-          spinning = demand > grip;
-          engineF = Math.min(demand, grip);
-        }
-        const before = car.fuelJ;
-        car.fuelJ -= burn;
-        if (before > 0.25 * k.energy && car.fuelJ <= 0.25 * k.energy && k.energy > 0) {
-          ev.push({ type: 'fuelLow', t: this.t, p: car.p, s: car.s });
-        }
-        if (car.fuelJ <= 1e-6) {
-          car.fuelJ = 0;
-          car.fuelEmptyAt = this.raceT;
-          ev.push({ type: 'fuelEmpty', t: this.t, p: car.p, s: car.s });
-        }
-      } else if (car.grounded) {
-        engineF = Math.min((T * LIMP_POWER) / Math.max(Math.abs(vf), 1), 0.4 * k.traction * N);
+    const top = k.topSpeed + WIND_TOP * this.wind;
+    if (T > 0 && onPower && k.power > 0) {
+      // Near its top speed the engine runs out of revs (or the jet out of thrust). A headwind loads
+      // the engine and lowers the speed it can reach; a tailwind raises it.
+      const rev = vf <= 0.6 * top ? 1 : Math.max(0, (top - vf) / (0.4 * top));
+      const demand = ((T * k.power) / Math.max(Math.abs(vf), 1)) * rev;
+      if (k.isJet) engineF = Math.min(demand, k.thrustCap * T);
+      else {
+        const grip = k.traction * N * (car.drift !== 0 ? DRIFT_TRACTION : 1);
+        spinning = demand > grip && car.drift === 0;
+        engineF = Math.min(demand, grip);
       }
     }
-    car.engineOn = T > 0 && car.fuelJ > 0 && k.power > 0;
+    car.engineOn = T > 0 && k.power > 0;
     car.wheelspin = spinning;
     if (spinning) car.wheelspinTime += dt;
+
+    // --- Boost: a rocket push along the nose while the key is held (on the road or in the air)
+    // until the bottle runs dry. It fades out on the way past the engine's top speed.
+    let boostF = 0;
+    car.boosting = false;
+    if (inp.boost && car.boost > 0 && car.spin <= 0 && car.stun <= 0) {
+      const topB = top * BOOST_TOP;
+      const fade = vf <= 0.8 * topB ? 1 : Math.max(0, (topB - vf) / (0.2 * topB));
+      boostF = m * BOOST_ACC * fade;
+      const used = Math.min(car.boost, dt);
+      car.boost -= used;
+      car.tally.boostUsed += used;
+      car.boosting = true;
+      if (car.boost <= 1e-9) {
+        car.boost = 0;
+        ev.push({ type: 'boostEmpty', t: this.t, p: car.p, s: car.s });
+      }
+    }
 
     // Reverse: the brake held at a standstill backs up (no fuel needed).
     let reverseF = 0;
@@ -1005,9 +1212,17 @@ export class RaceSim {
     // --- Gravity along the slope.
     const ga = car.grounded ? (-G * grade) / (1 + grade * grade) : 0;
 
-    const aDrive = (engineF - reverseF) / m;
-    car.vx += (aDrive * fx + dragX / m + ga * pt.tx) * dt;
-    car.vz += (aDrive * fz + dragZ / m + ga * pt.tz) * dt;
+    const aDrive = (engineF + boostF - reverseF) / m;
+    // Sliding, the push goes along the direction of travel (the wheel alone sets the drift's arc).
+    let ux = fx;
+    let uz = fz;
+    if (car.drift !== 0 && speed2 > 1) {
+      const v = Math.sqrt(speed2);
+      ux = car.vx / v;
+      uz = car.vz / v;
+    }
+    car.vx += (aDrive * ux + dragX / m + ga * pt.tx) * dt;
+    car.vz += (aDrive * uz + dragZ / m + ga * pt.tz) * dt;
 
     // --- Brakes and rolling resistance: slow the wheels' rolling, never reverse them.
     if (car.grounded) {
@@ -1019,7 +1234,13 @@ export class RaceSim {
         decel += brakeF;
       }
       const dv = (decel / m) * dt;
-      if (Math.abs(vf) <= dv) {
+      if (car.drift !== 0) {
+        // Sliding: the brakes and the tyres' drag work against the direction of travel.
+        const v = Math.sqrt(car.vx * car.vx + car.vz * car.vz);
+        const f = v > dv ? (v - dv) / v : 0;
+        car.vx *= f;
+        car.vz *= f;
+      } else if (Math.abs(vf) <= dv) {
         // Rolling resistance holds a car at rest unless something pushes harder.
         car.vx -= vf * fx;
         car.vz -= vf * fz;
@@ -1034,11 +1255,27 @@ export class RaceSim {
       const vx0 = car.vx;
       const vz0 = car.vz;
       const v = Math.sqrt(vx0 * vx0 + vz0 * vz0);
-      if (v > 1e-6) {
+      if (car.drift !== 0 && v > 1e-6) {
+        // Drifting: the slide swings the direction of travel round on an arc the wheel sets (held
+        // into the slide: tighter than plain grip could; let go: wider; counter-steered: almost
+        // straight), scrubbing a little speed as it goes.
+        const into = clamp(S * car.drift, -1, 1);
+        const bite = into >= 0 ? DRIFT_BITE + (1 - DRIFT_BITE) * into : DRIFT_BITE + (DRIFT_BITE - DRIFT_BITE_OUT) * into;
+        const turnAcc = ((mu * DRIFT_GRIP * N) / m) * bite;
+        const w = Math.min(turnAcc / Math.max(v, 4), v / k.turnRadius, DRIFT_YAW);
+        const a2 = Math.atan2(vz0, vx0) + car.drift * w * dt;
+        const v2 = Math.max(0, v - ((DRIFT_SCRUB * N) / m) * bite * dt);
+        car.vx = Math.cos(a2) * v2;
+        car.vz = Math.sin(a2) * v2;
+        car.driftTurn = car.drift * w;
+        car.driftBite = bite;
+        car.slip = wrapAngle(car.heading - a2);
+        car.sliding = true;
+      } else if (v > 1e-6) {
         const vl = vx0 * rx + vz0 * rz;
         const vfw = vx0 * fx + vz0 * fz;
         const used = Math.min(1, Math.abs(engineF + brakeF) / (mu * N + 1e-6));
-        let latMax = mu * N * (1 - 0.35 * used * used);
+        let latMax = mu * CORNER_GRIP * N * (1 - 0.35 * used * used);
         if (spinning) latMax *= 0.75;
         if (car.spin > 0) latMax *= 0.22;
         const dvLat = (latMax / m) * dt;
@@ -1093,7 +1330,7 @@ export class RaceSim {
       let bestD = loc.d;
       let bestGap = Infinity;
       for (const r of roadsAt(C, car.x, car.z)) {
-        const h = heightAt(C, r.s);
+        const h = this.roadY(r.s);
         if (h > car.y + 0.4) continue;
         const gap = Math.abs(r.s - car.s);
         if (gap < bestGap) {
@@ -1116,7 +1353,7 @@ export class RaceSim {
       // (All of Lombard's block off the road is garden, including the islands inside the
       // hairpins, whose kerbs aren't hedges.)
       if ((edge === 'hedge' || this.inGarden(car.x, car.z)) && Math.abs(car.d) > bp.hw + 0.3) {
-        const top = heightAt(C, car.s) + WALL_HEIGHT.hedge + 0.05;
+        const top = this.roadY(car.s) + WALL_HEIGHT.hedge + 0.05;
         if (car.y <= top) {
           onBed = true;
           // The nearest road might be the next leg.
@@ -1128,7 +1365,7 @@ export class RaceSim {
           }
           const np = pointAt(C, car.s, this.tmp2);
           const side = car.d > 0 ? 1 : -1;
-          car.y = Math.max(car.y, heightAt(C, car.s) + WALL_HEIGHT.hedge + 0.05);
+          car.y = Math.max(car.y, this.roadY(car.s) + WALL_HEIGHT.hedge + 0.05);
           if (car.vy < 0) car.vy = 0;
           // Towards the road, losing speed in the flowers.
           car.vx += side * np.tz * 14 * dt;
@@ -1177,14 +1414,16 @@ export class RaceSim {
 
     // --- Vertical: follow the road, leave it over a crest, land.
     const p2 = pointAt(C, car.s, this.tmp2);
-    const hRoad = heightAt(C, car.s);
+    const hRoad = this.roadY(car.s);
     const vAlong = car.vx * p2.tx + car.vz * p2.tz;
-    const vyRoad = p2.grade * vAlong;
+    const vyRoad = this.gradeAt(p2) * vAlong;
     if (car.grounded) {
       // Over a crest the road falls away faster than gravity can pull the car down: it flies
       // (a Bullitt jump at the intersections). Tiny hops at low speed are ignored.
-      if (vyRoad < car.vy - G * dt - 1.2) {
+      if (vyRoad < car.vy - G * dt - 1.6) {
         car.grounded = false;
+        // Leaving the road mid-turn doesn't set the car spinning in the air.
+        car.yawRate = clamp(car.yawRate, -AIR_YAW, AIR_YAW);
         car.airTime = 0;
         car.y = Math.max(car.y + car.vy * dt - 0.5 * G * dt * dt, hRoad);
         car.vy -= G * dt;
@@ -1255,7 +1494,7 @@ export class RaceSim {
     const facing = Math.cos(car.heading - p2.heading);
     car.wrongWay = facing < -0.3 && along < -1 ? car.wrongWay + dt : 0;
     car.backwardsT = facing < -0.3 ? car.backwardsT + dt : 0;
-    car.fuelFrac = k.energy > 0 ? car.fuelJ / k.energy : 0;
+    car.boostFrac = k.boostCap > 0 ? car.boost / k.boostCap : 0;
     if (car.grit > 0) car.grit = Math.max(0, car.grit - dt);
     if (car.overtakeCd > 0) car.overtakeCd -= dt;
 
@@ -1283,13 +1522,14 @@ export class RaceSim {
     const last = this.course.points[this.course.points.length - 1];
     car.x = lip.x;
     car.z = lip.z + Math.max(-4, Math.min(4, car.d));
-    car.y = lip.y;
+    car.y = this.roadY(lip.s);
     car.s = lip.s;
     car.heading = last.heading;
     const v = 3;
-    car.vx = last.tx * v * lip.cos;
-    car.vz = last.tz * v * lip.cos;
-    car.vy = v * lip.sin;
+    const cos = Math.cos(this.rampAngle);
+    car.vx = last.tx * v * cos;
+    car.vz = last.tz * v * cos;
+    car.vy = v * Math.sin(this.rampAngle);
     car.grounded = false;
     ev.push({ type: 'rescue', t: this.t, p: car.p });
     this.launch(car, ev, 0);
@@ -1352,6 +1592,8 @@ export class RaceSim {
     car.grounded = true;
     car.spin = 0;
     car.stun = 0;
+    car.gullT = 0;
+    car.drift = 0;
     car.stuckS = s;
     car.stuckT = 0;
     car.wrongWay = 0;
@@ -1377,7 +1619,7 @@ export class RaceSim {
     if (side === 0) return;
     const edge = side > 0 ? pt.edgeR : pt.edgeL;
     // Clearing a hedge in the air.
-    if (!car.grounded && car.y - heightAt(C, car.s) > WALL_HEIGHT[edge]) return;
+    if (!car.grounded && car.y - this.roadY(car.s) > WALL_HEIGHT[edge]) return;
     // Already across the hedge and over the flower bed: the bed handles it (no snapping back).
     if (!car.grounded && Math.abs(car.d) > pt.hw + 0.3 && (edge === 'hedge' || this.inGarden(car.x, car.z))) return;
     // Out of the wall, but no teleports: a car that came down half on a hedge slides off it.
@@ -1403,6 +1645,15 @@ export class RaceSim {
     if (Math.abs(dh) < Math.PI / 2) car.heading += dh * Math.min(1, 0.06 * Math.abs(vn));
     car.yawRate *= 0.6;
     const impact = -vn;
+    if (impact > 3) this.endDrift(car, ev);
+    // Straight into the tyres at speed is a proper crash: it knocks the wind out of the car (so
+    // bouncing round a corner off the barrier is never quicker than braking or drifting through).
+    if (impact > WALL_HARD) {
+      const f = 1 - Math.min(0.4, (impact - WALL_HARD) * 0.025);
+      car.vx *= f;
+      car.vz *= f;
+      car.stun = Math.max(car.stun, Math.min(0.6, (impact - WALL_HARD) * 0.05));
+    }
     if (impact > 1.2) {
       ev.push({ type: 'wall', t: this.t, p: car.p, impact, x: car.x + side * rx * rEff, y: car.y + 0.5, z: car.z + side * rz * rEff });
       if (impact > 6) {
@@ -1528,10 +1779,9 @@ export class RaceSim {
   }
 
   private hitObstacles(car: RaceCar, ev: RaceEvent[]): void {
-    const C = this.course;
     const k = car.stats;
     const cc = car.circles;
-    const clearance = car.y - heightAt(C, car.s);
+    const clearance = car.y - this.roadY(car.s);
     const speed = Math.sqrt(car.vx * car.vx + car.vz * car.vz);
     const reach = k.length / 2 + 4;
 
@@ -1738,6 +1988,7 @@ export class RaceSim {
   }
 
   private spinOut(car: RaceCar, by: PlayerIndex | null, ev: RaceEvent[]): void {
+    this.endDrift(car, ev);
     const resist = car.stats.spinResist;
     car.spin = SPIN_TIME * (1 - 0.4 * resist);
     car.spinDur = car.spin;
@@ -1766,12 +2017,15 @@ export class RaceSim {
       car.roulette -= dt;
       if (car.roulette <= 0) {
         car.roulette = 0;
-        car.item = this.rollItem(car);
-        ev.push({ type: 'item', t: this.t, p: car.p, item: car.item });
+        // The new item goes in the free slot; the one already held stays the one the key uses.
+        const it = this.rollItem(car);
+        car.items.push(it);
+        if (car.items.length === 1) car.sel = 0;
+        ev.push({ type: 'item', t: this.t, p: car.p, item: it });
       }
     }
     // Hands full: drive through without breaking the boxes (they stay for the other car).
-    if (car.item !== null || car.roulette > 0) return;
+    if (car.items.length >= ITEM_SLOTS || car.roulette > 0) return;
     const reach = car.stats.length / 2 + BOX_R;
     for (const b of this.boxes) {
       if (b.hidden > 0) continue;
@@ -1788,26 +2042,60 @@ export class RaceSim {
     }
   }
 
-  /** Item odds lean on the race order: the leader gets defence, the chaser gets comeback items. */
+  /**
+   * Item odds lean on the race order: the leader gets defence (poo), the chaser gets comebacks
+   * (Determination, boost and seagulls; the full boost is rare, and rarer still in front). With
+   * nobody else on the road there's no one to drop poo for or send a seagull after.
+   */
   private rollItem(car: RaceCar): ItemKind {
     const others = this.cars.filter((c) => c !== car && c.phase === 'race');
-    let gap = 15;
-    if (others.length) gap = Math.max(...others.map((o) => o.s)) - car.s;
-    let w: [number, number, number];
-    if (gap <= 0) w = [0.35, 0.1, 0.55];
-    else if (gap < 30) w = [0.35, 0.3, 0.35];
-    else w = [0.35, 0.5, 0.15];
-    const r = this.rng() * (w[0] + w[1] + w[2]);
-    return r < w[0] ? 'jump' : r < w[0] + w[1] ? 'grit' : 'poo';
+    // Weights in ITEM_KINDS order: jump, grit, poo, topup, refill, gull.
+    let w: number[];
+    if (!others.length) w = [0.34, 0.2, 0, 0.36, 0.1, 0];
+    else {
+      const gap = Math.max(...others.map((o) => o.s)) - car.s;
+      if (gap <= 0) w = [0.26, 0.08, 0.44, 0.18, 0.01, 0.03];
+      else if (gap < 30) w = [0.22, 0.18, 0.2, 0.22, 0.04, 0.14];
+      else w = [0.16, 0.24, 0.06, 0.26, 0.1, 0.18];
+    }
+    let r = this.rng() * w.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < w.length; i++) {
+      r -= w[i];
+      if (r < 0) return ITEM_KINDS[i];
+    }
+    return ITEM_KINDS[0];
+  }
+
+  /** Put boost in a car's bottle (up to its size); returns how much went in. */
+  addBoost(car: RaceCar, seconds: number): number {
+    const before = car.boost;
+    car.boost = Math.min(car.stats.boostCap, car.boost + Math.max(0, seconds));
+    car.boostFrac = car.stats.boostCap > 0 ? car.boost / car.stats.boostCap : 0;
+    return car.boost - before;
+  }
+
+  private endDrift(car: RaceCar, ev: RaceEvent[]): void {
+    if (car.drift === 0) return;
+    ev.push({ type: 'driftEnd', t: this.t, p: car.p, time: car.driftT, gain: car.driftGain });
+    car.drift = 0;
+    car.driftTurn = 0;
+    car.driftBite = 0;
+    car.driftCool = DRIFT_COOL;
   }
 
   private useItem(car: RaceCar, inp: CarInput, ev: RaceEvent[]): void {
+    // Two items held: the swap key picks which one the item key uses.
+    if (inp.swap && car.items.length > 1) {
+      car.sel = (car.sel + 1) % car.items.length;
+      ev.push({ type: 'swap', t: this.t, p: car.p, item: car.items[car.sel] });
+    }
     if (!inp.item) return;
-    if (car.item === null) {
+    if (car.items.length === 0) {
       if (car.roulette === 0) ev.push({ type: 'honk', t: this.t, p: car.p });
       return;
     }
-    const it = car.item;
+    car.sel = Math.min(car.sel, car.items.length - 1);
+    const it = car.items[car.sel];
     if (it === 'jump') {
       if (!car.grounded) return;
       // Off the kicker it only steepens the launch a little (a whole hop there would be worth more
@@ -1818,6 +2106,16 @@ export class RaceSim {
       car.airTime = 0;
     } else if (it === 'grit') {
       car.grit = GRIT_TIME;
+    } else if (it === 'topup' || it === 'refill') {
+      // A full bottle keeps the item for later (a refill wasted on a full bottle helps nobody).
+      if (car.boost >= car.stats.boostCap - 0.02) {
+        ev.push({ type: 'boostGain', t: this.t, p: car.p, amount: 0, full: it === 'refill' });
+        return;
+      }
+      const got = this.addBoost(car, (it === 'refill' ? 1 : TOPUP) * car.stats.boostCap);
+      ev.push({ type: 'boostGain', t: this.t, p: car.p, amount: got, full: it === 'refill' });
+    } else if (it === 'gull') {
+      this.releaseGull(car);
     } else {
       const back = car.stats.length / 2 + 0.9;
       const x = car.x - Math.cos(car.heading) * back;
@@ -1828,9 +2126,120 @@ export class RaceSim {
       const w = toWorld(this.course, loc.s, d);
       this.poos.push({ id: this.nextId++, x: w.x, y: w.y, z: w.z, s: loc.s, owner: car.p, alive: true, age: 0 });
     }
-    car.item = null;
+    car.items.splice(car.sel, 1);
+    car.sel = 0;
     car.tally.items++;
     ev.push({ type: 'use', t: this.t, p: car.p, item: it, x: car.x, y: car.y, z: car.z });
+  }
+
+  /** Let a seagull go after the rival (with nobody left racing, it just flies off). */
+  private releaseGull(car: RaceCar): void {
+    const target = this.cars.find((c) => c !== car && c.phase === 'race');
+    const d = clamp(car.d, -4, 4);
+    const w = toWorld(this.course, car.s, d);
+    this.gulls.push({
+      id: this.nextId++,
+      owner: car.p,
+      target: target ? target.p : car.p,
+      x: w.x,
+      y: car.y + 2.2,
+      z: w.z,
+      heading: car.heading,
+      s: car.s,
+      d,
+      age: 0,
+      state: target ? 'hunt' : 'leave',
+      stateT: 0,
+    });
+  }
+
+  /**
+   * A seagull hunts its target along the course, above the road (so it never cuts through the
+   * houses), always a good deal faster than the car it's after; close in, it dives at the
+   * windscreen. Then it perches there for a moment and flies off.
+   */
+  private updateGull(g: Gull, dt: number, ev: RaceEvent[]): void {
+    const C = this.course;
+    g.age += dt;
+    g.stateT += dt;
+    const tc = this.cars[g.target];
+    if (g.state === 'hunt') {
+      if (!tc || tc.phase !== 'race' || g.age > GULL_LIFE) {
+        g.state = 'leave';
+        g.stateT = 0;
+        return;
+      }
+      const px = g.x;
+      const pz = g.z;
+      const gap = tc.s - g.s;
+      const tv = Math.hypot(tc.vx, tc.vz);
+      if (Math.abs(gap) > 7) {
+        const speed = Math.max(GULL_SPEED, tv + 18);
+        g.s += Math.sign(gap) * Math.min(Math.abs(gap) - 6.9, speed * dt);
+        g.d += clamp(tc.d - g.d, -6 * dt, 6 * dt);
+        const w = toWorld(C, g.s, g.d);
+        g.x = w.x;
+        g.z = w.z;
+        g.y += clamp(this.roadY(g.s) + 3.4 - g.y, -9 * dt, 9 * dt);
+      } else {
+        const dx = tc.x - g.x;
+        const dy = tc.y + 1.2 - g.y;
+        const dz = tc.z - g.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const step = Math.min(dist, (GULL_SPEED + tv) * dt);
+        if (dist > 1e-6) {
+          g.x += (dx / dist) * step;
+          g.y += (dy / dist) * step;
+          g.z += (dz / dist) * step;
+        }
+        g.s = tc.s - Math.sign(gap || 1) * Math.max(0, dist - step);
+        if (dist - step < 0.9) this.gullStrike(g, tc, ev);
+      }
+      if ((g.x - px) ** 2 + (g.z - pz) ** 2 > 1e-8) g.heading = Math.atan2(g.z - pz, g.x - px);
+    } else if (g.state === 'perch') {
+      // Flapping on the roof over the windscreen, facing the driver (taller cars are longer ones).
+      const f = tc.stats.length * 0.12;
+      g.x = tc.x + Math.cos(tc.heading) * f;
+      g.y = tc.y + 1.05 + 0.33 * Math.max(0, tc.stats.length - 2.3);
+      g.z = tc.z + Math.sin(tc.heading) * f;
+      g.heading = tc.heading + Math.PI;
+      if (g.stateT > GULL_TIME || tc.phase !== 'race') {
+        g.state = 'leave';
+        g.stateT = 0;
+        g.heading = tc.heading + (this.rng() < 0.5 ? -1 : 1) * 0.9;
+      }
+    } else {
+      // Up and away over the rooftops.
+      g.y += 7 * dt;
+      g.x += Math.cos(g.heading) * 14 * dt;
+      g.z += Math.sin(g.heading) * 14 * dt;
+    }
+  }
+
+  private gullStrike(g: Gull, tc: RaceCar, ev: RaceEvent[]): void {
+    g.stateT = 0;
+    if (tc.grit > 0) {
+      // Determination: shoo! It bounces off and flies away.
+      tc.grit = 0;
+      tc.tally.shooed++;
+      this.addHype(tc, 6, 'shooed a seagull', ev);
+      g.state = 'leave';
+      g.heading = tc.heading + (this.rng() < 0.5 ? -1 : 1) * 1.3;
+      ev.push({ type: 'gull', t: this.t, p: tc.p, by: g.owner, shooed: true, x: g.x, y: g.y, z: g.z });
+      return;
+    }
+    g.state = 'perch';
+    tc.gullT = GULL_TIME;
+    tc.vx *= 0.85;
+    tc.vz *= 0.85;
+    this.endDrift(tc, ev);
+    const o = this.cars[g.owner];
+    if (o && o !== tc) {
+      o.tally.gulls++;
+      this.addHype(o, 6, 'seagull', ev);
+    }
+    this.addHype(tc, -4, 'seagull', ev);
+    ev.push({ type: 'gull', t: this.t, p: tc.p, by: g.owner, shooed: false, x: g.x, y: g.y, z: g.z });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1848,17 +2257,20 @@ export class RaceSim {
     car.x -= car.vx * back;
     car.z -= car.vz * back;
     if (car.grounded) {
-      car.y = lip.y;
-      car.vy = last.grade * vAlong;
+      car.y = this.roadY(lip.s);
+      car.vy = this.gradeAt(last) * vAlong;
     } else car.y -= car.vy * back;
     this.launch(car, ev, back);
   }
 
   private launch(car: RaceCar, ev: RaceEvent[], rewind: number): void {
     const k = car.stats;
-    car.wastedFuelFrac = k.energy > 0 ? car.fuelJ / k.energy : 0;
-    car.fuelJ = 0;
-    car.fuelFrac = 0;
+    // Boost left in the bottle at the lip is wasted: it only ever pushes on the way down.
+    car.wastedBoostFrac = k.boostCap > 0 ? car.boost / k.boostCap : 0;
+    car.boost = 0;
+    car.boostFrac = 0;
+    car.boosting = false;
+    car.drift = 0;
     car.engineOn = false;
     car.wheelspin = false;
     car.sliding = false;
@@ -1876,6 +2288,7 @@ export class RaceSim {
     car.runTime = this.raceT - rewind;
     car.launchSpeed = v;
     car.launchBoost = boost - 1;
+    car.launchRamp = this.rampAngle;
     car.maxHeight = car.y;
     car.distance = 0;
     car.phase = 'flight';
@@ -1886,9 +2299,15 @@ export class RaceSim {
       p: car.p,
       speed: v,
       speedBeforeNitro: before,
-      wastedFuelFrac: car.wastedFuelFrac,
+      wastedBoostFrac: car.wastedBoostFrac,
       boost: boost - 1,
+      ramp: car.launchRamp,
     });
+    // The first car off the kicker had it at full angle; from now on it drops for the rest.
+    if (this.rampDropAt === null && this.cars.some((c) => c.phase === 'race')) {
+      this.rampDropAt = this.raceT - rewind;
+      ev.push({ type: 'rampDrop', t: this.t, p: car.p });
+    }
   }
 
   private fly(car: RaceCar, dt: number, ev: RaceEvent[]): void {
@@ -1941,9 +2360,15 @@ export class RaceSim {
     for (const car of racing) {
       // Steady trickles don't spam events; they just add up.
       let add = 0;
-      if (car.sliding && car.spin <= 0) {
-        add += 3 * dt;
+      if (car.drift !== 0 && car.spin <= 0) {
+        // A drift earns HYPE and fills the boost bottle, more for a fast, wide-angle slide. A full
+        // bottle can't take any more: spend some before the next corner.
+        const f = Math.min(1, Math.hypot(car.vx, car.vz) / 14) * car.driftBite;
+        add += 3 * f * dt;
         car.tally.drift += dt;
+        const got = this.addBoost(car, DRIFT_CHARGE * f * dt);
+        car.driftGain += got;
+        car.tally.driftBoost += got;
       }
       if (!car.grounded && car.airTime > 0.15) {
         add += 6 * dt;
@@ -2007,6 +2432,10 @@ export class RaceSim {
     const C = this.course;
     for (const b of this.boxes) if (b.hidden > 0) b.hidden = Math.max(0, b.hidden - dt);
     for (const p of this.poos) p.age += dt;
+    for (const g of this.gulls) this.updateGull(g, dt, ev);
+    for (let i = this.gulls.length - 1; i >= 0; i--) {
+      if (this.gulls[i].state === 'leave' && this.gulls[i].stateT > 2.5) this.gulls.splice(i, 1);
+    }
 
     for (const w of this.waymos) {
       // Knocks decay; the car drifts back to its path.
@@ -2274,11 +2703,15 @@ export class RaceSim {
     return best - me.s;
   }
 
-  /** Give a car an item directly (test hook). */
+  /** Give a car an item directly and select it (test hook). A full hand swaps out the selected one. */
   giveItem(p: PlayerIndex, item: ItemKind): void {
     const car = this.cars[p];
     if (!car) return;
-    car.item = item;
+    if (car.items.length >= ITEM_SLOTS) car.items[car.sel] = item;
+    else {
+      car.items.push(item);
+      car.sel = car.items.length - 1;
+    }
     car.roulette = 0;
   }
 
@@ -2289,20 +2722,49 @@ export class RaceSim {
     const w = toWorld(this.course, s, d);
     car.x = w.x;
     car.z = w.z;
-    car.y = w.y;
+    car.y = this.roadY(s);
     car.s = s;
     car.d = d;
     car.heading = w.heading;
     car.vx = Math.cos(w.heading) * speed;
     car.vz = Math.sin(w.heading) * speed;
-    car.vy = pointAt(this.course, s, this.tmp).grade * speed;
+    car.vy = this.gradeAt(pointAt(this.course, s, this.tmp)) * speed;
     car.grounded = true;
+    car.drift = 0;
     car.stuckS = s;
     car.stuckT = 0;
     car.wrongWay = 0;
     car.backwardsT = 0;
     car.hopS = -1;
     car.hopLand = false;
+  }
+
+  /**
+   * Start a car further down the course (solo training): at rest in the middle of the road, with the
+   * start clear. Traffic sitting on it moves on down the road, and on Hyde St the cable car waits at
+   * the far end of its line for a while: something to steer round, never in the way at GO.
+   */
+  placeStart(p: PlayerIndex, s: number): void {
+    this.place(p, s, 0, 0);
+    for (const w of this.waymos) {
+      if (w.kind !== 'traffic' || w.s < s - 10 || w.s > s + 24) continue;
+      w.s = Math.min(w.sEnd, s + 24 + (w.s - s + 10) * 0.5);
+      const base = toWorld(this.course, w.s, w.d);
+      w.x = base.x;
+      w.y = base.y;
+      w.z = base.z;
+      w.heading = base.heading;
+    }
+    const hyde = this.course.sections.find((q) => q.kind === 'hyde');
+    const cb = this.cable;
+    if (cb && hyde && s > hyde.s0 - 5 && s < hyde.s1) {
+      const z = this.cars[p].z;
+      cb.along = Math.abs(cb.z1 - z) > Math.abs(cb.z0 - z) ? cb.z1 : cb.z0;
+      cb.z = cb.along;
+      cb.dir = cb.along === cb.z1 ? -1 : 1;
+      cb.heading = cb.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      cb.dwell = 12;
+    }
   }
 
   /** Index into the course samples for a car (for renderers). */

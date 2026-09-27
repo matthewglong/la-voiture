@@ -71,6 +71,18 @@ export class Particles {
   }
 
   /** Puffs of dust or tyre smoke. */
+  /** Drift sparks flicking back off a rear tyre: icy blue while the slide fills the boost, gold once
+   *  it has been going a while. */
+  driftSparks(at: THREE.Vector3, back: THREE.Vector3, n: number, hot: boolean): void {
+    const v = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const s = 3 + Math.random() * 3.5;
+      v.set(back.x * s + (Math.random() - 0.5) * 2.4, 0.8 + Math.random() * 2.4, back.z * s + (Math.random() - 0.5) * 2.4);
+      const c = hot ? (Math.random() < 0.5 ? '#ffd23f' : '#ff9a2e') : Math.random() < 0.5 ? '#6fd3ff' : '#e8f8ff';
+      this.spawn(at, v, c, 0.11 + Math.random() * 0.1, 0.25 + Math.random() * 0.25, { drag: 2 });
+    }
+  }
+
   puff(at: THREE.Vector3, n: number, color: THREE.ColorRepresentation = '#e8e4dc', size = 0.5, up = 1): void {
     for (let i = 0; i < n; i++) {
       const v = new THREE.Vector3((Math.random() - 0.5) * 2.5, up * (0.6 + Math.random()), (Math.random() - 0.5) * 2.5);

@@ -22,7 +22,7 @@ const base = (over: Spec): Spec => ({
   chassis: 'kart',
   wheels: 'standard',
   engine: 'mower',
-  fuel: 'jerry',
+  boost: 'can',
   wing: 'none',
   nose: 'blunt',
   booster: 'none',
@@ -63,12 +63,12 @@ const ROWS: { name: string; cars: Spec[] }[] = [
   {
     name: 'tanks',
     cars: [
-      base({ fuel: 'jerry', paint: 'grape' }),
-      base({ fuel: 'tank', paint: 'grape' }),
-      base({ fuel: 'big', paint: 'grape' }),
-      base({ chassis: 'sedan', fuel: 'jerry', paint: 'yellow' }),
-      base({ chassis: 'sedan', fuel: 'tank', paint: 'yellow' }),
-      base({ chassis: 'sedan', fuel: 'big', paint: 'yellow' }),
+      base({ boost: 'can', paint: 'grape' }),
+      base({ boost: 'bottle', paint: 'grape' }),
+      base({ boost: 'big', paint: 'grape' }),
+      base({ chassis: 'sedan', boost: 'can', paint: 'yellow' }),
+      base({ chassis: 'sedan', boost: 'bottle', paint: 'yellow' }),
+      base({ chassis: 'sedan', boost: 'big', paint: 'yellow' }),
     ],
   },
   {
@@ -95,10 +95,10 @@ const ROWS: { name: string; cars: Spec[] }[] = [
   {
     name: 'boosters',
     cars: [
-      base({ booster: 'nitro', paint: 'yellow', nitro: 1 }),
+      base({ booster: 'rocket', paint: 'yellow', nitro: 1 }),
       base({ booster: 'kite', paint: 'yellow' }),
       base({ booster: 'kite', paint: 'yellow', kite: true }),
-      base({ chassis: 'pickup', booster: 'nitro', paint: 'lime', nitro: 0.7, accent: P2 }),
+      base({ chassis: 'pickup', booster: 'rocket', paint: 'lime', nitro: 0.7, accent: P2 }),
       base({ chassis: 'tub', booster: 'kite', paint: 'pink', kite: true, accent: P2 }),
     ],
   },
@@ -115,14 +115,14 @@ const ROWS: { name: string; cars: Spec[] }[] = [
   {
     name: 'full',
     cars: [
-      base({ wheels: 'monster', engine: 'jet', fuel: 'big', wing: 'glider', nose: 'cone', booster: 'kite', kite: true, throttle: 1, paint: 'orange', topper: 'duck' }),
-      base({ chassis: 'pickup', wheels: 'monster', engine: 'v8', fuel: 'big', wing: 'spoiler', nose: 'wedge', booster: 'nitro', nitro: 1, paint: 'red', topper: 'flag', accent: P2 }),
-      base({ chassis: 'tub', engine: 'jet', fuel: 'big', wing: 'glider', nose: 'cone', booster: 'kite', throttle: 0.7, paint: 'teal', topper: 'tophat' }),
-      base({ chassis: 'sedan', wheels: 'monster', engine: 'jet', fuel: 'big', wing: 'spoiler', nose: 'cone', booster: 'nitro', paint: 'grape', topper: 'cone', accent: P2 }),
-      base({ chassis: 'tub', wheels: 'monster', engine: 'v8', fuel: 'tank', wing: 'spoiler', nose: 'wedge', booster: 'nitro', paint: 'lime', topper: 'flag' }),
-      base({ chassis: 'sedan', wheels: 'tiny', engine: 'v8', fuel: 'jerry', wing: 'glider', nose: 'wedge', booster: 'kite', paint: 'pink', topper: 'duck' }),
-      base({ chassis: 'pickup', wheels: 'standard', engine: 'jet', fuel: 'tank', wing: 'glider', nose: 'cone', booster: 'kite', kite: true, paint: 'yellow', topper: 'tophat', accent: P2 }),
-      base({ chassis: 'kart', wheels: 'tiny', engine: 'v8', fuel: 'big', wing: 'spoiler', nose: 'wedge', booster: 'nitro', paint: 'blue', topper: 'flag' }),
+      base({ wheels: 'monster', engine: 'jet', boost: 'big', wing: 'glider', nose: 'cone', booster: 'kite', kite: true, throttle: 1, paint: 'orange', topper: 'duck' }),
+      base({ chassis: 'pickup', wheels: 'monster', engine: 'v8', boost: 'big', wing: 'spoiler', nose: 'wedge', booster: 'rocket', nitro: 1, paint: 'red', topper: 'flag', accent: P2 }),
+      base({ chassis: 'tub', engine: 'jet', boost: 'big', wing: 'glider', nose: 'cone', booster: 'kite', throttle: 0.7, paint: 'teal', topper: 'tophat' }),
+      base({ chassis: 'sedan', wheels: 'monster', engine: 'jet', boost: 'big', wing: 'spoiler', nose: 'cone', booster: 'rocket', paint: 'grape', topper: 'cone', accent: P2 }),
+      base({ chassis: 'tub', wheels: 'monster', engine: 'v8', boost: 'bottle', wing: 'spoiler', nose: 'wedge', booster: 'rocket', paint: 'lime', topper: 'flag' }),
+      base({ chassis: 'sedan', wheels: 'tiny', engine: 'v8', boost: 'can', wing: 'glider', nose: 'wedge', booster: 'kite', paint: 'pink', topper: 'duck' }),
+      base({ chassis: 'pickup', wheels: 'standard', engine: 'jet', boost: 'bottle', wing: 'glider', nose: 'cone', booster: 'kite', kite: true, paint: 'yellow', topper: 'tophat', accent: P2 }),
+      base({ chassis: 'kart', wheels: 'tiny', engine: 'v8', boost: 'big', wing: 'spoiler', nose: 'wedge', booster: 'rocket', paint: 'blue', topper: 'flag' }),
     ],
   },
 ];
@@ -130,11 +130,11 @@ const ROWS: { name: string; cars: Spec[] }[] = [
 ROWS.push({
   name: 'sideline',
   cars: [
-    base({ yaw: 0, wing: 'glider', booster: 'kite', kite: true, engine: 'jet', fuel: 'big', throttle: 0, paint: 'yellow', topper: 'flag' }),
+    base({ yaw: 0, wing: 'glider', booster: 'kite', kite: true, engine: 'jet', boost: 'big', throttle: 0, paint: 'yellow', topper: 'flag' }),
     base({ yaw: 0, pitch: -0.5, wing: 'glider', booster: 'kite', kite: true, paint: 'orange', topper: 'duck' }),
-    base({ yaw: 0, pitch: 0.35, chassis: 'sedan', engine: 'jet', fuel: 'big', booster: 'nitro', nitro: 1, paint: 'teal', topper: 'tophat' }),
-    base({ yaw: 0, chassis: 'pickup', wheels: 'monster', engine: 'v8', throttle: 1, fuel: 'tank', wing: 'glider', nose: 'cone', paint: 'red', accent: P2 }),
-    base({ yaw: 0, chassis: 'tub', wheels: 'tiny', engine: 'mower', throttle: 1, fuel: 'jerry', booster: 'kite', kite: true, paint: 'pink', topper: 'cone' }),
+    base({ yaw: 0, pitch: 0.35, chassis: 'sedan', engine: 'jet', boost: 'big', booster: 'rocket', nitro: 1, paint: 'teal', topper: 'tophat' }),
+    base({ yaw: 0, chassis: 'pickup', wheels: 'monster', engine: 'v8', throttle: 1, boost: 'bottle', wing: 'glider', nose: 'cone', paint: 'red', accent: P2 }),
+    base({ yaw: 0, chassis: 'tub', wheels: 'tiny', engine: 'mower', throttle: 1, boost: 'can', booster: 'kite', kite: true, paint: 'pink', topper: 'cone' }),
   ],
 });
 
@@ -218,7 +218,7 @@ startPreview({
     const params = new URLSearchParams(location.search);
     if (params.get('stress') === '1') {
       // Every performance combination with every topper: must build without throwing, NaN or oversize.
-      const slots = ['chassis', 'wheels', 'engine', 'fuel', 'wing', 'nose', 'booster', 'topper'] as const;
+      const slots = ['chassis', 'wheels', 'engine', 'boost', 'wing', 'nose', 'booster', 'topper'] as const;
       let count = 0;
       let bad = 0;
       let maxW = 0;
@@ -266,7 +266,7 @@ startPreview({
         return out;
       };
       for (const c of ['kart', 'tub', 'sedan', 'pickup']) {
-        const car = buildCarMesh({ ...defaultConfig(0), chassis: c, wheels: 'standard', engine: 'v8', fuel: 'tank' });
+        const car = buildCarMesh({ ...defaultConfig(0), chassis: c, wheels: 'standard', engine: 'v8', boost: 'bottle' });
         visibleBox(car.group).getSize(size);
         console.log(`[cars] ${c}: length ${size.x.toFixed(2)} m, height ${size.y.toFixed(2)} m, width ${size.z.toFixed(2)} m`);
         car.dispose();

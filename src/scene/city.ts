@@ -6,11 +6,14 @@ import * as THREE from 'three';
 import { COURSE, DECK_Y, ROAD_HW, pointAt, terrainBreaks, terrainY, type CoursePoint } from '../track';
 import { Crowd, type Spot } from './crowd';
 import { GeoBuilder, _e, _m4, _q, _s, _v, box, cyl, meshOf, obox, prism, rbox, shade, strip, type V3 } from './geo';
+import { buildKicker, type Kicker } from './kicker';
 import { BAND, LOMBARD_WALK, LOMBARD_X0, LOMBARD_X1, buildLombard } from './lombard';
 import { canvasTexture, makeRng } from './util';
 
 export interface City {
   group: THREE.Group;
+  /** The kicker at the end of the pier (it drops once the first car is off it). */
+  kicker: Kicker;
   /** Racers' positions, so the crowd cheers as they pass. */
   update(dt: number, t: number, cars?: { x: number; z: number }[]): void;
 }
@@ -52,7 +55,6 @@ const SEAWALL_T = 1.2;
 const PROMENADE_X = SHORE_X - 5;
 const MEDIAN: [number, number] = [EMB_X + 11, EMB_X + 15];
 const PIER_HALF = 8;
-const KICKER_HALF = 7;
 /** Lombard's crooked block replaces the plain street between Hyde and Leavenworth. */
 const CROOKED: [number, number] = [HYDE_X + RH, LEAV_X - RH];
 
@@ -500,7 +502,6 @@ const DOORS = ['#b3263a', '#1f3d6b', '#2f6b4f', '#7a4a2a', '#f2c14e', '#5b3a82',
 const ROOF = '#8d9199';
 const CONCRETE = '#dcd6c9';
 const DARK_WOOD = '#5c4633';
-const PINE = '#d6ab70';
 
 
 // ---------------------------------------------------------------------------------------------
@@ -1565,85 +1566,10 @@ export function buildCity(): City {
     cones.add(ring, '#ff5a2a');
   }
 
-  // --- Kicker ---------------------------------------------------------------------------------------
+  // --- Kicker: a hinged ramp on hydraulic rams (it drops once the first car is off it) ----------------
+  const kicker = buildKicker({ ply: plyMat, stripe: stripeMat, cone: coneMat });
+  group.add(kicker.group);
   const kx0 = KICK_X;
-  const kx1 = LIP.x;
-  const ky0 = DECK_Y;
-  const ky1 = LIP.y;
-  const kAng = LIP.angle;
-  const kLen = Math.hypot(kx1 - kx0, ky1 - ky0);
-  const kMid: V3 = [(kx0 + kx1) / 2, (ky0 + ky1) / 2, 0];
-  const nrm: V3 = [-Math.sin(kAng), Math.cos(kAng), 0];
-  const plyGeo = new THREE.BoxGeometry(kLen, 0.12, 2 * KICKER_HALF);
-  {
-    const p = plyGeo.getAttribute('position');
-    const uv = plyGeo.getAttribute('uv');
-    for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + kLen / 2) / 2.44, (p.getZ(i) + KICKER_HALF) / 1.22);
-  }
-  _m4.compose(
-    _v.set(kMid[0] - nrm[0] * 0.06, kMid[1] - nrm[1] * 0.06, 0),
-    _q.setFromEuler(_e.set(0, 0, kAng)),
-    _s.set(1, 1, 1),
-  );
-  plyGeo.applyMatrix4(_m4);
-  const ply = new THREE.Mesh(plyGeo, plyMat);
-  ply.name = 'kickerSurface';
-  ply.castShadow = true;
-  ply.receiveShadow = true;
-  group.add(ply);
-
-  // Striped edge beams along both sides and a fascia across the lip.
-  const stripes = new GeoBuilder();
-  const stripeBox = (c: V3, size: V3, rot: V3, uScale: number): void => {
-    const g = new THREE.BoxGeometry(size[0], size[1], size[2]);
-    const p = g.getAttribute('position');
-    const uv = g.getAttribute('uv');
-    for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + p.getZ(i)) * uScale, (p.getY(i) + size[1] / 2) / size[1]);
-    _m4.compose(_v.set(c[0], c[1], c[2]), _q.setFromEuler(_e.set(rot[0], rot[1], rot[2])), _s.set(1, 1, 1));
-    stripes.add(g, '#ffffff', _m4);
-  };
-  for (const z of [-KICKER_HALF - 0.12, KICKER_HALF + 0.12]) {
-    stripeBox([kMid[0] - nrm[0] * 0.15, kMid[1] - nrm[1] * 0.15, z], [kLen + 0.2, 0.62, 0.24], [0, 0, kAng], 1 / 0.9);
-  }
-  // Lip fascia (back of the ramp, facing the Bay) and the front toe board.
-  stripeBox([kx1 + 0.12, ky1 - 0.34, 0], [0.24, 0.68, 2 * KICKER_HALF + 0.48], [0, 0, 0], 1 / 0.9);
-  stripeBox([kx0 + 0.1, ky0 + 0.05, 0], [0.4, 0.1, 2 * KICKER_HALF], [0, 0, 0], 1 / 0.9);
-  // Timber frame under the ramp: posts, stringers and diagonal braces.
-  const rampY = (x: number): number => ky0 + (x - kx0) * Math.tan(kAng);
-  const postXs = [kx0 + 2.4, kx0 + 4.8, kx0 + 7.2, kx0 + 9.4, kx1 - 0.3];
-  for (const z of [-6.7, -3.35, 0, 3.35, 6.7]) {
-    for (const x of postXs) {
-      const top = rampY(x) - 0.14;
-      box(wood, x - 0.09, x + 0.09, ky0, top, z - 0.09, z + 0.09, PINE);
-    }
-    // Stringer following the ramp underside.
-    obox(wood, [kMid[0] - nrm[0] * 0.25, kMid[1] - nrm[1] * 0.25, z], [kLen, 0.2, 0.12], [0, 0, kAng], '#c99c5e');
-  }
-  for (const z of [-6.8, 6.8]) {
-    for (let i = 0; i < postXs.length - 1; i++) {
-      const xa = postXs[i];
-      const xb = postXs[i + 1];
-      const ya = ky0 + 0.2;
-      const yb2 = rampY(xb) - 0.3;
-      obox(wood, [(xa + xb) / 2, (ya + yb2) / 2, z], [Math.hypot(xb - xa, yb2 - ya), 0.14, 0.08], [0, 0, Math.atan2(yb2 - ya, xb - xa)], '#c99c5e');
-    }
-    box(wood, kx0, kx1, ky0, ky0 + 0.2, z - 0.06, z + 0.06, '#c99c5e');
-  }
-  // Yellow lane chevrons on the plywood.
-  for (const zc of [-3, 3]) {
-    for (let k = 0; k < 3; k++) {
-      const along = 1.6 + k * 1.3;
-      for (const sgn of [-1, 1]) {
-        const x = kx0 + along * Math.cos(kAng);
-        const y = ky0 + along * Math.sin(kAng) + 0.005;
-        const g = new THREE.BoxGeometry(0.9, 0.01, 0.22);
-        g.rotateY(sgn * 0.6);
-        g.translate(0.0, 0, sgn * 0.33);
-        _m4.compose(_v.set(x, y, zc), _q.setFromEuler(_e.set(0, 0, kAng)), _s.set(1, 1, 1));
-        cones.add(g, '#ffd21f', _m4);
-      }
-    }
-  }
 
   // --- Traffic cones --------------------------------------------------------------------------------
   const cone = (x: number, y: number, z: number): void => {
@@ -1686,7 +1612,6 @@ export function buildCity(): City {
   group.add(meshOf(metal, metalMat, 'metal', true, true));
   group.add(meshOf(wood, woodMat, 'pierTimber', true, true));
   group.add(meshOf(planks, plankMat, 'pierDeck', true, true));
-  group.add(meshOf(stripes, stripeMat, 'kickerStripes', true, true));
   group.add(meshOf(cones, coneMat, 'cones', true, true));
   group.add(meshOf(brick, brickMat, 'lombardBrick', false, true));
   group.add(meshOf(hedge, hedgeMat, 'hedges', true, true));
@@ -1709,7 +1634,7 @@ export function buildCity(): City {
     crowd.update(dt, t, cars);
   };
 
-  return { group, update };
+  return { group, kicker, update };
 }
 
 // ---------------------------------------------------------------------------------------------

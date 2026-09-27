@@ -14,7 +14,7 @@ export const SLOT_LABELS: Record<SlotId, string> = {
   chassis: 'Chassis',
   wheels: 'Wheels',
   engine: 'Engine',
-  fuel: 'Fuel tank',
+  boost: 'Boost',
   wing: 'Wing',
   nose: 'Nose',
   booster: 'Booster',
@@ -57,8 +57,8 @@ const CHASSIS: OptionDef[] = [
     id: 'sedan',
     name: 'Sedan',
     price: 15,
-    mass: 660,
-    cdA: 0.9,
+    mass: 620,
+    cdA: 0.76,
     length: 4.3,
     bodyWidth: 1.72,
     halfTrack: 0.8,
@@ -93,11 +93,10 @@ const WHEELS: OptionDef[] = [
     crr: 0.009,
     bumpLoss: 0.25,
     gearing: 0.82,
-    spinWaste: 1,
     wheelWidth: 0.13,
     brakeForce: 6500,
     spinResist: 0,
-    tagline: 'Free-rolling and light, but they spin away fuel, slide, and lose 25% at each track',
+    tagline: 'Free-rolling and light, but they spin, slide wide, and lose 25% at each track',
   },
   {
     id: 'standard',
@@ -108,7 +107,6 @@ const WHEELS: OptionDef[] = [
     crr: 0.021,
     bumpLoss: 0.07,
     gearing: 1,
-    spinWaste: 0.3,
     wheelWidth: 0.24,
     brakeForce: 9500,
     spinResist: 0.2,
@@ -123,8 +121,7 @@ const WHEELS: OptionDef[] = [
     crr: 0.024,
     bumpLoss: 0.005,
     cdA: 0.35,
-    gearing: 1.18,
-    spinWaste: 0.15,
+    gearing: 1.15,
     wheelWidth: 0.5,
     brakeForce: 13000,
     spinResist: 0.5,
@@ -139,8 +136,8 @@ const ENGINES: OptionDef[] = [
     price: 0,
     mass: 30,
     power: 5000,
-    topSpeed: 17,
-    tagline: 'Free, light and frugal, but only 5\u00a0kW: it putters along',
+    topSpeed: 16,
+    tagline: 'Free and light, but only 5\u00a0kW: it putters along',
   },
   {
     id: 'v8',
@@ -148,7 +145,7 @@ const ENGINES: OptionDef[] = [
     price: 20,
     mass: 250,
     power: 130_000,
-    topSpeed: 32,
+    topSpeed: 26,
     tagline: '130\u00a0kW of shove for $20, but wheel-driven: bad tyres just spin',
   },
   {
@@ -159,35 +156,37 @@ const ENGINES: OptionDef[] = [
     power: 140_000,
     jet: true,
     thrustCap: 12_000,
-    topSpeed: 33,
+    topSpeed: 27.5,
     tagline: 'Thrust ignores grip and pushes even in the air, but heavy and pricey',
   },
 ];
 
-const FUEL: OptionDef[] = [
+// Boost bottles: the meter starts full, refills from drifts and items, and whatever is left at the
+// lip is wasted. A bigger bottle banks more of it.
+const BOOSTS: OptionDef[] = [
   {
-    id: 'jerry',
-    name: 'Jerry can',
+    id: 'can',
+    name: 'Nitro can',
     price: 0,
-    mass: 10,
-    energy: 250_000,
-    tagline: 'Light and free: a whole race for a lawnmower, one burst for a V8',
+    mass: 8,
+    boost: 1.5,
+    tagline: 'Free and light, but only 1.5\u00a0s of boost: spend it before a drift refills it',
   },
   {
-    id: 'tank',
-    name: 'Standard',
+    id: 'bottle',
+    name: 'Bottle',
     price: 10,
-    mass: 60,
-    energy: 1_400_000,
-    tagline: '1.4\u00a0MJ: a race of careful gas plus the run to the kicker, for 60\u00a0kg',
+    mass: 25,
+    boost: 3,
+    tagline: '3\u00a0s of boost: enough to bank Lombard’s drifts for the run to the kicker',
   },
   {
     id: 'big',
-    name: 'Oversized',
+    name: 'Big bottle',
     price: 20,
-    mass: 230,
-    energy: 2_600_000,
-    tagline: '2.6\u00a0MJ to floor it all race, but 230\u00a0kg to haul and leftovers are wasted',
+    mass: 60,
+    boost: 4.5,
+    tagline: '4.5\u00a0s to boost all race and still dump plenty on the pier, but 60\u00a0kg',
   },
 ];
 
@@ -250,12 +249,12 @@ const NOSES: OptionDef[] = [
 const BOOSTERS: OptionDef[] = [
   { id: 'none', name: 'None', price: 0, mass: 0, tagline: 'Keep the money' },
   {
-    id: 'nitro',
-    name: 'Nitro',
+    id: 'rocket',
+    name: 'Launch rocket',
     price: 15,
     mass: 30,
-    nitroJ: 110_000,
-    tagline: '+110\u00a0kJ kick at the lip: huge on light cars, small on heavy ones',
+    nitroJ: 95_000,
+    tagline: 'Fires at the lip for a +95\u00a0kJ kick: huge on light cars, small on heavy ones',
   },
   {
     id: 'kite',
@@ -294,7 +293,7 @@ export const PARTS: Record<SlotId, PartOption[]> = {
   chassis: withSlot('chassis', CHASSIS),
   wheels: withSlot('wheels', WHEELS),
   engine: withSlot('engine', ENGINES),
-  fuel: withSlot('fuel', FUEL),
+  boost: withSlot('boost', BOOSTS),
   wing: withSlot('wing', WINGS),
   nose: withSlot('nose', NOSES),
   booster: withSlot('booster', BOOSTERS),
@@ -334,7 +333,7 @@ export function computeStats(config: CarConfig): CarStats {
   const chassis = getOption('chassis', config.chassis);
   const wheels = getOption('wheels', config.wheels);
   const engine = getOption('engine', config.engine);
-  const fuel = getOption('fuel', config.fuel);
+  const bottle = getOption('boost', config.boost);
   const booster = getOption('booster', config.booster);
   const nose = getOption('nose', config.nose);
 
@@ -369,7 +368,7 @@ export function computeStats(config: CarConfig): CarStats {
     mu: (wheels.mu ?? 0.9) * loadFactor(mass),
     traction: (wheels.mu ?? 0.9) * (chassis.gripMul ?? 1) * loadFactor(mass),
     power: engine.power ?? 0,
-    energy: fuel.energy ?? 0,
+    boostCap: bottle.boost ?? 0,
     isJet: engine.jet === true,
     thrustCap: engine.jet ? (engine.thrustCap ?? Infinity) : Infinity,
     // Wheel size is the gearing: small wheels rev the engine out sooner. A jet doesn't care.
@@ -389,7 +388,6 @@ export function computeStats(config: CarConfig): CarStats {
     ram: nose.ram ?? 'bull',
     jumpSpeed: jumpSpeedFor(mass),
     spinResist: wheels.spinResist ?? 0,
-    spinWaste: wheels.spinWaste ?? 0.5,
   };
 }
 

@@ -1,6 +1,6 @@
 // The race's moving cast, drawn from the simulation each frame: toy Waymos (lidar hats spinning,
 // hazards blinking, sometimes a protest cone on the hood), wobbly tourist figurines, the Hyde St
-// cable car, loose traffic cones, item boxes and poo.
+// cable car, loose traffic cones, item boxes, poo and seagulls.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { RaceSim } from '../sim/race';
@@ -31,6 +31,11 @@ function makeMats() {
     poo: new THREE.MeshPhysicalMaterial({ color: '#7a4a24', roughness: 0.25, clearcoat: 1, clearcoatRoughness: 0.1 }),
     eye: new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.3 }),
     pupil: new THREE.MeshStandardMaterial({ color: '#111111', roughness: 0.3 }),
+    gullWhite: new THREE.MeshPhysicalMaterial({ color: '#fbfbf8', roughness: 0.5, clearcoat: 0.4 }),
+    gullGrey: new THREE.MeshStandardMaterial({ color: '#98a2ae', roughness: 0.55 }),
+    gullTip: new THREE.MeshStandardMaterial({ color: '#23262c', roughness: 0.5 }),
+    beak: new THREE.MeshPhysicalMaterial({ color: '#ffc21f', roughness: 0.35, clearcoat: 0.6 }),
+    gullLeg: new THREE.MeshStandardMaterial({ color: '#ff8a3d', roughness: 0.5 }),
   };
 }
 const mats = (): NonNullable<typeof M> => (M ??= makeMats());
@@ -94,6 +99,13 @@ function makeGeos() {
     eye: new THREE.SphereGeometry(0.075, 10, 8),
     pupil: new THREE.SphereGeometry(0.038, 8, 6),
     fly: new THREE.SphereGeometry(0.035, 6, 4),
+    gullBody: new THREE.SphereGeometry(0.5, 16, 12),
+    gullHead: new THREE.SphereGeometry(0.2, 14, 10),
+    gullBeak: new THREE.ConeGeometry(0.07, 0.3, 10).rotateZ(-Math.PI / 2),
+    gullWing: new RoundedBoxGeometry(0.42, 0.04, 0.9, 2, 0.02),
+    gullWingTip: new RoundedBoxGeometry(0.3, 0.04, 0.34, 2, 0.02),
+    gullTail: new THREE.ConeGeometry(0.16, 0.4, 4).rotateZ(Math.PI / 2),
+    gullLeg: new THREE.CylinderGeometry(0.025, 0.025, 0.3, 6),
   };
 }
 const geos = (): NonNullable<typeof GEO> => (GEO ??= makeGeos());
@@ -270,6 +282,49 @@ function buildPoo(): PooView {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Seagulls (the item): a big cartoon gull, grey wings with black tips, a yellow beak. It flaps
+// along the course, then frantically on its victim's windscreen.
+
+interface GullView {
+  root: THREE.Group;
+  wings: [THREE.Group, THREE.Group];
+  legs: THREE.Group;
+}
+
+function buildGull(): GullView {
+  const m = mats();
+  const g = geos();
+  const root = new THREE.Group();
+  root.name = 'seagull';
+  const body = new THREE.Group();
+  body.scale.setScalar(1.6);
+  root.add(body);
+  const torso = mesh(g.gullBody, m.gullWhite, 0, 0, 0);
+  torso.scale.set(1, 0.42, 0.42);
+  body.add(torso);
+  body.add(mesh(g.gullHead, m.gullWhite, 0.45, 0.12, 0));
+  body.add(mesh(g.gullBeak, m.beak, 0.72, 0.1, 0));
+  for (const s of [1, -1]) {
+    body.add(mesh(g.eye, m.eye, 0.56, 0.2, s * 0.1));
+    body.add(mesh(g.pupil, m.pupil, 0.61, 0.21, s * 0.11));
+  }
+  body.add(mesh(g.gullTail, m.gullGrey, -0.55, 0.02, 0));
+  const wings: THREE.Group[] = [];
+  for (const s of [1, -1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(0.02, 0.08, s * 0.14);
+    pivot.add(mesh(g.gullWing, m.gullGrey, 0, 0, s * 0.45));
+    pivot.add(mesh(g.gullWingTip, m.gullTip, -0.04, 0, s * 1.02));
+    body.add(pivot);
+    wings.push(pivot);
+  }
+  const legs = new THREE.Group();
+  for (const s of [1, -1]) legs.add(mesh(g.gullLeg, m.gullLeg, 0.05, -0.28, s * 0.08));
+  body.add(legs);
+  return { root, wings: wings as [THREE.Group, THREE.Group], legs };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Item boxes: glossy rainbow cubes with a question mark, spinning and bobbing.
 
 function boxTexture(): THREE.CanvasTexture {
@@ -304,6 +359,7 @@ export class Actors {
   private poos = new Map<number, PooView>();
   private boxes = new Map<number, { root: THREE.Object3D; scale: number; seen: number }>();
   private cones = new Map<number, THREE.Object3D>();
+  private gulls = new Map<number, GullView>();
   /** Built once and kept: it only moves between rounds. */
   private cable: THREE.Group | null = null;
   private cableFaded = false;
@@ -340,6 +396,7 @@ export class Actors {
     this.poos.clear();
     this.boxes.clear();
     this.cones.clear();
+    this.gulls.clear();
   }
 
   update(dt: number, t: number, sim: RaceSim | null): void {
@@ -451,6 +508,27 @@ export class Actors {
       }
       v.position.set(c.x, c.y, c.z);
       v.rotation.set(c.rx, 0, c.rz);
+    }
+    // Seagulls: they come and go during a race.
+    for (const g of sim.gulls) {
+      let v = this.gulls.get(g.id);
+      if (!v) {
+        v = buildGull();
+        this.gulls.set(g.id, v);
+        this.group.add(v.root);
+      }
+      const perched = g.state === 'perch';
+      v.root.position.set(g.x, g.y + (perched ? Math.abs(Math.sin(t * 11 + g.id)) * 0.15 : Math.sin(t * 6 + g.id) * 0.1), g.z);
+      v.root.rotation.set(0, -g.heading, perched ? 0.25 : g.state === 'leave' ? 0.3 : -0.08);
+      const flap = Math.sin(t * (perched ? 26 : 13) + g.id) * (perched ? 0.95 : 0.6);
+      v.wings[0].rotation.x = -flap;
+      v.wings[1].rotation.x = flap;
+      v.legs.visible = perched;
+    }
+    for (const [id, v] of this.gulls) {
+      if (sim.gulls.some((g) => g.id === id)) continue;
+      this.group.remove(v.root);
+      this.gulls.delete(id);
     }
     // The cable car.
     if (sim.cable) {

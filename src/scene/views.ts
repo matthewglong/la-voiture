@@ -308,10 +308,13 @@ export class Views {
     this.rigs[1].setMode(mode);
   }
 
+  /** Racing alone: the shared view follows Player 1 and the screen never splits. */
+  solo = false;
+
   /** Jump straight to the goal poses and to one screen (after a reset or a cut). */
   snap(targets: ViewTarget[], t = 0): void {
     const aspect = this.camera.aspect;
-    this.shared.snap(targets, t, aspect, this.camera.fov);
+    this.shared.snap(this.solo ? [targets[0]] : targets, t, aspect, this.camera.fov);
     this.rigs.forEach((r, p) => r.snap([targets[p]], t, aspect / 2, this.camera.fov));
     this.split = 0;
     this.splitting = false;
@@ -331,26 +334,27 @@ export class Views {
   update(dt: number, t: number, targets: [ViewTarget, ViewTarget], racing: boolean): void {
     const aspect = this.w / this.h;
     const fov = this.camera.fov;
+    const live = this.solo ? [targets[0]] : targets;
     if (racing) {
       for (const p of [0, 1] as const) {
         const ph = targets[p].phase;
         this.rigs[p].setMode(ph === 'flight' || ph === 'splashed' || ph === 'dnf' ? (ph === 'dnf' ? 'stalled' : 'side') : 'chase');
       }
-      const flying = targets.some((c) => c.phase === 'flight' || c.phase === 'splashed');
-      const allDone = targets.every((c) => c.phase === 'flight' || c.phase === 'splashed' || c.phase === 'dnf');
-      const nearLip = targets.every(
+      const flying = live.some((c) => c.phase === 'flight' || c.phase === 'splashed');
+      const allDone = live.every((c) => c.phase === 'flight' || c.phase === 'splashed' || c.phase === 'dnf');
+      const nearLip = live.every(
         (c) => c.phase !== 'race' || (c.pos.x > C.lip.x - NEAR_LIP && Math.abs(c.pos.z) < 20),
       );
       this.shared.setMode(flying && (nearLip || allDone) ? 'side' : 'chase');
     }
-    this.shared.update(dt, t, targets, aspect, fov);
+    this.shared.update(dt, t, live, aspect, fov);
     this.rigs[0].update(dt, t, [targets[0]], aspect / 2, fov);
     this.rigs[1].update(dt, t, [targets[1]], aspect / 2, fov);
 
     // Should we be split? Only while racing: the rigs disagree about the mode, or the shared chase
     // can't fit both cars (checked on the real projection, with some slack before splitting).
     let want = false;
-    if (racing) {
+    if (racing && !this.solo) {
       const modes = [this.rigs[0].mode, this.rigs[1].mode];
       const sameMode = modes[0] === modes[1] || this.shared.mode === 'side';
       let fits = true;

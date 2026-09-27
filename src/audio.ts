@@ -4,7 +4,7 @@
 export type EngineKind = 'mower' | 'v8' | 'jet';
 
 export interface EngineVoice {
-  /** Speed in m/s and whether the engine is burning fuel. */
+  /** Speed in m/s and whether the gas is down. */
   set(speed: number, running: boolean, wheelspin: boolean): void;
   stop(): void;
 }
@@ -20,11 +20,18 @@ export interface SkidVoice {
   stop(): void;
 }
 
+export interface BoostVoice {
+  /** 0..1 how hard the boost is firing. */
+  set(level: number): void;
+  stop(): void;
+}
+
 export type HornKind = 'kart' | 'tub' | 'sedan' | 'pickup';
 
 const NOOP_ENGINE: EngineVoice = { set: () => {}, stop: () => {} };
 const NOOP_WIND: WindVoice = { set: () => {}, stop: () => {} };
 const NOOP_SKID: SkidVoice = { set: () => {}, stop: () => {} };
+const NOOP_BOOST: BoostVoice = { set: () => {}, stop: () => {} };
 
 export class Sound {
   private ctx: AudioContext | null = null;
@@ -487,6 +494,82 @@ export class Sound {
   /** A near miss: air whooshing past. */
   whoosh(pan = 0): void {
     this.burst(pan, 'bandpass', 500, 2800, 0.35, 0.22, 2);
+  }
+
+  /** A drift kicks off: a short rising tyre chirp. */
+  chirp(pan = 0): void {
+    this.burst(pan, 'bandpass', 1500, 2600, 0.18, 0.2, 8);
+  }
+
+  /** The boost bottle runs dry: a couple of coughs. */
+  sputter(pan = 0): void {
+    for (let i = 0; i < 3; i++) this.burst(pan, 'lowpass', 900, 200, 0.07, 0.22, 1, i * 0.09);
+  }
+
+  /** A boost item fills the bottle: a rising fizz and a chime (a bigger one for a full refill). */
+  refill(pan = 0, full = false): void {
+    this.burst(pan, 'highpass', 2500, 7000, full ? 0.6 : 0.35, 0.1);
+    const notes = full ? [784, 988, 1175, 1568, 1976] : [784, 1175, 1568];
+    notes.forEach((f, i) => this.panTone(pan, f, 0.14, 'triangle', 0.08, i * 0.05));
+  }
+
+  /** The kicker starts to drop: a warning klaxon over the hiss and whine of the rams letting go. */
+  rampDrop(): void {
+    for (let i = 0; i < 3; i++) {
+      this.panTone(0, 740, 0.15, 'square', 0.06, i * 0.34);
+      this.panTone(0, 587, 0.15, 'square', 0.06, i * 0.34 + 0.17);
+    }
+    this.burst(0, 'highpass', 5200, 1600, 1.8, 0.06, 0.8, 0.05);
+    this.panTone(0, 230, 2, 'sawtooth', 0.02, 0.05, 140);
+  }
+
+  /** A seagull: a couple of harsh, falling cries. */
+  squawk(pan = 0): void {
+    for (let i = 0; i < 2; i++) {
+      const at = i * 0.16;
+      this.panTone(pan, 1450 - i * 150, 0.13, 'sawtooth', 0.07, at, 820);
+      this.burst(pan, 'bandpass', 2600, 1400, 0.12, 0.06, 6, at);
+    }
+  }
+
+  /** The boost: a looping rocket roar whose level follows the flame. */
+  boost(pan: number): BoostVoice {
+    const ctx = this.ctx;
+    if (!ctx || !this.master) return NOOP_BOOST;
+    const n = this.noiseSource()!;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 700;
+    lp.Q.value = 0.8;
+    const hiss = ctx.createBiquadFilter();
+    hiss.type = 'bandpass';
+    hiss.frequency.value = 3800;
+    hiss.Q.value = 1.2;
+    const hissGain = ctx.createGain();
+    hissGain.gain.value = 0.35;
+    const g = ctx.createGain();
+    g.gain.value = 0;
+    const p = ctx.createStereoPanner();
+    p.pan.value = pan;
+    n.connect(lp).connect(g);
+    n.connect(hiss).connect(hissGain).connect(g);
+    g.connect(p).connect(this.master);
+    n.start();
+    let last = 0;
+    return {
+      set: (level) => {
+        const now = ctx.currentTime;
+        const l = Math.min(1, Math.max(0, level));
+        if (Math.abs(l - last) < 0.01) return;
+        last = l;
+        g.gain.setTargetAtTime(l * 0.5, now, 0.04);
+        lp.frequency.setTargetAtTime(500 + l * 900, now, 0.08);
+      },
+      stop: () => {
+        g.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+        setTimeout(() => n.stop(), 300);
+      },
+    };
   }
 
   /** Tyres sliding: a looping screech whose level follows the slide. */

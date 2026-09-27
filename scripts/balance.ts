@@ -114,12 +114,12 @@ for (const wind of WINDS) {
   const scored = ranked.get(wind)!;
   out(`## Top ${TOP_N}, ${windLabel(wind)}`);
   out(
-    `${pad('#', 3, true)}  ${pad('dist m', 7, true)}  ${pad('$', 3, true)}  ${pad('lip m/s', 7, true)}  ${pad('race s', 6, true)}  ${pad('air s', 5, true)}  ${pad('waste', 5, true)}  build`,
+    `${pad('#', 3, true)}  ${pad('dist m', 7, true)}  ${pad('$', 3, true)}  ${pad('lip m/s', 7, true)}  ${pad('race s', 6, true)}  ${pad('air s', 5, true)}  ${pad('boost', 5, true)}  build`,
   );
   scored.slice(0, TOP_N).forEach((sc, i) => {
     const r = sc.result;
     out(
-      `${pad(i + 1, 3, true)}  ${pad(r.distance.toFixed(1), 7, true)}  ${pad(sc.build.price, 3, true)}  ${pad(r.launchSpeed.toFixed(1), 7, true)}  ${pad(r.runTime.toFixed(1), 6, true)}  ${pad(r.flightTime.toFixed(1), 5, true)}  ${pad(Math.round(r.wastedFuelFrac * 100) + '%', 5, true)}  ${label(sc.build.config)}`,
+      `${pad(i + 1, 3, true)}  ${pad(r.distance.toFixed(1), 7, true)}  ${pad(sc.build.price, 3, true)}  ${pad(r.launchSpeed.toFixed(1), 7, true)}  ${pad(r.runTime.toFixed(1), 6, true)}  ${pad(r.flightTime.toFixed(1), 5, true)}  ${pad(Math.round(r.wastedBoostFrac * 100) + '%', 5, true)}  ${label(sc.build.config)}`,
     );
   });
   const dnfs = scored.filter((s) => s.result.dnf).length;
@@ -260,8 +260,8 @@ out('');
 // Glider wings spring open at the top of the arc and must visibly glide on a go-kart: a flatter
 // water entry and a longer flight than the same kart without wings.
 const GLIDE_REFS: Partial<CarConfig>[] = [
-  { chassis: 'kart', wheels: 'tiny', engine: 'mower', fuel: 'jerry', nose: 'wedge', booster: 'nitro' },
-  { chassis: 'kart', wheels: 'standard', engine: 'v8', fuel: 'big', nose: 'cone', booster: 'none' },
+  { chassis: 'kart', wheels: 'tiny', engine: 'mower', boost: 'can', nose: 'wedge', booster: 'rocket' },
+  { chassis: 'kart', wheels: 'standard', engine: 'v8', boost: 'big', nose: 'cone', booster: 'none' },
 ];
 const glideFails: string[] = [];
 out('## Glide (calm air): go-kart with glider wings vs the same kart with none');
@@ -289,11 +289,11 @@ const pace = (pred: (c: CarConfig) => boolean): number[] =>
     .map((sc) => sc.result.runTime)
     .sort((a, b) => a - b);
 const pct = (a: number[], f: number): number => a[Math.min(a.length - 1, Math.floor(a.length * f))];
-const sensible = pace((c) => c.engine !== 'mower' && c.fuel !== 'jerry');
-const weak = pace((c) => c.engine === 'mower' || c.fuel === 'jerry');
+const sensible = pace((c) => c.engine !== 'mower');
+const weak = pace((c) => c.engine === 'mower');
 out('## Race pacing (calm air, the autopilot)');
-out(`V8 or jet with a Standard or Oversized tank (${sensible.length} builds): median ${pct(sensible, 0.5).toFixed(1)} s, 90% within ${pct(sensible, 0.9).toFixed(1)} s`);
-out(`Lawnmower or jerry-can builds (${weak.length} builds): median ${pct(weak, 0.5).toFixed(1)} s, 90% within ${pct(weak, 0.9).toFixed(1)} s`);
+out(`V8 or jet builds (${sensible.length}): median ${pct(sensible, 0.5).toFixed(1)} s, 90% within ${pct(sensible, 0.9).toFixed(1)} s`);
+out(`Lawnmower builds (${weak.length}): median ${pct(weak, 0.5).toFixed(1)} s, 90% within ${pct(weak, 0.9).toFixed(1)} s`);
 out('');
 
 // All-$0 build.
@@ -302,7 +302,7 @@ const zeroResults = WINDS.map((w) => ({ wind: w, r: simulateToEnd(computeStats(z
 out(`## All-$0 build (${label(zero)})`);
 for (const { wind, r } of zeroResults) {
   out(
-    `${pad(windLabel(wind), 20)} ${r.dnf ? 'DNF' : `${r.distance.toFixed(1)} m`}  lip ${r.launchSpeed.toFixed(1)} m/s, race ${r.runTime.toFixed(1)} s, air ${r.flightTime.toFixed(1)} s, wasted ${Math.round(r.wastedFuelFrac * 100)}% fuel`,
+    `${pad(windLabel(wind), 20)} ${r.dnf ? 'DNF' : `${r.distance.toFixed(1)} m`}  lip ${r.launchSpeed.toFixed(1)} m/s, race ${r.runTime.toFixed(1)} s, air ${r.flightTime.toFixed(1)} s, ${Math.round(r.wastedBoostFrac * 100)}% boost left`,
   );
 }
 out('');

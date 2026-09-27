@@ -4,7 +4,7 @@ export const SLOT_ORDER = [
   'chassis',
   'wheels',
   'engine',
-  'fuel',
+  'boost',
   'wing',
   'nose',
   'booster',
@@ -19,7 +19,7 @@ export const PERFORMANCE_SLOTS: readonly SlotId[] = [
   'chassis',
   'wheels',
   'engine',
-  'fuel',
+  'boost',
   'wing',
   'nose',
   'booster',
@@ -73,10 +73,8 @@ export interface PartOption {
   topSpeed?: number;
   /** Wheels: gearing, which scales a wheel-driven engine's top speed. */
   gearing?: number;
-  /** Wheels: share of the power they can't put down that is burned anyway (wheelspin). */
-  spinWaste?: number;
-  /** Fuel tank: energy (J). */
-  energy?: number;
+  /** Boost bottle: seconds of boost it holds. */
+  boost?: number;
   /** Booster: kinetic energy added at the lip (J). */
   nitroJ?: number;
   /** Booster: kite that opens at the lip. */
@@ -126,15 +124,13 @@ export interface CarStats {
   traction: number;
   /** Engine power (W). */
   power: number;
-  /** Fuel energy (J). */
-  energy: number;
+  /** Seconds of boost the bottle holds (the meter starts full and refills from drifts and items). */
+  boostCap: number;
   isJet: boolean;
   /** Maximum jet thrust (N). Infinity for wheel-driven engines. */
   thrustCap: number;
   /** Speed at which the engine stops pushing (m/s). Gravity can still take the car past it. */
   topSpeed: number;
-  /** Share of the power the tyres can't use that is burned anyway (wheelspin). */
-  spinWaste: number;
   crr: number;
   bumpLoss: number;
   nitroJ: number;

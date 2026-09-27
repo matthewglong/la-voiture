@@ -1,10 +1,10 @@
 // Autopilot: a racing line through the course, a speed plan from the car's grip and brakes,
-// dodging traffic, using items, and saving fuel for the run to the kicker. It drives the CPU car,
-// the balance check and the automated tests. Deterministic; no Three.js or DOM imports.
+// dodging traffic, using items, and saving the boost for the run to the kicker. It drives the CPU
+// car, the balance check and the automated tests. Deterministic; no Three.js or DOM imports.
 import { COURSE, DS, indexAt, locate, pointAt, toWorld, type Course, type CoursePoint } from '../track';
 import type { PlayerIndex } from '../types';
 import { G, RHO } from './physics';
-import { type CarInput, type RaceCar, type RaceSim } from './race';
+import { CORNER_GRIP, DRIFT_GRIP, DRIFT_MIN, MAX_YAW, OVERSTEER, TOPUP, type CarInput, type ItemKind, type RaceCar, type RaceSim } from './race';
 
 interface Line {
   /** Lateral offset of the line at each course sample. */
@@ -100,9 +100,55 @@ export function racingLine(c: Course = COURSE): Line {
   return line;
 }
 
+/** A corner worth drifting: where it is along the course, which way it turns (+1 right), and its
+ *  tightest and average radius on the racing line. */
+export interface DriftCorner {
+  s0: number;
+  s1: number;
+  dir: number;
+  rMin: number;
+  rAvg: number;
+}
+
+const cornerCache = new Map<Course, DriftCorner[]>();
+
+/** The big corners of the racing line (turning 50° or more): Hyde St's two and Lombard's hairpins. */
+export function driftCorners(c: Course = COURSE): DriftCorner[] {
+  const cached = cornerCache.get(c);
+  if (cached) return cached;
+  const line = racingLine(c);
+  const P = c.points;
+  const out: DriftCorner[] = [];
+  let i = 0;
+  while (i < P.length) {
+    if (line.k[i] <= 1 / 45) {
+      i++;
+      continue;
+    }
+    let j = i;
+    let kMax = 0;
+    // A corner, allowing short gaps where the line's curvature dips (one bend drawn as two).
+    while (j < P.length && (line.k[j] > 1 / 45 || (j + 12 < P.length && line.k[j + 12] > 1 / 45 && line.k[j + 6] > 1 / 90))) {
+      kMax = Math.max(kMax, line.k[j]);
+      j++;
+    }
+    const turn = wrap(P[Math.min(j, P.length - 1)].heading - P[i].heading);
+    const s1 = P[Math.min(j, P.length - 1)].s;
+    if (Math.abs(turn) >= (50 * Math.PI) / 180) out.push({ s0: P[i].s, s1, dir: Math.sign(turn), rMin: 1 / kMax, rAvg: (s1 - P[i].s) / Math.abs(turn) });
+    i = j + 1;
+  }
+  cornerCache.set(c, out);
+  return out;
+}
+
+/** How hard (share of the slide's grip) the CPU leans on a drift: the rest is room to correct. */
+const BOT_BITE = 0.8;
+
 export interface BotOptions {
   /** 1 = the full speed plan; lower drives more cautiously. */
   skill?: number;
+  /** Drift through the big corners (brake tap on the way in) and spend the boost it banks. */
+  drift?: boolean;
   /** Leans on the other car when alongside (the CPU opponent). */
   aggression?: number;
   /** Dodge traffic and tourists (off for the empty-course balance check). */
@@ -127,6 +173,7 @@ export class Bot {
   private readonly opt: Required<BotOptions>;
   private readonly tmp: CoursePoint;
   private lastItem = false;
+  private lastSwap = false;
   private dodgeD: number | null = null;
   /** Seconds going nowhere with the gas on, and seconds left of backing out. */
   private stuckT = 0;
@@ -137,6 +184,10 @@ export class Bot {
   private turnT = 0;
   private turnFlipped = false;
   private backSteer = 1;
+  /** Seconds left of the brake tap that starts a drift, and the way it turns. */
+  private tapT = 0;
+  private tapDir = 0;
+  private readonly corners: DriftCorner[];
 
   constructor(sim: RaceSim, p: PlayerIndex, opts: BotOptions = {}) {
     this.sim = sim;
@@ -146,10 +197,18 @@ export class Bot {
       aggression: opts.aggression ?? 0,
       dodge: opts.dodge ?? true,
       items: opts.items ?? true,
+      drift: opts.drift ?? false,
     };
     this.line = racingLine(sim.course);
+    this.corners = this.opt.drift ? driftCorners(sim.course) : [];
     this.tmp = { ...sim.course.points[0] };
     this.plan = this.speedPlan();
+  }
+
+  /** The drift corner the car is in, or about to enter (within `ahead` metres). */
+  private cornerAt(s: number, ahead: number): DriftCorner | null {
+    for (const dc of this.corners) if (s > dc.s0 - ahead && s < dc.s1) return dc;
+    return null;
   }
 
   /** Top speed at every sample the car can take the line at, braking in time for what's next. */
@@ -161,11 +220,16 @@ export class Bot {
     const v = new Float64Array(n);
     const aDown = (0.5 * RHO * k.downforce) / k.mass;
     const safety = 0.92 * this.opt.skill;
+    const muC = k.mu * CORNER_GRIP;
     for (let i = 0; i < n; i++) {
       const kap = Math.max(this.line.k[i], 1e-4);
       // mu (g + aDown v^2) = kap v^2  ->  v^2 = mu g / (kap - mu aDown)
-      const den = kap - k.mu * aDown;
-      let lim = den > 1e-6 ? Math.sqrt((k.mu * G) / den) : 60;
+      const den = kap - muC * aDown;
+      let lim = den > 1e-6 ? Math.sqrt((muC * G) / den) : 60;
+      // Drifting through a big corner: the slide's grip, with a margin to correct in, round the
+      // corner's average bend (a drift sweeps wide round the line's tightest kink).
+      const dc = this.cornerAt(P[i].s, 0);
+      if (dc) lim = Math.max(lim, Math.sqrt(k.mu * DRIFT_GRIP * BOT_BITE * G * dc.rAvg));
       // Can't turn tighter than the steering allows at any speed.
       if (kap > 1 / k.turnRadius) lim = Math.min(lim, 3);
       v[i] = Math.min(60, lim * safety);
@@ -191,7 +255,7 @@ export class Bot {
     const sim = this.sim;
     const c = sim.course;
     const car = sim.cars[this.p];
-    const out: CarInput = { throttle: 0, brake: 0, steer: 0, item: false };
+    const out: CarInput = { throttle: 0, brake: 0, steer: 0, item: false, boost: false, swap: false };
     if (car.phase !== 'race') return out;
     const k = car.stats;
     const v = Math.hypot(car.vx, car.vz);
@@ -244,9 +308,8 @@ export class Bot {
     let ang = wrap(Math.atan2(dz, dx) - car.heading);
     if (fwd < -0.5) ang = wrap(ang + Math.PI);
     const kappa = (2 * Math.sin(ang)) / dist;
-    const mu = k.mu;
-    const gripAcc = mu * G;
-    const wMax = Math.min(Math.max(Math.abs(fwd), 0.5) / k.turnRadius, (gripAcc / Math.max(Math.abs(fwd), 2)) * 1.4, 3.3);
+    const gripAcc = k.mu * CORNER_GRIP * G;
+    const wMax = Math.min(Math.max(Math.abs(fwd), 0.5) / k.turnRadius, (gripAcc / Math.max(Math.abs(fwd), 2)) * OVERSTEER, MAX_YAW);
     out.steer = clamp((kappa * Math.max(Math.abs(fwd), 1)) / Math.max(wMax, 0.05), -1, 1);
     // Facing backwards (after a knock, or a landing the wrong way round): turn round. The first
     // swing takes the nose away from the nearer wall (the short way round can be straight into it).
@@ -266,15 +329,18 @@ export class Bot {
       const stop = Math.sqrt(Math.max(0, 2 * 5 * (gap - 3)));
       vPlan = Math.min(vPlan, stop);
     }
-    const finalS = c.marks.embS0 - 30;
-    const reserve = Math.min(k.energy * 0.55, k.power * 3.4);
-    const canBurn = car.s >= finalS || car.fuelJ > reserve || v < 5;
-    const cruise = car.s >= finalS ? Infinity : 21;
     if (v > vPlan + 0.6) {
       out.brake = clamp((v - vPlan) / 2.5, 0.3, 1);
-    } else if (v < Math.min(vPlan, cruise) - 0.4 && canBurn) {
+      // Hard braking with the wheel turned throws the car into a drift: brake gently in a turn.
+      if (Math.abs(out.steer) > 0.5) out.brake = Math.min(out.brake, 0.5);
+    } else if (v < vPlan - 0.4) {
       out.throttle = 1;
     }
+    this.steerDrift(car, out, v, tgt);
+    // --- Boost: dump the bottle on the run to the kicker (whatever is left at the lip is wasted),
+    // starting just soon enough to empty it at the lip.
+    const toLip = c.length - car.s;
+    if (car.boost > 0 && car.s > c.marks.lombardS1 && toLip / Math.max(v, 5) <= car.boost + 0.4) out.boost = true;
     const dtStep = 1 / 120;
     if (this.turnDir !== 0) {
       // A three-point turn: forward on full lock until the nose is about to meet an edge (or the
@@ -317,22 +383,77 @@ export class Bot {
       }
     } else this.stuckT = 0;
 
-    // --- Items.
-    if (this.opt.items && car.item) {
-      let use = false;
+    // --- Items: use the selected one when it's worth it; if only the other one is, swap to it.
+    if (this.opt.items && car.items.length) {
       const rival = sim.cars.find((o) => o !== car && o.phase === 'race');
-      if (car.item === 'grit') use = !!threat || car.s > c.marks.pierS0;
-      else if (car.item === 'jump') {
-        const onRamp = car.s > c.marks.kickerS0 + 3;
-        const tHit = threat ? (threat.s - car.s - k.length / 2) / Math.max(v, 1) : Infinity;
-        use = onRamp || (blocked && tHit < 0.45 && tHit > 0.1);
-      } else if (car.item === 'poo') {
-        use = (rival !== undefined && rival.s < car.s - 3 && rival.s > car.s - 30) || car.s > c.marks.pierS0 + 10;
-      }
-      if (use && !this.lastItem) out.item = true;
+      const worth = (it: ItemKind): boolean => {
+        if (it === 'grit') return !!threat || car.s > c.marks.pierS0;
+        if (it === 'jump') {
+          const onRamp = car.s > c.marks.kickerS0 + 3;
+          const tHit = threat ? (threat.s - car.s - k.length / 2) / Math.max(v, 1) : Infinity;
+          return onRamp || (blocked && tHit < 0.45 && tHit > 0.1);
+        }
+        if (it === 'poo') return (rival !== undefined && rival.s < car.s - 3 && rival.s > car.s - 30) || car.s > c.marks.pierS0 + 10;
+        // A refill only pays if there's road left to burn it on before the lip.
+        const runway = (c.length - car.s) / Math.max(v, 5);
+        if (it === 'topup') return car.boostFrac < 0.45 && runway > car.boost + TOPUP * k.boostCap + 0.5;
+        if (it === 'refill') return car.boostFrac < 0.15 && runway > k.boostCap + 0.5;
+        // Seagull: at a rival that's ahead (or, late on, behind), while they're still well short of the lip.
+        return rival !== undefined && rival.s < c.marks.kickerS0 - 30 && (rival.s > car.s + 4 || car.s > c.marks.embS0 - 40);
+      };
+      const sel = car.items[car.sel];
+      const other = car.items.length > 1 ? car.items[1 - car.sel] : null;
+      if (worth(sel)) out.item = !this.lastItem;
+      else if (other && worth(other) && !this.lastSwap) out.swap = true;
     }
     this.lastItem = out.item;
+    this.lastSwap = out.swap === true;
     return out;
+  }
+
+  /**
+   * The CPU drifts the big corners: a brake tap at the way in with the wheel turned, then the wheel
+   * sets the slide's arc so the direction of travel follows the racing line (a drift steers by its
+   * arc, not its nose), unwinding as the corner opens out. With a drift banking boost, a full
+   * bottle is spent on the straights rather than wasted.
+   */
+  private steerDrift(car: RaceCar, out: CarInput, v: number, tgt: { x: number; z: number }): void {
+    if (!this.opt.drift || this.turnDir !== 0 || this.backT > 0) return;
+    const k = car.stats;
+    const dtStep = 1 / 120;
+    const dc = this.cornerAt(car.s, 2 + v * 0.14);
+    if (car.drift === 0) {
+      if (this.tapT > 0) {
+        this.tapT -= dtStep;
+        out.brake = 1;
+        out.steer = this.tapDir;
+      } else if (dc && car.grounded && car.s < dc.s0 + 2 && v > DRIFT_MIN + 2 && car.driftCool <= 0) {
+        // The tap has to be a fresh press: let a held brake off first.
+        if (car.brakeTap === Infinity) {
+          this.tapT = 0.08;
+          this.tapDir = dc.dir;
+          out.brake = 1;
+          out.steer = dc.dir;
+        } else out.brake = Math.min(out.brake, 0.4);
+      }
+    } else {
+      this.tapT = 0;
+      // Steer the direction of travel at the target: the arc it needs sets how hard to bite.
+      const dx = tgt.x - car.x;
+      const dz = tgt.z - car.z;
+      const dist = Math.max(1, Math.hypot(dx, dz));
+      const e = wrap(Math.atan2(dz, dx) - Math.atan2(car.vz, car.vx));
+      const want = ((2 * Math.sin(e)) / dist) * v * car.drift;
+      const bite = (want * Math.max(v, 4)) / (k.mu * DRIFT_GRIP * G);
+      out.steer = car.drift * clamp((bite - 0.55) / 0.45, -1, 1);
+      if (out.brake > 0) out.brake = Math.min(out.brake, 0.6);
+    }
+    // Drifts fill the bottle, so before a run of them leave it room: spend down to half on a
+    // straight (where the push isn't wasted past the engine's reach), never into a corner.
+    const toLip = this.sim.course.length - car.s;
+    const straight = !this.cornerAt(car.s, 25 + v) && car.drift === 0 && car.grounded;
+    const reach = (k.topSpeed + 0.3 * this.sim.wind) * 0.95;
+    if (car.boostFrac > 0.5 && straight && v < reach && car.s < this.sim.course.marks.lombardS1 && toLip > 150) out.boost = true;
   }
 
   /** The nearest thing ahead on or near the car's path. */
@@ -377,7 +498,7 @@ export class Bot {
 /** Race one car on an empty course with the autopilot (the balance check and `predict()`). */
 export function driveToEnd(sim: RaceSim, bots: Bot[], maxSteps = 120 * 200): void {
   sim.start();
-  const inputs: CarInput[] = sim.cars.map(() => ({ throttle: 0, brake: 0, steer: 0, item: false }));
+  const inputs: CarInput[] = sim.cars.map(() => ({ throttle: 0, brake: 0, steer: 0, item: false, boost: false, swap: false }));
   for (let i = 0; i < maxSteps && !sim.done; i++) {
     for (const b of bots) inputs[b.p] = b.decide();
     sim.step(inputs);

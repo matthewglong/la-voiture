@@ -1,5 +1,78 @@
 # Verification
 
+## Keys and the dropping kicker pass
+
+New keys for one player and for two, and a kicker that drops once the first car is off it (see
+"Keys, and a kicker worth racing to" in `DECISIONS.md`). Checked with Node simulations and scripted
+Playwright runs against `npm run dev` (Chromium on the real GPU, ANGLE/Metal):
+
+- **Keys, pressed for real in the browser (30 checks, all passing).** Two players: W and ↑ are the
+  gas, Left Shift and P boost (and stop on release), Tab and O swap the held items, Left Ctrl and ;
+  use them; the old keys (Space, Enter, Right Shift, Q, E, /, .) do nothing. With Ctrl held, the
+  other player's ↑ and Player 1's own S still drive, and Ctrl+S and Ctrl+D never reach the browser.
+  Tab leaves the focus on the page. Against the CPU: the arrows drive, either Shift boosts, Tab
+  swaps, Space uses the item, Ctrl does nothing, and WASD drives too. The HUD's key chips, the
+  garage's race-keys strip (it switches when the CPU is turned on) and the countdown card show the
+  keys in use. (The macOS Ctrl+arrow and Windows Ctrl+W conflicts are the operating system's and
+  can't be seen from a page; they're documented, not tested.)
+- **The kicker in the browser (9 checks).** Both cars on the autopilot with the same build, Player 2
+  held on the grid for 4 s: the ramp starts dropping at the first launch, the leader's card says FULL
+  RAMP!, the chaser's says THE RAMP IS DROPPING! and carries the live strip (24°, then 19° on the
+  pier), the leader went off at 25° and flew 139.5 m, the chaser at 14° and flew 93.9 m, the results
+  list both angles, and a rematch stands the kicker back up. 0 console errors or warnings.
+- **Fuzz:** 120 two-car races, random affordable builds and winds, traffic, items and HYPE, both cars
+  drifting on the autopilot: no NaNs, no DNFs, one drop per race, the first car off at exactly 25°
+  and the second at 25° − 2°/s × the gap (never below 12°), and grounded cars always on the moving
+  ramp. Edge cases: a car already on the ramp when it starts to drop rides down with it (the largest
+  height change in a step 7.7 cm) and leaves along the lowered slope; a car in the air over the
+  ramp comes down and launches; poo on the ramp goes down with it; the pier crew's push leaves from
+  the lowered lip at 12°; a lone car never sees it move.
+- **Tuning:** the drop rate was chosen from mirror matches and mixed-build races under five settings
+  (the table in `DECISIONS.md`).
+- `npm run balance` passes, with a report identical to the previous one (a lone car always gets the
+  full ramp).
+
+`ramp/` holds the walkthrough (JPEG, 1280×720; the kicker close-ups at 1100×620 are from a throwaway
+preview page with the game's lighting):
+
+| File | Shows |
+|---|---|
+| `ramp-01-garage-keys-two-players` | The garage's race-keys strip for two players |
+| `ramp-02-countdown-one-player` | Against the CPU: the arrows, Shift, Space and Tab, and the kicker tip |
+| `ramp-03-race-hud-two-players` | Mid-race: SHIFT and CTRL on Player 1's card, P and ; on Player 2's |
+| `ramp-04-leader-off-full-ramp` | The leader launches (FULL RAMP!); the chaser is told to hurry |
+| `ramp-05-chaser-ramp-dropping` | The chaser onto the Embarcadero with the ramp down to 19° |
+| `ramp-06-two-arcs` | The leader's arc off 25° and the chaser's lower one off 14° |
+| `ramp-07-results` | Both angles in the results |
+| `ramp-08-kicker-25deg` | The kicker at its full 25°, on its rams |
+| `ramp-09-kicker-12deg-lamps` | Down at 12°, lamps lit |
+| `ramp-10-kicker-rams` | Underneath: the steel frame and the hydraulic rams |
+
+## Drift, boost and solo pass
+
+Handling, a boost bottle in place of fuel, two item slots with three new items, and solo training
+(see "Drift, boost and solo" in `DECISIONS.md`). Checked with Node simulations and scripted
+Playwright runs against `npm run dev` (Chromium on the real GPU, ANGLE/Metal):
+
+- **The cornering problem, reproduced and fixed.** Scripted keyboard drivers (full lock or nothing,
+  a 0.15 s reaction) hit the Hyde St tyre wall at about 25 m/s with every build before; after,
+  drivers who brake to a sensible speed or tap the brake to drift get round (drifters fastest on the
+  light cars), and a newcomer who never brakes is the slowest instead of the fastest. In the browser,
+  real key events (W, D, a 110 ms tap of S) put the kart into a drift at 25 m/s through the corner.
+- **Boost, items, swapping and seagulls on the keys:** Shift fires the boost (the gauge burns, the
+  flames show, the meter drains), Q switches the selected item, Space uses it, and a seagull hunts
+  down and perches on the CPU 110 m back.
+- **Fuzz:** 60 two-car races with traffic and items, both cars on the drifting autopilot: no NaNs,
+  no DNFs, no rescues; every item kind rolled and used; 87 swaps, 17 seagulls landed, 2 shooed.
+- **Every mode to the results with 0 console errors or warnings:** two players on the autopilot
+  (random builds), the CPU, a tailwind jet against a pickup, solo from each of the four starts, a
+  solo retry and back to the garage.
+- **Solo:** the ghost is recorded and raced on a retry (2,636 frames for a 42 s run), splits compare
+  against the best, and each start is clear at GO (the Hyde St start first put the car right behind
+  the cable car; now it waits at the far end of its line).
+- `npm run balance` passes (report in `DECISIONS.md`).
+
+
 ## Race pass (driving the cars down the city)
 
 The game became a race: steering, throttle and brakes, items, traffic, collisions, Lombard St and a

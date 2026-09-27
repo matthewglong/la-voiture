@@ -16,8 +16,10 @@ export interface CarMesh {
   setKiteOpen(open: boolean): void;
   /** 0..1 engine effort: jet afterburner flame length/brightness, V8/mower exhaust flicker. */
   setThrottle(level: number): void;
-  /** 0..1 nitro flame burst from the nitro bottles' nozzles. No-op without nitro. */
+  /** 0..1 launch-rocket flame burst from the rocket's nozzles (at the lip). No-op without one. */
   setNitro(level: number): void;
+  /** 0..1 boost flame from the rear nozzles (the launch rocket's, when fitted). */
+  setBoost(level: number): void;
   /** Glider wings: folded back along the body (false) or spread (true); animated unless instant. */
   setWingsOpen(open: boolean, instant?: boolean): void;
   /** Idle animation (flag flutter, kite sway, flame flicker). */
@@ -118,8 +120,7 @@ function makeMaterials() {
       roughness: 0.25,
     }),
     lamp: new THREE.MeshStandardMaterial({ color: 0xfff6c8, emissive: 0xffe28a, emissiveIntensity: 0.8 }),
-    jerryRed: physical(0xc92b1f, { roughness: 0.45, clearcoat: 0.6 }),
-    propane: physical(0xf3f0e7, { roughness: 0.3 }),
+    boostBlue: physical(0x1f63e8, { roughness: 0.3, clearcoat: 0.8 }),
     nitroBlue: physical(0x1f63e8, { metalness: 0.3, roughness: 0.22 }),
     mowerGreen: physical(0x2fa24a, { roughness: 0.32 }),
     red: physical(0xd8262e, { roughness: 0.3 }),
@@ -192,7 +193,8 @@ function flagMat(hex: string): THREE.MeshStandardMaterial {
 
 interface Flame {
   obj: THREE.Object3D;
-  kind: 'engine' | 'nitro';
+  /** What drives it: the throttle, the launch rocket (which also fires with the boost), or the boost. */
+  kind: 'engine' | 'nitro' | 'boost';
   baseLen: number;
   gainLen: number;
   width: number;
@@ -285,7 +287,7 @@ function addFlame(
   x: number,
   y: number,
   z: number,
-  kind: 'engine' | 'nitro',
+  kind: Flame['kind'],
   baseLen: number,
   gainLen: number,
   width: number,
@@ -295,8 +297,9 @@ function addFlame(
   g.position.set(x, y, z);
   g.rotation.set(rot.rx ?? 0, rot.ry ?? 0, rot.rz ?? 0);
   const m = M();
-  const outer = new THREE.Mesh(flameGeo(), kind === 'nitro' ? m.nitroOuter : m.flameOuter);
-  const core = new THREE.Mesh(flameGeo(), kind === 'nitro' ? m.nitroCore : m.flameCore);
+  const blue = kind !== 'engine';
+  const outer = new THREE.Mesh(flameGeo(), blue ? m.nitroOuter : m.flameOuter);
+  const core = new THREE.Mesh(flameGeo(), blue ? m.nitroCore : m.flameCore);
   core.scale.set(0.5, 0.45, 0.45);
   outer.renderOrder = 2;
   core.renderOrder = 3;
@@ -636,10 +639,10 @@ function tubShellGeo(inner: boolean): THREE.BufferGeometry {
   });
 }
 
-function buildTub(ctx: Ctx, fuelId: string): Layout {
+function buildTub(ctx: Ctx, bottleId: string): Layout {
   const m = M();
   const b = ctx.body;
-  const bigFront = fuelId === 'big';
+  const bigFront = bottleId === 'big';
   const frontExt = bigFront ? 1.8 : 1.05;
   const rearExt = -1.55;
   for (const z of [0.28, -0.28]) {
@@ -863,22 +866,22 @@ function buildJet(ctx: Ctx, x: number, y: number, len: number, pylonY: number, p
 }
 
 // ---------------------------------------------------------------------------------------------
-// Fuel tanks
+// Boost bottles (nitrous blue): a can, a bottle, a big bottle
 
-function buildJerry(ctx: Ctx, x: number, y: number, z: number): void {
+function buildCan(ctx: Ctx, x: number, y: number, z: number): void {
   const m = M();
   const b = ctx.body;
   const g = new THREE.Group();
   g.position.set(x, y, z);
   b.add(g);
-  add(g, rbox(0.3, 0.42, 0.14, 0.035), m.jerryRed, 0, 0.21, 0);
+  add(g, rbox(0.3, 0.42, 0.14, 0.035), m.boostBlue, 0, 0.21, 0);
   for (const s of [1, -1]) {
-    add(g, rbox(0.3, 0.03, 0.01, 0.005), m.jerryRed, 0, 0.21, s * 0.072, { rz: 0.95 });
-    add(g, rbox(0.3, 0.03, 0.01, 0.005), m.jerryRed, 0, 0.21, s * 0.072, { rz: -0.95 });
+    add(g, rbox(0.3, 0.03, 0.01, 0.005), m.boostBlue, 0, 0.21, s * 0.072, { rz: 0.95 });
+    add(g, rbox(0.3, 0.03, 0.01, 0.005), m.boostBlue, 0, 0.21, s * 0.072, { rz: -0.95 });
   }
-  add(g, rbox(0.14, 0.05, 0.08, 0.02), m.jerryRed, -0.05, 0.44, 0);
-  add(g, cyl('y', 0.035, 0.035, 0.08, 10), m.black, 0.1, 0.45, 0);
-  add(g, rbox(0.33, 0.035, 0.17, 0.01), m.black, 0, 0.12, 0);
+  add(g, rbox(0.14, 0.05, 0.08, 0.02), m.boostBlue, -0.05, 0.44, 0);
+  add(g, cyl('y', 0.035, 0.035, 0.08, 10), m.chrome, 0.1, 0.45, 0);
+  add(g, rbox(0.33, 0.035, 0.17, 0.01), m.white, 0, 0.12, 0);
 }
 
 function capsule(
@@ -904,11 +907,11 @@ function capsule(
 function buildStdTank(ctx: Ctx, t: Layout['tank']): void {
   const m = M();
   const r = 0.15;
-  capsule(ctx, t.axis, t.x, t.y, t.z, t.len, r, m.alu);
+  capsule(ctx, t.axis, t.x, t.y, t.z, t.len, r, m.boostBlue);
   for (const e of [0.3, -0.3]) {
     const ox = t.axis === 'x' ? e * t.len : 0;
     const oz = t.axis === 'z' ? e * t.len : 0;
-    add(ctx.body, cyl(t.axis, r + 0.012, r + 0.012, 0.05, 20), m.black, t.x + ox, t.y, t.z + oz);
+    add(ctx.body, cyl(t.axis, r + 0.012, r + 0.012, 0.05, 20), m.white, t.x + ox, t.y, t.z + oz);
   }
   add(ctx.body, cyl('y', 0.045, 0.045, 0.06, 12), m.chrome, t.x, t.y + r + 0.01, t.z);
 }
@@ -916,8 +919,8 @@ function buildStdTank(ctx: Ctx, t: Layout['tank']): void {
 function buildBigTank(ctx: Ctx, t: Layout['big']): void {
   const m = M();
   const b = ctx.body;
-  capsule(ctx, 'z', t.x, t.y, t.z, t.len, t.r, m.propane);
-  add(b, cyl('z', t.r + 0.008, t.r + 0.008, 0.12, 28), m.red, t.x, t.y, t.z);
+  capsule(ctx, 'z', t.x, t.y, t.z, t.len, t.r, m.boostBlue);
+  add(b, cyl('z', t.r + 0.008, t.r + 0.008, 0.12, 28), m.white, t.x, t.y, t.z);
   // Valve collar and hazard diamond.
   add(b, cyl('y', 0.13, 0.13, 0.1, 18), m.darkMetal, t.x, t.y + t.r + 0.02, t.z);
   add(b, cyl('y', 0.04, 0.04, 0.14, 10), m.chrome, t.x, t.y + t.r + 0.1, t.z);
@@ -1057,6 +1060,17 @@ function buildNitro(ctx: Ctx, n: Layout['nitro']): void {
     add(b, rbox(0.06, 0.03, 0.06, 0.012), m.red, n.x + n.len / 2 - 0.02, n.y + 0.145, z);
     add(b, cyl('x', 0.05, 0.075, 0.1, 14), m.chrome, n.x - n.len / 2 - 0.04, n.y, z);
     addFlame(ctx, b, n.x - n.len / 2 - 0.09, n.y, z, 'nitro', 0.2, 1.8, 0.1);
+  }
+}
+
+/** Boost nozzles where the launch rocket would sit, for cars without one (its nozzles do the job). */
+function buildBoostNozzles(ctx: Ctx, n: Layout['nitro']): void {
+  const m = M();
+  const b = ctx.body;
+  for (const s of [1, -1]) {
+    const z = s * n.z;
+    add(b, cyl('x', 0.045, 0.07, 0.14, 14), m.chrome, n.x - n.len / 2 - 0.02, n.y, z);
+    addFlame(ctx, b, n.x - n.len / 2 - 0.09, n.y, z, 'boost', 0.2, 1.5, 0.09);
   }
 }
 
@@ -1232,7 +1246,7 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
   const chassisId = getOption('chassis', config.chassis).id;
   const wheelId = getOption('wheels', config.wheels).id;
   const engineId = getOption('engine', config.engine).id;
-  const fuelId = getOption('fuel', config.fuel).id;
+  const bottleId = getOption('boost', config.boost).id;
   const wingId = getOption('wing', config.wing).id;
   const noseId = getOption('nose', config.nose).id;
   const boosterId = getOption('booster', config.booster).id;
@@ -1273,7 +1287,7 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
 
   let L: Layout;
   if (chassisId === 'kart') L = buildKart(ctx);
-  else if (chassisId === 'tub') L = buildTub(ctx, fuelId);
+  else if (chassisId === 'tub') L = buildTub(ctx, bottleId);
   else if (chassisId === 'pickup') L = buildPickup(ctx);
   else L = buildSedan(ctx);
 
@@ -1284,8 +1298,8 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
   else buildJet(ctx, L.jet.x, L.jet.y, L.jet.len, L.jet.pylonY, L.jet.pylonX);
 
   let trunkTop = L.spoiler.baseY;
-  if (fuelId === 'jerry') buildJerry(ctx, L.jerry.x, L.jerry.y, L.jerry.z);
-  else if (fuelId === 'tank') {
+  if (bottleId === 'can') buildCan(ctx, L.jerry.x, L.jerry.y, L.jerry.z);
+  else if (bottleId === 'bottle') {
     buildStdTank(ctx, L.tank);
     if (L.tank.axis === 'z' && Math.abs(L.tank.x - L.spoiler.x) < 0.5) trunkTop = L.tank.y + 0.15;
   } else {
@@ -1300,12 +1314,15 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
     buildGlider(ctx, L.glider);
   }
 
-  const noseX = fuelId === 'big' && L.noseWithBig !== undefined ? L.noseWithBig : L.nose.x;
+  const noseX = bottleId === 'big' && L.noseWithBig !== undefined ? L.noseWithBig : L.nose.x;
   buildNose(ctx, noseId, { ...L.nose, x: noseX });
 
   let kite: KiteRig | null = null;
-  if (boosterId === 'nitro') buildNitro(ctx, L.nitro);
-  else if (boosterId === 'kite') kite = buildKite(ctx, L.kite);
+  if (boosterId === 'rocket') buildNitro(ctx, L.nitro);
+  else {
+    buildBoostNozzles(ctx, L.nitro);
+    if (boosterId === 'kite') kite = buildKite(ctx, L.kite);
+  }
 
   let flag: FlagRig | null = null;
   if (topperId !== 'none') {
@@ -1326,13 +1343,14 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
   // ------------------------------------------------------------------------------------------
   let throttle = 0;
   let nitro = 0;
+  let boost = 0;
   let kiteOpen = false;
   let disposed = false;
   const tmp = new THREE.Vector3();
 
   const applyFlames = (flicker: boolean): void => {
     for (const f of ctx.flames) {
-      const level = f.kind === 'nitro' ? nitro : throttle;
+      const level = f.kind === 'nitro' ? Math.max(nitro, boost) : f.kind === 'boost' ? boost : throttle;
       if (level < 0.02) {
         f.obj.visible = false;
         continue;
@@ -1405,6 +1423,10 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
     },
     setNitro(level: number): void {
       nitro = THREE.MathUtils.clamp(level, 0, 1);
+      applyFlames(false);
+    },
+    setBoost(level: number): void {
+      boost = THREE.MathUtils.clamp(level, 0, 1);
       applyFlames(false);
     },
     update(dt: number, t: number): void {

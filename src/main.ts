@@ -2,7 +2,7 @@
 // BUILD -> COUNTDOWN -> RACE (driving; FLIGHT once someone launches) -> RESULTS -> (Rematch -> BUILD) | (New players -> BUILD, reset)
 import './style.css';
 import * as THREE from 'three';
-import { Sound, type EngineKind, type EngineVoice, type HornKind, type SkidVoice, type WindVoice } from './audio';
+import { Sound, type BoostVoice, type EngineKind, type EngineVoice, type HornKind, type SkidVoice, type WindVoice } from './audio';
 import {
   allReady,
   cyclePart,
@@ -18,7 +18,7 @@ import {
   togglePart,
   type Garage,
 } from './garage';
-import { DRIVE_KEYS, DriveInput } from './input';
+import { DriveInput, type PadPress } from './input';
 import { PARTS, computeStats, getOption } from './parts';
 import { Actors } from './scene/actors';
 import { buildBay } from './scene/bay';
@@ -32,11 +32,11 @@ import { Views, type ViewTarget } from './scene/views';
 import { createWorld } from './scene/world';
 import { Bot, driveToEnd } from './sim/bot';
 import { DT } from './sim/physics';
-import { HYPE_BOOST, HYPE_MAX, RaceSim, type CarInput, type CarResult, type ItemKind, type RaceEvent } from './sim/race';
-import { COURSE, pointAt } from './track';
+import { HYPE_BOOST, HYPE_MAX, ITEM_KINDS, RAMP_MIN, RaceSim, type CarInput, type CarResult, type ItemKind, type RaceEvent } from './sim/race';
+import { COURSE, KICKER_ANGLE, pointAt } from './track';
 import type { CarConfig, CarStats, PlayerIndex, SlotId } from './types';
-import { BuildUI, GARAGE_KEYS, type GarageAction, type LastRun } from './ui/build';
-import { HUD, ITEM_LABELS, type ResultsView } from './ui/hud';
+import { BuildUI, GARAGE_KEYS, TRAIN_STARTS, type GarageAction, type LastRun, type Training, type TrainStart } from './ui/build';
+import { HUD, ITEM_LABELS, type HudKeys, type ResultsView } from './ui/hud';
 
 type GameState = 'BUILD' | 'COUNTDOWN' | 'RACE' | 'FLIGHT' | 'RESULTS';
 
@@ -48,6 +48,7 @@ const RESULTS_DELAY = 2.6; // seconds after the last car finishes
 // Real-time grace periods, so keys still being mashed don't skip a screen.
 const RESULTS_KEY_GRACE = 1500; // ms before Enter/Space can leave the results
 const READY_KEY_GRACE = 600; // ms before the READY keys work in a fresh garage
+const DEG = 180 / Math.PI;
 
 // ---------- URL parameters ----------
 const params = new URLSearchParams(location.search);
@@ -67,16 +68,19 @@ const autodriveParam = params.get('autodrive');
 const autodrive: [boolean, boolean] = [autodriveParam === '1' || autodriveParam === 'p1', autodriveParam === '1' || autodriveParam === 'p2'];
 /** Player 2 driven by the computer (the garage toggle, or ?cpu=1). */
 let cpuOn = params.get('cpu') === '1';
+/** Racing alone: solo training (the garage toggle, or ?solo=1). Never on at the same time as the CPU. */
+let solo = params.get('solo') === '1' && !cpuOn;
 
 /** Sensible builds the CPU picks from, so it's a fair (and varied) rival. */
 const CPU_BUILDS: Partial<CarConfig>[] = [
-  { chassis: 'kart', wheels: 'standard', engine: 'v8', fuel: 'tank', wing: 'glider', nose: 'wedge', booster: 'nitro' },
-  { chassis: 'tub', wheels: 'standard', engine: 'jet', fuel: 'tank', wing: 'none', nose: 'cone', booster: 'nitro' },
-  { chassis: 'pickup', wheels: 'monster', engine: 'v8', fuel: 'big', wing: 'spoiler', nose: 'blunt', booster: 'none' },
-  { chassis: 'sedan', wheels: 'standard', engine: 'v8', fuel: 'big', wing: 'spoiler', nose: 'wedge', booster: 'kite' },
-  { chassis: 'kart', wheels: 'monster', engine: 'v8', fuel: 'big', wing: 'spoiler', nose: 'cone', booster: 'nitro' },
-  { chassis: 'tub', wheels: 'tiny', engine: 'v8', fuel: 'big', wing: 'glider', nose: 'wedge', booster: 'kite' },
+  { chassis: 'kart', wheels: 'standard', engine: 'v8', boost: 'bottle', wing: 'glider', nose: 'wedge', booster: 'rocket' },
+  { chassis: 'tub', wheels: 'standard', engine: 'jet', boost: 'bottle', wing: 'none', nose: 'cone', booster: 'rocket' },
+  { chassis: 'pickup', wheels: 'monster', engine: 'v8', boost: 'big', wing: 'spoiler', nose: 'blunt', booster: 'none' },
+  { chassis: 'sedan', wheels: 'standard', engine: 'v8', boost: 'big', wing: 'spoiler', nose: 'wedge', booster: 'kite' },
+  { chassis: 'kart', wheels: 'monster', engine: 'v8', boost: 'big', wing: 'spoiler', nose: 'cone', booster: 'rocket' },
+  { chassis: 'tub', wheels: 'tiny', engine: 'v8', boost: 'big', wing: 'glider', nose: 'wedge', booster: 'kite' },
 ];
+
 const cpuRng = makeRng(seed ^ 0x7f4a7c15);
 // Extra test hook: ?wind=-8 pins the wind (m/s, + = tailwind) for every round.
 const windParam = params.get('wind');
@@ -85,11 +89,34 @@ const fixedWind =
     ? Math.min(Math.max(Number(windParam), -8), 8)
     : null;
 // ?traffic=0 empties the course (no Waymos, tourists or cable car); ?items=0 removes the boxes.
+// (Racing solo, the training panel can change both.)
 const trafficOn = params.get('traffic') !== '0';
 const itemsOn = params.get('items') !== '0';
 const windRng = makeRng(seed);
 const buildRng = makeRng(seed ^ 0x5bd1e995);
 const worldRng = makeRng(seed ^ 0x2c1b3c6d);
+
+/** Solo training: where the run starts, whether to race the best run's ghost, and what's on the road. */
+const training: Training = { start: 'top', ghost: true, traffic: trafficOn, items: itemsOn };
+
+/** Solo: the best run from each start (the furthest splash): its car, time and splits, and its
+ *  ghost (a pose per frame: race time, x, y, z, yaw, pitch, roll, course progress). */
+interface SoloBest {
+  distance: number;
+  runTime: number;
+  config: CarConfig;
+  splits: (number | null)[];
+  ghost: Float32Array;
+}
+const soloBests = new Map<TrainStart, SoloBest>();
+const GHOST_STRIDE = 8;
+/** The split points on the way down (course arc length), for solo runs. */
+const SPLITS: { label: string; s: number }[] = [
+  { label: 'HYDE', s: COURSE.marks.hydeS0 },
+  { label: 'LOMBARD', s: COURSE.marks.lombardS0 },
+  { label: 'LEAVENWORTH', s: COURSE.marks.lombardS1 },
+  { label: 'PIER', s: COURSE.marks.pierS0 },
+];
 
 const graphemes = new Intl.Segmenter();
 
@@ -178,12 +205,15 @@ class CarView {
   yaw = 0;
   splashT = -1;
   nitro = 0;
+  /** Boost flame level (eases in and out). */
+  boostFlame = 0;
   readonly trail: Trail;
   readonly stars = new DizzyStars();
   readonly aura = new Aura();
   engine: EngineVoice | null = null;
   wind: WindVoice | null = null;
   skid: SkidVoice | null = null;
+  boostVoice: BoostVoice | null = null;
   horn: HornKind = 'kart';
   lastScrape = 0;
   rouletteTick = 0;
@@ -229,10 +259,13 @@ class CarView {
     this.holder.scale.set(1, 1, 1);
     this.splashT = -1;
     this.nitro = 0;
-    this.root.visible = true;
+    this.boostFlame = 0;
+    // Racing solo, Player 2's car stays in the garage.
+    this.root.visible = !(solo && this.p === 1);
     this.mesh?.setKiteOpen(false);
     this.mesh?.setThrottle(0);
     this.mesh?.setNitro(0);
+    this.mesh?.setBoost(0);
     // Glider wings show spread in the garage; they fold for the run at the countdown.
     this.mesh?.setWingsOpen(true, true);
   }
@@ -244,10 +277,101 @@ class CarView {
     this.wind = null;
     this.skid?.stop();
     this.skid = null;
+    this.boostVoice?.stop();
+    this.boostVoice = null;
   }
 }
 
 const cars: [CarView, CarView] = [new CarView(0), new CarView(1)];
+
+/** Solo: a see-through replay of the best run from this start, raced alongside you. */
+class GhostCar {
+  readonly root = new THREE.Group();
+  private readonly tilt = new THREE.Group();
+  private mesh: CarMesh | null = null;
+  private key = '';
+  private frames: Float32Array | null = null;
+  private i = 0;
+  private static readonly MAT = new THREE.MeshStandardMaterial({
+    color: '#dcefff',
+    emissive: '#5fa8ff',
+    emissiveIntensity: 0.45,
+    roughness: 0.5,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+  });
+
+  constructor() {
+    this.root.add(this.tilt);
+    this.root.rotation.order = 'YXZ';
+    this.root.visible = false;
+    scene.add(this.root);
+  }
+
+  /** Race this best run's ghost (null: no ghost). */
+  load(best: SoloBest | null): void {
+    this.frames = best ? best.ghost : null;
+    this.i = 0;
+    this.root.visible = false;
+    if (!best) return;
+    const k = configKey(best.config);
+    if (k === this.key) return;
+    this.key = k;
+    this.mesh?.dispose();
+    this.mesh = buildCarMesh(best.config, { accent: '#5fa8ff' });
+    this.mesh.setWingsOpen(false, true);
+    this.mesh.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.material = GhostCar.MAT;
+      m.castShadow = false;
+      m.receiveShadow = false;
+      m.renderOrder = 4;
+    });
+    this.tilt.add(this.mesh.group);
+  }
+
+  /** Put the ghost where the best run was at race time t; returns its course progress (or null
+   *  once it has splashed down, before it starts, or with no ghost). */
+  update(t: number): number | null {
+    const f = this.frames;
+    const n = f ? f.length / GHOST_STRIDE : 0;
+    if (!f || n < 2 || t > f[(n - 1) * GHOST_STRIDE]) {
+      this.root.visible = false;
+      return null;
+    }
+    // Waiting on the grid through the countdown.
+    t = Math.max(t, f[0]);
+    // Walk the cursor to the frame at or before t (runs forward; restarts after a retry).
+    if (this.i >= n - 1 || f[this.i * GHOST_STRIDE] > t) this.i = 0;
+    while (this.i < n - 2 && f[(this.i + 1) * GHOST_STRIDE] <= t) this.i++;
+    const a = this.i * GHOST_STRIDE;
+    const b = a + GHOST_STRIDE;
+    const u = Math.min(1, Math.max(0, (t - f[a]) / Math.max(1e-6, f[b] - f[a])));
+    const lerp = (k: number): number => f[a + k] + (f[b + k] - f[a + k]) * u;
+    let dyaw = f[b + 4] - f[a + 4];
+    dyaw -= Math.round(dyaw / (Math.PI * 2)) * Math.PI * 2;
+    this.root.position.set(lerp(1), lerp(2), lerp(3));
+    this.root.rotation.y = f[a + 4] + dyaw * u;
+    this.tilt.rotation.set(lerp(6), 0, lerp(5), 'YXZ');
+    this.root.visible = true;
+    return lerp(7);
+  }
+
+  hide(): void {
+    this.root.visible = false;
+  }
+}
+
+const ghost = new GhostCar();
+/** Solo: this run's ghost frames (race time, x, y, z, yaw, pitch, roll, course progress), split
+ *  times, and the next split to cross. */
+let ghostRec: number[] = [];
+let splitTimes: (number | null)[] = [];
+let nextSplit = 0;
+/** Solo: the world seed of this run, so a retry meets the same traffic. */
+let runSeed = 0;
 
 // ---------- Game state ----------
 const sound = new Sound();
@@ -284,7 +408,7 @@ const scripted: [CarInput | null, CarInput | null] = [null, null];
 // ---------- UI ----------
 const buildUI = new BuildUI(overlay, {
   onPart: (p, slot, id) => {
-    if (state !== 'BUILD' || (p === 1 && cpuOn) || !togglePart(garage, p, slot, id)) return;
+    if (state !== 'BUILD' || (p === 1 && (cpuOn || solo)) || !togglePart(garage, p, slot, id)) return;
     sound.click();
     renderBuild();
   },
@@ -307,6 +431,17 @@ const buildUI = new BuildUI(overlay, {
     if (state !== 'BUILD') return;
     sound.click();
     setCpu(!cpuOn);
+  },
+  onSolo: () => {
+    if (state !== 'BUILD') return;
+    sound.click();
+    setSolo(!solo);
+  },
+  onTraining: (change) => {
+    if (state !== 'BUILD') return;
+    sound.click();
+    Object.assign(training, change);
+    renderBuild();
   },
 });
 const L = COURSE.length;
@@ -344,7 +479,21 @@ sound.onMuteChange(renderMute);
 renderMute();
 
 function renderBuild(): void {
-  buildUI.render({ garage, names, colors: PLAYER_COLORS, wind, round, lastRuns, cpu: [false, cpuOn] });
+  const bests: Partial<Record<TrainStart, number>> = {};
+  for (const [k, b] of soloBests) bests[k] = b.distance;
+  buildUI.render({
+    garage,
+    names,
+    colors: PLAYER_COLORS,
+    wind,
+    round,
+    lastRuns,
+    cpu: [false, cpuOn],
+    solo,
+    training,
+    soloBests: bests,
+    pads: [input.usingPad[0], input.usingPad[1]],
+  });
 }
 
 /** The CPU picks one of its builds (and a paint and topper) for Player 2's car. */
@@ -363,6 +512,7 @@ let p2Saved: { config: CarConfig; name: string } | null = null;
 
 function setCpu(on: boolean): void {
   if (on === cpuOn) return;
+  if (on && solo) setSolo(false);
   cpuOn = on;
   if (on) {
     p2Saved = { config: { ...garage.builds[1].config }, name: names[1] };
@@ -382,6 +532,20 @@ function setCpu(on: boolean): void {
   if (on && garage.builds[0].ready) startCountdown();
 }
 
+/** Racing alone: Player 2's car stays home and their panel becomes the training settings. */
+function setSolo(on: boolean): void {
+  if (on === solo) return;
+  if (on && cpuOn) setCpu(false);
+  solo = on;
+  views.solo = on;
+  garage.builds[1].ready = false;
+  previews[1] = null;
+  cars[1].root.visible = !on;
+  refreshCars();
+  renderBuild();
+  if (on && garage.builds[0].ready) startCountdown();
+}
+
 /** Show each player's fitted car, or the part they are hovering. */
 function refreshCars(): void {
   for (const p of PLAYERS) cars[p].setConfig(previews[p] ?? garage.builds[p].config);
@@ -389,15 +553,15 @@ function refreshCars(): void {
 
 /** READY locks a player's car in; the race starts as soon as both players are ready (the CPU always is). */
 function toggleReady(p: PlayerIndex, ready = !garage.builds[p].ready): boolean {
-  if (state !== 'BUILD' || (p === 1 && cpuOn) || !setReady(garage, p, ready)) return false;
+  if (state !== 'BUILD' || (p === 1 && (cpuOn || solo)) || !setReady(garage, p, ready)) return false;
   sound.readyChime(ready);
   renderBuild();
-  if (allReady(garage) || (cpuOn && garage.builds[0].ready)) startCountdown();
+  if (allReady(garage) || ((cpuOn || solo) && garage.builds[0].ready)) startCountdown();
   return true;
 }
 
 function garageKey(p: PlayerIndex, action: GarageAction, repeat: boolean): void {
-  if (p === 1 && cpuOn) return;
+  if (p === 1 && (cpuOn || solo)) return;
   // Keys win over a mouse preview on the same car, so the change shows at once.
   buildUI.endPreview(p);
   if (action === 'ready') {
@@ -437,15 +601,8 @@ function enterBuild(tabs?: [SlotId, SlotId]): void {
     if (names[1] === DEFAULT_NAMES[1]) names[1] = 'CPU';
   }
   previews[0] = previews[1] = null;
-  for (const c of cars) {
-    c.stopAudio();
-    c.trail.clear();
-    c.placeAtStart();
-  }
-  splashes.clear();
-  particles.clear();
-  skids.clear();
-  actors.reset();
+  clearScene();
+  ghost.hide();
   refreshCars();
   views.setMode('build');
   hud.hideResults();
@@ -457,24 +614,105 @@ function enterBuild(tabs?: [SlotId, SlotId]): void {
   renderBuild();
 }
 
-function helpLine(p: PlayerIndex): string {
-  const k = DRIVE_KEYS[p].labels;
-  return `${k.throttle} go · ${k.brake} brake · ${k.steer} steer · ${k.item} item`;
+/** Stop the cars' sounds and clear the last race off the course (trails, splashes, skids, the cast). */
+function clearScene(): void {
+  for (const c of cars) {
+    c.stopAudio();
+    c.trail.clear();
+    c.placeAtStart();
+  }
+  splashes.clear();
+  particles.clear();
+  skids.clear();
+  actors.reset();
+}
+
+/** The players with a car in this race (racing solo, only Player 1). */
+function racers(): PlayerIndex[] {
+  return solo ? [0] : PLAYERS;
+}
+
+/** The controls card's key chips for a player. */
+function helpKeys(p: PlayerIndex): { label: string; keys: string }[] {
+  const k = input.labels(p);
+  return [
+    { keys: k.throttle, label: 'go' },
+    { keys: k.brake, label: 'brake' },
+    { keys: k.steer, label: 'steer' },
+    { keys: k.boost, label: 'boost' },
+    { keys: k.item, label: 'item' },
+    { keys: k.swap, label: 'swap items' },
+  ];
+}
+
+function hudKeys(p: PlayerIndex): HudKeys {
+  const k = input.labels(p);
+  return { item: k.item, swap: k.swap, boost: k.boost };
 }
 
 function startCountdown(): boolean {
   if (state !== 'BUILD') return false;
   raceConfigs = [{ ...garage.builds[0].config }, { ...garage.builds[1].config }];
-  raceStats = [computeStats(raceConfigs[0]), computeStats(raceConfigs[1])];
-  previews[0] = previews[1] = null;
-  for (const p of PLAYERS) cars[p].setConfig(raceConfigs[p]);
   // A fresh world each round: traffic, tourists and the cable car are placed by the round's seed.
-  const roundSeed = Math.floor(worldRng() * 2 ** 31);
-  sim = new RaceSim(raceStats, wind, { seed: roundSeed, obstacles: trafficOn, items: itemsOn });
+  runSeed = Math.floor(worldRng() * 2 ** 31);
+  beginRun();
+  // A solo run from further down: jump the camera there rather than fly it through the houses.
+  if (solo && training.start !== 'top') cutCamera();
+  return true;
+}
+
+/** Solo: the same car from the same start again, straight away (same wind, same traffic). */
+function retry(): boolean {
+  if (!solo || !raceConfigs || state === 'BUILD') return false;
+  clearScene();
+  hud.hideResults();
+  beginRun();
+  cutCamera();
+  return true;
+}
+
+/** Solo: abandon the run and go back to the garage (a new wind, as after any race). */
+function toGarage(): boolean {
+  if (!solo || state === 'BUILD') return false;
+  round++;
+  wind = rollWind();
+  enterBuild([garage.builds[0].tab, garage.builds[1].tab]);
+  cutCamera();
+  return true;
+}
+
+/** Put the cars on the grid (or, solo, at the chosen start) and count down. */
+function beginRun(): void {
+  const configs = raceConfigs!;
+  raceStats = [computeStats(configs[0]), computeStats(configs[1])];
+  previews[0] = previews[1] = null;
+  for (const p of PLAYERS) cars[p].setConfig(configs[p]);
+  const obstacles = solo ? training.traffic : trafficOn;
+  const items = solo ? training.items : itemsOn;
+  sim = new RaceSim(solo ? [raceStats[0]] : raceStats, wind, { seed: runSeed, obstacles, items });
+  if (solo) {
+    const start = TRAIN_STARTS.find((q) => q.id === training.start)?.s ?? null;
+    if (start !== null) sim.placeStart(0, start);
+  }
+  // The car views stand where the sim put the cars (racing solo, one car in the middle of the road).
+  for (const p of racers()) {
+    const sc = sim.cars[p];
+    cars[p].root.position.set(sc.x, sc.y, sc.z);
+    cars[p].root.rotation.y = -sc.heading;
+  }
+  cars[1].root.visible = !solo;
   bots = [
-    autodrive[0] ? new Bot(sim, 0, { aggression: 0.3 }) : null,
-    autodrive[1] || cpuOn ? new Bot(sim, 1, { aggression: 0.5, skill: 0.97 }) : null,
+    autodrive[0] ? new Bot(sim, 0, { aggression: 0.3, drift: true }) : null,
+    !solo && (autodrive[1] || cpuOn) ? new Bot(sim, 1, { aggression: 0.5, skill: 0.97, drift: true }) : null,
   ];
+  // Solo: record this run for its ghost, time it at the splits, and race the best run's ghost.
+  ghostRec = [];
+  splitTimes = SPLITS.map(() => null);
+  nextSplit = 0;
+  while (nextSplit < SPLITS.length && SPLITS[nextSplit].s <= sim.cars[0].s + 1) nextSplit++;
+  ghost.load(solo && training.ghost ? (soloBests.get(training.start) ?? null) : null);
+  // Alone at the keyboard (against the CPU, or solo), Player 1 drives on the arrows.
+  input.single = solo || cpuOn;
   input.clear();
   accumulator = 0;
   eventLog.length = 0;
@@ -486,16 +724,26 @@ function startCountdown(): boolean {
   stateTime = 0;
   countIndex = -1;
   buildUI.show(false);
-  hud.setup(names, PLAYER_COLORS, wind, [bots[0] ? 'CPU' : DRIVE_KEYS[0].labels.item, bots[1] ? 'CPU' : DRIVE_KEYS[1].labels.item]);
+  hud.setup(names, PLAYER_COLORS, wind, [bots[0] ? null : hudKeys(0), bots[1] ? null : hudKeys(1)], solo);
   hud.showCars(true);
   hud.show(true);
-  const who = (p: PlayerIndex): string => (bots[p] ? 'the computer drives' : helpLine(p));
-  hud.showHelp(true, [who(0), who(1)], PLAYER_COLORS, names);
+  const soloItems: ItemKind[] = ITEM_KINDS.filter((k) => k !== 'poo' && k !== 'gull');
+  hud.showHelp(true, [bots[0] ? null : helpKeys(0), bots[1] ? null : helpKeys(1)], PLAYER_COLORS, names, {
+    solo,
+    items: solo ? soloItems : undefined,
+  });
   for (const c of cars) c.mesh?.setWingsOpen(false);
+  views.solo = solo;
   views.setMode('chase');
   actors.reset();
   actors.update(0, 0, sim);
-  return true;
+  // Starting further down the course: the camera jumps there (behind a quick fade).
+  for (const p of PLAYERS) {
+    camTargets[p].pos.copy(cars[p].root.position);
+    camTargets[p].s = sim.cars[p]?.s ?? COURSE.grid[p].s;
+    camTargets[p].speed = 0;
+    camTargets[p].phase = 'grid';
+  }
 }
 
 function startRace(): void {
@@ -506,11 +754,12 @@ function startRace(): void {
   doneTime = -1;
   firstLaunchSeen = false;
   hud.showHelp(false);
-  for (const p of PLAYERS) {
+  for (const p of racers()) {
     const kind = getOption('engine', raceConfigs[p].engine).id as EngineKind;
     const pan = p === 0 ? -0.45 : 0.45;
     cars[p].engine = sound.engine(kind, pan);
     cars[p].skid = sound.skid(pan);
+    cars[p].boostVoice = sound.boost(pan);
   }
 }
 
@@ -541,6 +790,11 @@ const HIT_TEXT: Record<string, string> = {
   cone: 'CONE!',
 };
 
+/** Buzz a player's pad (not the CPU's). */
+function rumble(p: PlayerIndex, strong: number, weak: number, ms: number): void {
+  if (!bots[p] && !scripted[p]) input.rumble(p, strong, weak, ms);
+}
+
 function handleEvent(e: RaceEvent): void {
   if ('p' in e) eventLog.push({ t: gameClock, player: e.p, event: e });
   const now = gameClock;
@@ -551,6 +805,7 @@ function handleEvent(e: RaceEvent): void {
       const c = cars[e.p];
       sound.rocket(e.p === 0 ? -0.45 : 0.45, e.good);
       if (e.good) {
+        rumble(e.p, 0.3, 0.8, 250);
         hud.flash(e.p, 'rocket', 'ROCKET START!', 'good', now, 2.2);
         particles.puff(tmpV.copy(c.root.position), 8, '#f4f1ea', 0.6);
         shoutAt(e.p, 'ROCKET START!');
@@ -563,18 +818,58 @@ function handleEvent(e: RaceEvent): void {
       sound.thump(e.p === 0 ? -0.45 : 0.45);
       break;
     }
-    case 'fuelEmpty':
-      hud.flash(e.p, 'empty', e.s < COURSE.marks.embS0 ? 'OUT OF FUEL · limping' : 'OUT OF FUEL', 'empty', now, 2.5);
+    case 'drift':
+      sound.chirp(e.p === 0 ? -0.45 : 0.45);
       break;
-    case 'fuelLow':
-      if (e.s < COURSE.marks.embS0 - 40) hud.flash(e.p, 'low', 'LOW FUEL · save it for the kicker!', 'empty', now, 2.6);
+    case 'driftEnd': {
+      // A drift that banked some boost says so (a full bottle banks nothing: spend some first).
+      const cap = raceStats?.[e.p].boostCap ?? 0;
+      if (e.gain > 0.12 && cap > 0) hud.flash(e.p, 'drift', `DRIFT +${Math.round((e.gain / cap) * 100)}% BOOST`, 'boost', now, 1.6);
+      else if (e.time > 0.8 && (sim?.cars[e.p]?.boostFrac ?? 0) > 0.99) hud.flash(e.p, 'drift', 'BOOST FULL · use it!', 'boost', now, 1.6);
       break;
+    }
+    case 'boostEmpty':
+      sound.sputter(e.p === 0 ? -0.45 : 0.45);
+      hud.flash(e.p, 'empty', 'BOOST EMPTY', 'empty', now, 1.4);
+      break;
+    case 'boostGain': {
+      const pan = e.p === 0 ? -0.45 : 0.45;
+      if (e.amount <= 0) {
+        hud.flash(e.p, 'use', 'BOOST ALREADY FULL', 'item', now, 1.4);
+        break;
+      }
+      sound.refill(pan, e.full);
+      hud.flash(e.p, 'use', e.full ? '🌟 FULL BOOST!' : '⚡ BOOST TOP-UP!', 'boost', now, 1.8);
+      if (e.full) shoutAt(e.p, 'FULL BOOST!');
+      particles.confetti(tmpV.copy(carPos(e.p)).setY(carPos(e.p).y + 1.2), e.full ? 16 : 8);
+      break;
+    }
+    case 'swap':
+      sound.click();
+      break;
+    case 'gull': {
+      const pan = e.p === 0 ? -0.45 : 0.45;
+      sound.squawk(pan);
+      if (e.shooed) {
+        hud.flash(e.p, 'gull', 'SHOOED THE SEAGULL!', 'good', now, 1.8);
+        shoutAt(e.p, 'SHOO!');
+        particles.confetti(tmpV.set(e.x, e.y, e.z), 10);
+      } else {
+        hud.flash(e.p, 'gull', `🐦 SEAGULL! (from ${names[e.by]})`, 'hit', now, 2);
+        shoutAt(e.p, 'SEAGULL!');
+        views.shake(e.p, 0.35);
+        particles.puff(tmpV.set(e.x, e.y, e.z), 10, '#ffffff', 0.35, 0.8);
+        if (e.by !== e.p) hud.flash(e.by, 'gull-hit', 'SEAGULL LANDED!', 'hype', now, 2);
+      }
+      break;
+    }
     case 'takeoff':
       break;
     case 'land': {
       const c = cars[e.p];
       if (e.impact > 2.5) sound.thump(e.p === 0 ? -0.45 : 0.45);
       if (e.impact > 4) views.shake(e.p, Math.min(0.8, e.impact / 14));
+      if (e.impact > 2.5) rumble(e.p, Math.min(1, e.impact / 12), 0.4, 120 + Math.min(200, e.impact * 15));
       if (e.impact > 3) particles.puff(tmpV.copy(c.root.position), 6 + Math.min(10, e.impact), '#e8e4dc', 0.55);
       if (e.air > 0.5) particles.ring(tmpV.copy(c.root.position).setY(c.root.position.y + 0.15), 14, '#ece8df', 3 + Math.min(4, e.impact * 0.5));
       c.squashV -= Math.min(4.5, 0.8 + e.impact * 0.35);
@@ -584,6 +879,12 @@ function handleEvent(e: RaceEvent): void {
     case 'wall': {
       const c = cars[e.p];
       if (e.impact > 5) views.shake(e.p, Math.min(0.9, e.impact / 12));
+      if (e.impact > 3 && gameClock - c.lastScrape > 0.18) rumble(e.p, Math.min(1, e.impact / 10), 0.5, 140);
+      // Straight into the tyres at a corner: show how to get round it.
+      if (e.impact > 7 && !bots[e.p] && !c.hinted.has('drift') && sim && sim.cars[e.p].s < COURSE.marks.lombardS1) {
+        c.hinted.add('drift');
+        hud.flash(e.p, 'hint', `TAP ${input.labels(e.p).brake} WHILE TURNING TO DRIFT!`, 'boost', now, 3.2);
+      }
       if (gameClock - c.lastScrape > 0.18) {
         c.lastScrape = gameClock;
         sound.scrape(e.p === 0 ? -0.45 : 0.45, e.impact);
@@ -595,6 +896,8 @@ function handleEvent(e: RaceEvent): void {
       sound.bonk(0, e.impact / 6);
       views.shake(e.p, Math.min(1, e.impact / 10));
       views.shake(e.victim, Math.min(1.2, e.impact / 7));
+      rumble(e.p, Math.min(0.7, e.impact / 10), 0.4, 150);
+      rumble(e.victim, Math.min(1, e.impact / 6), 0.6, 220);
       particles.sparks(tmpV.set(e.x, e.y, e.z), tmpV2.set(0, 0, 0), Math.min(20, 5 + Math.round(e.impact * 2)));
       if (e.impact > 3 && e.ram !== 'none') {
         const word = e.ram === 'grit' ? 'POWERED THROUGH!' : e.ram === 'bull' ? 'BULL BAR!' : e.ram === 'wedge' ? 'SCOOPED!' : 'SHOVE!';
@@ -606,6 +909,7 @@ function handleEvent(e: RaceEvent): void {
     }
     case 'hit': {
       const pan = e.p === 0 ? -0.45 : 0.45;
+      rumble(e.p, e.what === 'cone' ? 0.15 : Math.min(1, 0.4 + e.impact / 8), 0.6, e.what === 'cone' ? 80 : 300);
       if (e.what === 'waymo' || e.what === 'cable') {
         sound.crunch(pan, e.impact / 6);
         views.shake(e.p, Math.min(1.2, e.impact / 6));
@@ -660,16 +964,21 @@ function handleEvent(e: RaceEvent): void {
         sound.grit(pan);
         hud.flash(e.p, 'use', 'DETERMINED!', 'good', now, 2);
         shoutAt(e.p, 'DETERMINED!');
-      } else {
+      } else if (e.item === 'poo') {
         sound.plop(pan);
         hud.flash(e.p, 'use', 'POO DROPPED', 'item', now, 1.4);
+      } else if (e.item === 'gull') {
+        sound.squawk(pan);
+        hud.flash(e.p, 'use', 'SEAGULL AWAY!', 'item', now, 1.4);
       }
+      // (The boost refills speak through their boostGain event.)
       break;
     }
     case 'honk':
       sound.horn(cars[e.p].horn, e.p === 0 ? -0.45 : 0.45);
       break;
     case 'spinout': {
+      rumble(e.p, 0.6, 0.9, 450);
       hud.flash(e.p, 'spin-out', e.by !== null ? `SPUN BY ${names[e.by].toUpperCase()}'S POO!` : 'SPUN OUT!', 'hit', now, 2.2);
       shoutAt(e.p, 'SPUN OUT!');
       if (e.by !== null) hud.flash(e.by, 'poo-hit', 'POO LANDED!', 'hype', now, 2);
@@ -699,18 +1008,24 @@ function handleEvent(e: RaceEvent): void {
     case 'launch': {
       const c = cars[e.p];
       const pan = e.p === 0 ? -0.45 : 0.45;
-      const pct = Math.round(e.wastedFuelFrac * 100);
-      hud.flash(e.p, 'waste', pct >= 1 ? `WASTED ${pct}% FUEL` : 'ALL FUEL USED', pct >= 1 ? 'waste' : 'air', now, 3.5);
+      const pct = Math.round(e.wastedBoostFrac * 100);
+      hud.flash(e.p, 'waste', pct >= 1 ? `${pct}% BOOST UNSPENT` : 'EVERY DROP OF BOOST USED', pct >= 1 ? 'waste' : 'air', now, 3.5);
       if (e.boost > 0.004) hud.flash(e.p, 'boost', `HYPE BOOST +${Math.round(e.boost * 100)}%`, 'hype', now, 3.5);
+      // Off the kicker after it started to drop: how far down it was (by a whole degree or more).
+      const rampDeg = Math.round(e.ramp * DEG);
+      if (rampDeg < Math.round(KICKER_ANGLE * DEG)) hud.flash(e.p, 'ramp', `RAMP DOWN TO ${rampDeg}°`, 'ramp', now, 3.5);
       c.engine?.stop();
       c.engine = null;
       c.skid?.stop();
       c.skid = null;
+      c.boostVoice?.stop();
+      c.boostVoice = null;
       c.wind = sound.wind(pan);
       sound.launch(pan);
+      rumble(e.p, 0.5, 1, 400);
       c.mesh?.setKiteOpen(true);
       c.mesh?.setThrottle(0);
-      if (raceConfigs && raceConfigs[e.p].booster === 'nitro') c.nitro = 1;
+      if (raceConfigs && raceConfigs[e.p].booster === 'rocket') c.nitro = 1;
       skids.lift(String(e.p));
       if (!firstLaunchSeen) {
         firstLaunchSeen = true;
@@ -718,6 +1033,16 @@ function handleEvent(e: RaceEvent): void {
       }
       break;
     }
+    case 'rampDrop':
+      // The first car is off the kicker: it starts coming down for everyone behind.
+      sound.rampDrop();
+      hud.flash(e.p, 'ramp', 'FULL RAMP!', 'good', now, 2.5);
+      for (const q of racers()) {
+        if (q === e.p || sim?.cars[q]?.phase !== 'race') continue;
+        hud.flash(q, 'ramp', '⚠ THE RAMP IS DROPPING!', 'ramp', now, 3);
+        shoutAt(q, 'HURRY!');
+      }
+      break;
     case 'wingsOpen':
       cars[e.p].mesh?.setWingsOpen(true);
       hud.flash(e.p, 'wings', 'GLIDING!', 'air', now, 2.5);
@@ -727,6 +1052,7 @@ function handleEvent(e: RaceEvent): void {
       const c = cars[e.p];
       c.splashT = 0;
       splashes.spawn(new THREE.Vector3(e.x, 0, e.z), e.speed, PLAYER_COLORS[e.p]);
+      rumble(e.p, 1, 1, 600);
       sound.splash(e.p === 0 ? -0.45 : 0.45, e.speed / 30);
       c.wind?.stop();
       c.wind = null;
@@ -743,16 +1069,20 @@ function handleEvent(e: RaceEvent): void {
 // ---------- Results ----------
 function awardsFor(p: PlayerIndex, res: CarResult[]): string[] {
   const t = res[p].tally;
-  const o = res[1 - p];
+  const o = res[1 - p] as CarResult | undefined;
   const out: [number, string][] = [];
-  if (!res[p].dnf && (o.dnf || res[p].runTime < o.runTime - 0.05)) out.push([6, '🏁 First to the lip']);
+  if (o && !res[p].dnf && (o.dnf || res[p].runTime < o.runTime - 0.05)) out.push([6, '🏁 First to the lip']);
   if (t.rocket) out.push([5, '🚀 Rocket start']);
   if (t.shortcuts > 0) out.push([9, '🌸 Hedge hopper']);
   if (t.pooLanded > 0) out.push([8, `💩 Poo sniper${t.pooLanded > 1 ? ` ×${t.pooLanded}` : ''}`]);
   if (t.plowed > 0) out.push([7, '😤 Unstoppable']);
   if (t.shoves >= 3) out.push([6, `🥊 Bully ×${t.shoves}`]);
   if (t.air >= 1.5) out.push([5, `🎈 ${t.air.toFixed(1)} s of air`]);
-  if (t.drift >= 2.5) out.push([5, `🌀 Drift king`]);
+  if (t.drift >= 4) out.push([5, `🌀 Drift king`]);
+  if (t.driftBoost >= 2) out.push([5, `⚡ ${t.driftBoost.toFixed(1)} s of boost from drifts`]);
+  if (t.gulls > 0) out.push([8, `🐦 Seagull sniper${t.gulls > 1 ? ` ×${t.gulls}` : ''}`]);
+  if (t.shooed > 0) out.push([7, '🧹 Shooed a seagull']);
+  if (res[p].wastedBoostFrac < 0.01 && t.boostUsed > 1 && !res[p].dnf) out.push([3, '💨 Every drop of boost']);
   if (t.nearMiss >= 3) out.push([4, `😬 ${t.nearMiss} near misses`]);
   if (res[p].hype >= 90) out.push([6, '🔥 Maxed-out HYPE']);
   if (t.waymo >= 2) out.push([7, `🤖 Waymo magnet ×${t.waymo}`]);
@@ -767,6 +1097,10 @@ function awardsFor(p: PlayerIndex, res: CarResult[]): string[] {
 function finishRace(): void {
   if (!sim || !raceConfigs) return;
   const res = sim.results();
+  if (solo) {
+    finishSolo(res);
+    return;
+  }
   const d = res.map((r) => (r.dnf ? 0 : r.distance));
   let winner: PlayerIndex | null = null;
   if (Math.abs(d[0] - d[1]) > 0.005) winner = d[0] > d[1] ? 0 : 1;
@@ -798,14 +1132,14 @@ function finishRace(): void {
       dnf: res[p].dnf,
       launchSpeed: res[p].launchSpeed,
       launchBoost: res[p].launchBoost,
+      launchRampDeg: res[p].launchRamp * DEG,
       hype: res[p].hype,
-      wastedFuelFrac: res[p].wastedFuelFrac,
+      wastedBoostFrac: res[p].wastedBoostFrac,
       runTime: res[p].runTime,
       flightTime: res[p].flightTime,
       wheelspinTime: res[p].wheelspinTime,
       maxHeight: res[p].maxHeight,
       bumpsHit: res[p].bumpsHit,
-      fuelEmptyAt: res[p].fuelEmptyAt,
       tally: { ...res[p].tally },
       awards: awards[p],
     })),
@@ -818,19 +1152,27 @@ function finishRace(): void {
       distance: d[p],
       dnf: res[p].dnf,
       launchKmh: res[p].launchSpeed * 3.6,
-      wastedFuelFrac: res[p].wastedFuelFrac,
+      boostLeft: res[p].wastedBoostFrac,
       airTime: res[p].flightTime,
       runTime: res[p].runTime,
-      boost: res[p].launchBoost,
+      hypeBonus: res[p].launchBoost,
+      ramp: res[p].launchRamp * DEG,
       awards: awards[p],
       wins: wins[p],
-    })) as ResultsView['rows'],
+    })),
     winner,
     round,
     wind,
     best: sessionBest ? { distance: sessionBest.distance, name: sessionBest.name, round: sessionBest.round } : null,
     newRecord,
   };
+  showResults(view, [
+    { label: 'Rematch', primary: true, id: 'rematch-btn', padKey: 'A', onClick: rematch },
+    { label: 'New players', id: 'newplayers-btn', padKey: 'Y', onClick: newPlayers },
+  ]);
+}
+
+function showResults(view: ResultsView, actions: { label: string; primary?: boolean; id: string; padKey?: string; onClick: () => boolean }[]): void {
   state = 'RESULTS';
   stateTime = 0;
   resultsAt = performance.now();
@@ -840,16 +1182,96 @@ function finishRace(): void {
   for (const c of cars) c.stopAudio();
   hud.showResults(
     view,
-    () => {
-      sound.click();
-      rematch();
-    },
-    () => {
-      sound.click();
-      newPlayers();
-    },
+    actions.map((a) => ({
+      ...a,
+      key: input.usingPad[0] || input.usingPad[1] ? a.padKey : undefined,
+      onClick: () => {
+        sound.click();
+        a.onClick();
+      },
+    })),
   );
   sound.cheer();
+}
+
+/** A solo run is over: keep it (and its ghost) if it's the best from this start. */
+function finishSolo(res: CarResult[]): void {
+  const r = res[0];
+  const cfg = { ...raceConfigs![0] };
+  const d = r.dnf ? 0 : r.distance;
+  const start = TRAIN_STARTS.find((q) => q.id === training.start)!;
+  const prev = soloBests.get(training.start) ?? null;
+  const record = !r.dnf && d > (prev?.distance ?? 0) + 0.005;
+  if (record) {
+    soloBests.set(training.start, { distance: d, runTime: r.runTime, config: cfg, splits: [...splitTimes], ghost: Float32Array.from(ghostRec) });
+  }
+  if (!r.dnf && d > (sessionBest?.distance ?? 0)) sessionBest = { distance: d, name: names[0], player: 0, round };
+  if (sessionBest) bay.setBest(sessionBest.distance, sessionBest.name, PLAYER_COLORS[sessionBest.player]);
+  lastConfigs = [cfg, lastConfigs[1]];
+  lastRuns = [{ distance: d, dnf: r.dnf }, lastRuns[1]];
+  const awards = awardsFor(0, res);
+  const splits = SPLITS.map((sp, i) => ({
+    label: sp.label,
+    delta: prev && prev.splits[i] !== null && splitTimes[i] !== null ? splitTimes[i]! - prev.splits[i]! : null,
+  }));
+  if (prev && !r.dnf) splits.push({ label: 'LIP', delta: r.runTime - prev.runTime });
+  results = {
+    mode: 'solo',
+    start: training.start,
+    round,
+    wind,
+    distance: d,
+    dnf: r.dnf,
+    record,
+    previousBest: prev?.distance ?? null,
+    splits: splitTimes.map((t, i) => ({ label: SPLITS[i].label, t })),
+    players: [
+      {
+        name: names[0],
+        config: cfg,
+        distance: d,
+        dnf: r.dnf,
+        launchSpeed: r.launchSpeed,
+        launchBoost: r.launchBoost,
+        hype: r.hype,
+        wastedBoostFrac: r.wastedBoostFrac,
+        runTime: r.runTime,
+        flightTime: r.flightTime,
+        tally: { ...r.tally },
+        awards,
+      },
+    ],
+    sessionBest: sessionBest ? { ...sessionBest } : null,
+  };
+  const best = soloBests.get(training.start) ?? null;
+  const view: ResultsView = {
+    rows: [
+      {
+        name: names[0],
+        color: PLAYER_COLORS[0],
+        distance: d,
+        dnf: r.dnf,
+        launchKmh: r.launchSpeed * 3.6,
+        boostLeft: r.wastedBoostFrac,
+        airTime: r.flightTime,
+        runTime: r.runTime,
+        hypeBonus: r.launchBoost,
+        ramp: null,
+        awards,
+        wins: 0,
+      },
+    ],
+    winner: null,
+    round,
+    wind,
+    best: best ? { distance: best.distance, name: names[0], round } : null,
+    newRecord: record,
+    solo: { start: start.name, prevBest: prev?.distance ?? null, splits },
+  };
+  showResults(view, [
+    { label: 'Retry', primary: true, id: 'retry-btn', padKey: 'A', onClick: retry },
+    { label: 'Garage', id: 'garage-btn', padKey: 'B', onClick: toGarage },
+  ]);
 }
 
 /** Back to the garage with both cars as they raced, ready to tweak. */
@@ -870,6 +1292,7 @@ function newPlayers(): boolean {
   lastConfigs = [null, null];
   lastRuns = [null, null];
   sessionBest = null;
+  soloBests.clear();
   bay.setBest(null);
   wind = rollWind();
   enterBuild();
@@ -891,28 +1314,52 @@ window.addEventListener('keydown', (e) => {
   sound.unlock();
   const target = e.target as HTMLElement | null;
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
-  // Leave browser shortcuts (Cmd+D, Ctrl+W, ...) alone.
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const driving = state === 'COUNTDOWN' || state === 'RACE' || state === 'FLIGHT';
+  // Leave browser shortcuts (Cmd+D, Ctrl+W, ...) alone. Mid-race Ctrl is Player 1's item key, so
+  // while it's held the driving keys still drive (and don't open Ctrl+S or Ctrl+D behind the game).
+  if (e.metaKey || e.altKey || (e.ctrlKey && !(driving && input.owner(e.code) !== null))) return;
   if (e.key === 'm' || e.key === 'M') {
     e.preventDefault();
     sound.toggleMute();
     return;
   }
-  // A button reached with Tab keeps its native Enter/Space press (mouse clicks blur buttons).
-  if ((e.key === 'Enter' || e.key === ' ') && target?.closest('button')) return;
+  // A button reached with Tab keeps its native Enter/Space press (mouse clicks blur buttons). Tab and
+  // Space are driving keys too, so while the results are fresh neither walks onto nor presses one.
+  const fresh = state === 'RESULTS' && performance.now() - resultsAt < RESULTS_KEY_GRACE;
+  if (fresh && e.code === 'Tab') {
+    e.preventDefault();
+    return;
+  }
+  if ((e.key === 'Enter' || e.key === ' ') && target?.closest('button')) {
+    if (fresh) e.preventDefault();
+    return;
+  }
   if (state === 'BUILD') {
     const key = garageKeys.get(e.code);
     if (!key) return;
     e.preventDefault();
+    if (input.setUsingPad(key.p, false)) renderBuild();
     garageKey(key.p, key.action, e.repeat);
   } else if (state === 'RESULTS') {
-    if (e.key === 'Enter' || e.key === ' ') {
+    if (e.key === 'Enter' || e.key === ' ' || (solo && e.code === 'KeyR')) {
       e.preventDefault();
       // Keys still being mashed from the race mustn't skip the results.
       if (e.repeat || performance.now() - resultsAt < RESULTS_KEY_GRACE) return;
       sound.click();
-      rematch();
+      if (solo) retry();
+      else rematch();
+    } else if (solo && e.code === 'Escape') {
+      e.preventDefault();
+      sound.click();
+      toGarage();
     }
+  } else if (solo && (e.code === 'KeyR' || e.code === 'Escape')) {
+    // Solo: R starts the run again at once, Esc goes back to the garage.
+    e.preventDefault();
+    if (e.repeat) return;
+    sound.click();
+    if (e.code === 'KeyR') retry();
+    else toGarage();
   } else if (input.key(e, true) !== null) {
     e.preventDefault();
   }
@@ -921,6 +1368,100 @@ window.addEventListener('keyup', (e) => {
   input.key(e, false);
 });
 window.addEventListener('blur', () => input.clear());
+
+const PAD_GARAGE: Partial<Record<PadPress['button'], GarageAction>> = {
+  left: 'prevTab',
+  right: 'nextTab',
+  lb: 'prevTab',
+  rb: 'nextTab',
+  up: 'prevPart',
+  down: 'nextPart',
+  a: 'ready',
+  menu: 'ready',
+};
+
+/** The gamepads' menu presses: the garage, the results, and solo's retry and back to the garage. */
+// `?pads` shows what the browser reports for each gamepad (to debug a pad that won't drive).
+const padDebug = params.has('pads') ? document.createElement('pre') : null;
+if (padDebug) {
+  padDebug.style.cssText =
+    'position:fixed;left:8px;top:8px;z-index:99;margin:0;padding:8px 10px;max-width:60vw;white-space:pre-wrap;font:12px/1.35 ui-monospace,monospace;color:#fff;background:rgba(0,0,0,.8);border-radius:6px;pointer-events:none';
+  document.body.appendChild(padDebug);
+}
+
+function handlePads(): void {
+  if (padDebug) padDebug.textContent = input.debugPads();
+  for (const { p, button, repeat } of input.pollMenu()) {
+    sound.unlock();
+    const switched = input.setUsingPad(p, true);
+    if (state === 'BUILD') {
+      padGarage(p, button, repeat);
+      if (switched) renderBuild();
+    } else if (state === 'RESULTS') {
+      // Buttons still being mashed from the race mustn't skip the results.
+      if (repeat || performance.now() - resultsAt < RESULTS_KEY_GRACE) continue;
+      if (button === 'a' || button === 'menu') {
+        sound.click();
+        if (solo) retry();
+        else rematch();
+      } else if (solo && (button === 'b' || button === 'view')) {
+        sound.click();
+        toGarage();
+      } else if (!solo && button === 'y') {
+        sound.click();
+        newPlayers();
+      }
+    } else if (solo && !repeat && (button === 'menu' || button === 'view')) {
+      // Solo: Menu starts the run again at once, View goes back to the garage.
+      sound.click();
+      if (button === 'menu') retry();
+      else toGarage();
+    }
+  }
+}
+
+function padGarage(p: PlayerIndex, button: PadPress['button'], repeat: boolean): void {
+  // Clicking the left stick swaps which pad drives which car.
+  if (button === 'stick' && !repeat) {
+    input.swapSeats();
+    sound.click();
+    for (const q of PLAYERS) input.rumble(q, 0.5, 0.5, q === 0 ? 150 : 400);
+    renderBuild();
+    return;
+  }
+  // A second pad while the CPU drives (or racing solo) takes over Player 2's car.
+  if (p === 1 && (cpuOn || solo)) {
+    if (!repeat && (button === 'a' || button === 'menu')) {
+      sound.click();
+      if (cpuOn) setCpu(false);
+      else setSolo(false);
+    }
+    return;
+  }
+  // Player 1's View button goes round the modes: two players, against the CPU, solo.
+  if (p === 0 && button === 'view' && !repeat) {
+    sound.click();
+    if (solo) setSolo(false);
+    else if (cpuOn) setSolo(true);
+    else setCpu(true);
+    return;
+  }
+  // Solo: Y picks the next start.
+  if (p === 0 && solo && button === 'y' && !repeat && !garage.builds[0].ready) {
+    const i = TRAIN_STARTS.findIndex((q) => q.id === training.start);
+    training.start = TRAIN_STARTS[(i + 1) % TRAIN_STARTS.length].id;
+    sound.click();
+    renderBuild();
+    return;
+  }
+  // B takes the car back out of READY.
+  if (button === 'b' && !repeat && garage.builds[p].ready) {
+    toggleReady(p, false);
+    return;
+  }
+  const action = PAD_GARAGE[button];
+  if (action) garageKey(p, action, repeat);
+}
 window.addEventListener('resize', () => {
   world.resize();
   views.setSize(world.renderer.domElement.clientWidth, world.renderer.domElement.clientHeight);
@@ -934,12 +1475,22 @@ function readInputs(firstStep: boolean): CarInput[] {
     if (bot) return bot.decide();
     const sc = scripted[p];
     if (sc) {
-      const out = { ...sc, item: sc.item && firstStep };
-      if (firstStep) sc.item = false;
+      const out = { ...sc, item: sc.item && firstStep, swap: !!sc.swap && firstStep };
+      if (firstStep) {
+        sc.item = false;
+        sc.swap = false;
+      }
       return out;
     }
     const st = input.state(p);
-    return { throttle: st.throttle, brake: st.brake, steer: st.steer, item: firstStep && input.takeItem(p) };
+    return {
+      throttle: st.throttle,
+      brake: st.brake,
+      steer: st.steer,
+      boost: st.boost,
+      item: firstStep && input.takeItem(p),
+      swap: firstStep && input.takeSwap(p),
+    };
   });
 }
 
@@ -1016,9 +1567,10 @@ function updateCars(dt: number, gdt: number, t: number): void {
       const pt = pointAt(COURSE, sc.s);
       if (sc.grounded) {
         // Nose follows the slope along the car's heading; the body leans out of turns.
-        const along = pt.grade * Math.cos(sc.heading - pt.heading);
+        const grade = sim!.gradeAt(pt);
+        const along = grade * Math.cos(sc.heading - pt.heading);
         targetPitch = Math.atan(along);
-        const side = -pt.grade * Math.sin(sc.heading - pt.heading);
+        const side = -grade * Math.sin(sc.heading - pt.heading);
         targetRoll = Math.atan(side) + Math.max(-0.14, Math.min(0.14, -sc.yawRate * speed * 0.009));
       } else {
         targetPitch = Math.atan2(sc.vy, Math.max(speed, 1)) * 0.8;
@@ -1055,9 +1607,12 @@ function updateCars(dt: number, gdt: number, t: number): void {
     car.squashV += (-170 * car.squash - 11 * car.squashV) * gdt;
     car.squash = THREE.MathUtils.clamp(car.squash + car.squashV * gdt, -0.28, 0.3);
     car.holder.scale.set(1 - car.squash * 0.45, 1 + car.squash, 1 - car.squash * 0.45);
-    // Nitro flame fades after the lip.
+    // Launch-rocket flame fades after the lip; the boost flame follows the boost key.
     car.nitro = Math.max(0, car.nitro - gdt * 0.9);
     mesh?.setNitro(car.nitro);
+    car.boostFlame += ((sc.boosting && sc.phase === 'race' ? 1 : 0) - car.boostFlame) * damp(14, gdt);
+    mesh?.setBoost(car.boostFlame);
+    car.boostVoice?.set(car.boostFlame);
     mesh?.update(dt, t);
     car.engine?.set(speed, sc.engineOn, sc.wheelspin);
     const slide = sc.phase === 'race' && sc.grounded ? Math.min(1, Math.abs(sc.slip) * 2.2 * Math.min(1, speed / 10)) : 0;
@@ -1072,16 +1627,29 @@ function updateCars(dt: number, gdt: number, t: number): void {
         particles.puff(tmpV.set(sc.x + Math.cos(sc.heading) * back, sc.y + 0.2, sc.z + Math.sin(sc.heading) * back), 1, '#f2f0ec', 0.45, 0.6);
       }
     } else skids.lift(String(p));
+    // Drifting: sparks off the rear tyres, icy blue while the slide banks boost, gold once it's long.
+    if (sc.phase === 'race' && sc.drift !== 0 && sc.grounded && speed > 8 && Math.random() < gdt * 40) {
+      const back = -k.length * 0.38;
+      const out = sc.drift * (k.width / 2);
+      const fx = Math.cos(sc.heading);
+      const fz = Math.sin(sc.heading);
+      tmpV.set(sc.x + fx * back - fz * out, sc.y + 0.15, sc.z + fz * back + fx * out);
+      particles.driftSparks(tmpV, tmpV2.set(-fx, 0, -fz), 3, sc.driftT > 1.2);
+    }
     // Status effects: spinning in poo flings brown from the wheels.
     if (sc.phase === 'race' && sc.spin > 0 && sc.grounded && Math.random() < gdt * 30) {
       particles.puff(tmpV.set(sc.x, sc.y + 0.25, sc.z), 1, Math.random() < 0.5 ? '#6b4122' : '#7a4a24', 0.32, 1.2);
     }
     car.stars.update(t, sc.spin > 0 || sc.stun > 0.2, car.root.position, 1.4);
     car.aura.update(t, sc.grit, car.root.position, sc.heading, k.length, k.width);
-    // Hints: jump Lombard's hedges; the slipstream.
+    // Hints: jump Lombard's hedges; spend the boost on the pier; the slipstream.
     if (sc.phase === 'race' && !bots[p]) {
       const m = COURSE.marks;
-      if (sc.item === 'jump' && sc.s > m.lombardS0 - 25 && sc.s < m.lombardS0 + 20 && !car.hinted.has('lombard')) {
+      if (sc.boostFrac > 0.3 && sc.s > m.embS0 - 20 && sc.s < m.embS0 && !car.hinted.has('pier')) {
+        car.hinted.add('pier');
+        hud.flash(p, 'hint', `🔥 EMPTY YOUR BOOST FOR THE JUMP! (${input.labels(p).boost})`, 'boost', gameClock, 2.6);
+      }
+      if (sc.items.includes('jump') && sc.s > m.lombardS0 - 25 && sc.s < m.lombardS0 + 20 && !car.hinted.has('lombard')) {
         car.hinted.add('lombard');
         hud.flash(p, 'hint', '🦘 JUMP THE HEDGES!', 'hype', gameClock, 3);
       }
@@ -1109,6 +1677,7 @@ function frame(): void {
   const gdt = dt * simSpeed;
   stateTime += gdt;
   gameClock += gdt;
+  handlePads();
 
   if (state === 'COUNTDOWN' && sim) {
     // The sim runs on the grid through the countdown, so a well-timed throttle gives a rocket start.
@@ -1148,41 +1717,59 @@ function frame(): void {
   if (sim && (state === 'RACE' || state === 'FLIGHT' || state === 'COUNTDOWN')) {
     const order = sim.order();
     const clock = sim.stragglerLeft();
-    for (const p of PLAYERS) {
+    for (const p of racers()) {
       const c = sim.cars[p];
-      const o = sim.cars[1 - p];
-      const racing = c.phase === 'race' && o.phase === 'race';
+      const o = sim.cars[1 - p] as (typeof sim.cars)[number] | undefined;
+      const racing = c.phase === 'race' && o?.phase === 'race';
       hud.update(
         p,
         {
           speedKmh: Math.hypot(c.vx, c.vy, c.vz) * 3.6,
-          fuelFrac: c.fuelFrac,
+          boostFrac: c.boostFrac,
+          boosting: c.boosting,
+          charging: c.drift !== 0 && c.grounded,
           wheelspin: c.wheelspin,
           phase: c.phase,
           distance: c.distance,
           hype: c.hype,
-          boost: (HYPE_BOOST * c.hype) / HYPE_MAX,
-          item: c.item as ItemKind | null,
+          hypeBonus: (HYPE_BOOST * c.hype) / HYPE_MAX,
+          items: c.items,
+          sel: c.sel,
           roulette: c.roulette > 0,
           grit: c.grit > 0,
+          gull: c.gullT > 0,
           position: order.indexOf(p) + 1,
-          gap: racing ? c.s - o.s : null,
+          gap: racing && o ? c.s - o.s : null,
           wrongWay: c.wrongWay > 1.2,
           clock,
+          ramp: sim.rampDropAt !== null ? { deg: sim.rampAngle * DEG, moving: sim.rampAngle > RAMP_MIN + 1e-6 } : null,
         },
         gameClock,
         c.phase === 'race' || c.phase === 'grid' ? c.s / L : 1,
       );
     }
   }
+  if (solo && sim && (state === 'RACE' || state === 'FLIGHT')) soloTiming();
 
   updateCars(dt, gdt, t);
+  // Solo: record this run's ghost, and race the best run's.
+  if (solo && sim) {
+    const sc = sim.cars[0];
+    const c = cars[0];
+    if ((state === 'RACE' || state === 'FLIGHT') && (sc.phase === 'race' || sc.phase === 'flight')) {
+      ghostRec.push(sim.raceT, c.root.position.x, c.root.position.y, c.root.position.z, c.root.rotation.y, c.pitch, c.roll, sc.phase === 'race' ? sc.s : L);
+    }
+    const racingNow = state === 'RACE' || state === 'FLIGHT' || state === 'COUNTDOWN';
+    const g = racingNow ? ghost.update(state === 'COUNTDOWN' ? 0 : sim.raceT) : null;
+    if (!racingNow) ghost.hide();
+    hud.setGhost(g === null ? null : g / L);
+  }
 
   // Camera targets.
   for (const p of PLAYERS) {
     const ct = camTargets[p];
     ct.pos.copy(cars[p].root.position);
-    const sc = sim?.cars[p];
+    const sc = sim?.cars[p] as (NonNullable<typeof sim>['cars'][number] | undefined);
     ct.s = sc ? sc.s : COURSE.grid[p].s;
     ct.speed = sc ? Math.hypot(sc.vx, sc.vz) : 0;
     ct.phase = sc ? sc.phase : 'grid';
@@ -1194,11 +1781,21 @@ function frame(): void {
   splashes.update(gdt);
   particles.update(gdt);
   city.update(dt, t, sim ? sim.cars.filter((c) => c.phase === 'race').map((c) => ({ x: c.x, z: c.z })) : []);
+  // The kicker stands at full height in the garage and until the first car is off it; its lamps
+  // flash while it comes down in front of someone still racing.
+  const ramping = !!sim && state !== 'BUILD' && sim.rampDropAt !== null;
+  city.kicker.set(
+    ramping ? sim!.rampAngle : KICKER_ANGLE,
+    ramping && sim!.rampAngle > RAMP_MIN + 1e-6 && sim!.cars.some((c) => c.phase === 'race'),
+    t,
+  );
   landmarks.update(dt, t);
   actors.update(gdt, t, sim);
   bay.update(t);
   fadeCars[0][0] = fadeCars[2][0] = carPos(0);
-  fadeCars[1][0] = fadeCars[2][1] = carPos(1);
+  fadeCars[1][0] = carPos(1);
+  if (solo) fadeCars[2].length = 1;
+  else fadeCars[2][1] = carPos(1);
   views.render(world.renderer, scene, (cam, pane) => {
     applyGantry(pane === -1 ? 0 : pane);
     // See through Waymos (and the cable car) that are in this view's way.
@@ -1222,11 +1819,11 @@ function frame(): void {
     const use = showTags && (views.isSplit || pane === 0);
     const tags = PLAYERS.map((p) => {
       const out = { x: 0, y: 0, vis: false };
-      if (!use) return out;
+      if (!use || (solo && p === 1)) return out;
       tagPos.copy(cars[p].root.position);
       tagPos.y += 3.0;
       views.project(pane, tagPos, out);
-      const phase = sim?.cars[p].phase;
+      const phase = sim?.cars[p]?.phase;
       out.vis &&= phase !== 'splashed' && phase !== 'dnf' && out.y > views.pane(pane).h * 0.2;
       return out;
     });
@@ -1246,6 +1843,19 @@ function frame(): void {
   // Shouts ride just above the tag on the player's own part of the screen.
   for (const p of PLAYERS) hud.placeShouts(p, ownTag[p].x, ownTag[p].y, ownTag[p].vis);
   if (++frames === 3) api.ready = true;
+}
+
+/** Solo: time the run at each split and show how it compares with the best run from this start. */
+function soloTiming(): void {
+  if (!sim) return;
+  const car = sim.cars[0];
+  const best = soloBests.get(training.start);
+  while (nextSplit < SPLITS.length && car.phase === 'race' && car.s >= SPLITS[nextSplit].s) {
+    const i = nextSplit++;
+    splitTimes[i] = sim.raceT;
+    const ref = best?.splits[i];
+    hud.split(0, SPLITS[i].label, ref === undefined || ref === null ? null : sim.raceT - ref, gameClock);
+  }
 }
 
 // ---------- Test hooks ----------
@@ -1336,9 +1946,10 @@ const api = {
   get cars() {
     if (!sim) return null;
     return sim.cars.map((c) => {
-      const { stats: _stats, missed: _missed, ...rest } = c;
+      const { stats: _stats, missed: _missed, nearPending: _near, ...rest } = c;
       void _stats;
       void _missed;
+      void _near;
       return structuredClone({ ...rest, speed: Math.hypot(c.vx, c.vz) });
     });
   },
@@ -1353,6 +1964,7 @@ const api = {
       waymos: sim.waymos.map((w) => ({ id: w.id, kind: w.kind, x: w.x, z: w.z, s: w.s, stopped: w.stopped > 0, parked: w.parked })),
       peds: sim.peds.map((p) => ({ id: p.id, kind: p.kind, x: p.x, z: p.z, s: p.s, d: p.d, down: p.down > 0 })),
       poos: sim.poos.filter((q) => q.alive).map((q) => ({ id: q.id, x: q.x, z: q.z, s: q.s, owner: q.owner })),
+      gulls: sim.gulls.map((g) => ({ id: g.id, owner: g.owner, target: g.target, state: g.state, x: g.x, y: g.y, z: g.z })),
       boxes: sim.boxes.map((b) => ({ id: b.id, s: b.s, d: b.d, hidden: b.hidden > 0 })),
       cable: sim.cable ? { x: sim.cable.x, z: sim.cable.z } : null,
     });
@@ -1360,6 +1972,15 @@ const api = {
   /** Split-screen state: 0 = one screen, 1 = fully split. */
   get split(): number {
     return views.split;
+  },
+  /** The kicker: its angle now (degrees), and the race time the first car went off it (or null). */
+  get ramp() {
+    const live = !!sim && state !== 'BUILD';
+    return { deg: (live ? sim!.rampAngle : KICKER_ANGLE) * DEG, dropAt: live ? sim!.rampDropAt : null };
+  },
+  /** The driving keys' layout: one player alone on the arrows, or two sharing the keyboard. */
+  get keyLayout(): 'single' | 'duo' {
+    return input.single ? 'single' : 'duo';
   },
   get sessionBest() {
     return sessionBest ? { ...sessionBest } : null;
@@ -1387,20 +2008,66 @@ const api = {
   autodrive(p: PlayerIndex, on = true): boolean {
     if (!isPlayer(p)) return false;
     autodrive[p] = on;
-    if (sim) bots[p] = on ? new Bot(sim, p, { aggression: 0.4 }) : null;
+    if (sim && sim.cars[p]) bots[p] = on ? new Bot(sim, p, { aggression: 0.4, drift: true }) : null;
     return true;
   },
-  /** Drive a car from a script: throttle/brake 0..1, steer -1..1, item true for one press. null ends it. */
+  /** Drive a car from a script: throttle/brake 0..1, steer -1..1, boost held, item/swap true for
+   *  one press. null ends it. */
   input(p: PlayerIndex, inp: Partial<CarInput> | null): boolean {
     if (!isPlayer(p)) return false;
-    scripted[p] = inp ? { throttle: inp.throttle ?? 0, brake: inp.brake ?? 0, steer: inp.steer ?? 0, item: inp.item ?? false } : null;
+    scripted[p] = inp
+      ? {
+          throttle: inp.throttle ?? 0,
+          brake: inp.brake ?? 0,
+          steer: inp.steer ?? 0,
+          item: inp.item ?? false,
+          boost: inp.boost ?? false,
+          swap: inp.swap ?? false,
+        }
+      : null;
     return true;
   },
-  /** Hand a car an item (test hook). */
+  /** Hand a car an item (test hook): it goes in a free slot and is selected. */
   giveItem(p: PlayerIndex, item: ItemKind): boolean {
-    if (!sim || !isPlayer(p) || !['jump', 'grit', 'poo'].includes(item)) return false;
+    if (!sim || !isPlayer(p) || !sim.cars[p] || !ITEM_KINDS.includes(item)) return false;
     sim.giveItem(p, item);
     return true;
+  },
+  /** Solo training (the garage toggle): race alone. */
+  setSolo(on: boolean): boolean {
+    if (state !== 'BUILD') return false;
+    setSolo(on);
+    return true;
+  },
+  get solo(): boolean {
+    return solo;
+  },
+  /** Solo training settings: start ('top' | 'hyde' | 'lombard' | 'final'), ghost, traffic, items. */
+  setTraining(change: Partial<Training>): boolean {
+    if (state !== 'BUILD') return false;
+    Object.assign(training, change);
+    renderBuild();
+    return true;
+  },
+  get training(): Training {
+    return { ...training };
+  },
+  /** Solo: race again from the same start at once (R), or go back to the garage (Esc). */
+  retry(): boolean {
+    return retry();
+  },
+  toGarage(): boolean {
+    return toGarage();
+  },
+  /** Solo: the best run from each start (distance, time, splits, ghost frames). */
+  get soloBests() {
+    return Object.fromEntries(
+      [...soloBests].map(([k, b]) => [k, { distance: b.distance, runTime: b.runTime, splits: [...b.splits], ghostFrames: b.ghost.length / GHOST_STRIDE }]),
+    );
+  },
+  /** Solo: whether the ghost is on screen. */
+  get ghostVisible(): boolean {
+    return ghost.root.visible;
   },
   /** Put a car somewhere on the course (arc length s, offset d, speed m/s): test hook. */
   place(p: PlayerIndex, s: number, d = 0, speed = 0): boolean {

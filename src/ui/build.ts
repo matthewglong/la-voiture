@@ -2,9 +2,32 @@
 // same time: stat bars, a tab per slot showing the fitted part, the parts for the open tab, and a
 // READY button. Plus the wind forecast and a status banner.
 import { fittedPart, moneyAfter, moneyLeft, stockPart, swappedOut, type Garage } from '../garage';
+import { driveKeys, PAD_LABELS } from '../input';
 import { PARTS, SLOT_LABELS, computeStats } from '../parts';
 import { G, RHO } from '../sim/physics';
+import { COURSE } from '../track';
 import { SLOT_ORDER, type CarConfig, type CarStats, type PartOption, type PlayerIndex, type SlotId } from '../types';
+
+/** Where a solo run starts. */
+export type TrainStart = 'top' | 'hyde' | 'lombard' | 'final';
+
+/** Solo training settings. */
+export interface Training {
+  start: TrainStart;
+  /** Race a see-through replay of the best run from this start. */
+  ghost: boolean;
+  traffic: boolean;
+  items: boolean;
+}
+
+/** The solo starts: the grid, or further down (s: course arc length, null for the grid). */
+export const TRAIN_STARTS: { id: TrainStart; name: string; what: string; s: number | null }[] = [
+  { id: 'top', name: 'The top', what: 'the whole run', s: null },
+  { id: 'hyde', name: 'Larkin St', what: 'the fast Hyde St corners', s: COURSE.sections.find((q) => q.kind === 'intersection')!.s0 + 1 },
+  // Just round the Hyde St corner: the cable car waits at the far end (see RaceSim.placeStart).
+  { id: 'lombard', name: 'Hyde St', what: 'Lombard’s switchbacks', s: COURSE.marks.hydeS0 + 4 },
+  { id: 'final', name: 'Leavenworth', what: 'the last blocks and the jump', s: COURSE.marks.lombardS1 + 3 },
+];
 
 export interface BuildHandlers {
   /** A click on a part: fit it, or remove it when it is the paid part already fitted. */
@@ -19,6 +42,10 @@ export interface BuildHandlers {
   onName(player: PlayerIndex, name: string): void;
   /** Player 2 only: hand the car to the CPU (or take it back). */
   onCpu(player: PlayerIndex): void;
+  /** Race alone (or bring Player 2 back). */
+  onSolo(): void;
+  /** Change the solo training settings. */
+  onTraining(change: Partial<Training>): void;
 }
 
 export interface LastRun {
@@ -36,6 +63,13 @@ export interface BuildView {
   lastRuns: [LastRun | null, LastRun | null];
   /** Which players the CPU drives. */
   cpu: [boolean, boolean];
+  /** Racing alone: Player 2's panel holds the training settings instead. */
+  solo: boolean;
+  training: Training;
+  /** Solo: the best distance from each start so far. */
+  soloBests: Partial<Record<TrainStart, number>>;
+  /** Which players are on a gamepad (their hints show its buttons). */
+  pads: [boolean, boolean];
 }
 
 export type GarageAction = 'prevTab' | 'nextTab' | 'prevPart' | 'nextPart' | 'ready';
@@ -60,6 +94,15 @@ export const GARAGE_KEYS: Record<PlayerIndex, Record<GarageAction, { codes: stri
     nextPart: { codes: ['ArrowDown'], label: '↓' },
     ready: { codes: ['Enter', 'NumpadEnter'], label: 'ENTER' },
   },
+};
+
+/** The garage on a gamepad: the d-pad (or stick, or the shoulders for tabs) and A. */
+export const GARAGE_PAD: Record<GarageAction, string> = {
+  prevTab: '◀',
+  nextTab: '▶',
+  prevPart: '▲',
+  nextPart: '▼',
+  ready: 'A',
 };
 
 const PLAYERS: PlayerIndex[] = [0, 1];
@@ -88,7 +131,7 @@ const RANGE = {
   mass: sumMax((o) => o.mass),
   drag: sumMax((o) => o.cdA ?? 0),
   power: maxOf('engine', (o) => o.power ?? 0),
-  fuel: maxOf('fuel', (o) => o.energy ?? 0),
+  boost: maxOf('boost', (o) => o.boost ?? 0),
   grip: maxOf('wheels', (o) => o.mu ?? 0) * 1.1,
 };
 
@@ -116,7 +159,6 @@ interface StatRow {
 
 function statRows(s: CarStats): StatRow[] {
   const lift = liftShare(s);
-  const burn = s.power > 0 ? s.energy / s.power : 0;
   const handling = handlingScore(s);
   const brake = brakingG(s);
   return [
@@ -130,12 +172,12 @@ function statRows(s: CarStats): StatRow[] {
       cost: false,
     },
     {
-      key: 'fuel',
-      label: 'Fuel',
-      frac: Math.sqrt(s.energy / RANGE.fuel),
-      raw: s.energy,
-      // How long the engine can be floored.
-      text: burn >= 99.5 ? '99+ s gas' : `${burn < 9.95 ? burn.toFixed(1) : Math.round(burn)} s gas`,
+      key: 'boost',
+      label: 'Boost',
+      frac: s.boostCap / RANGE.boost,
+      raw: s.boostCap,
+      // How long the boost key can be held on a full bottle.
+      text: `${s.boostCap.toFixed(1)} s boost`,
       cost: false,
     },
     {
@@ -176,8 +218,14 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
-function keyHint(parent: HTMLElement, labels: string[]): void {
+function keyHint(parent: HTMLElement, labels: string[]): HTMLElement {
   const keys = el('span', 'keys', parent);
+  setKeys(keys, labels);
+  return keys;
+}
+
+function setKeys(keys: HTMLElement, labels: string[]): void {
+  keys.replaceChildren();
   for (const label of labels) el('kbd', '', keys, label);
 }
 
@@ -231,7 +279,23 @@ interface PanelRefs {
   readyCard: HTMLElement;
   readyWait: HTMLElement;
   readyBtn: HTMLButtonElement;
+  /** The key chips by the tabs and the parts (keyboard or pad). */
+  tabKeys: HTMLElement;
+  partKeys: HTMLElement;
+  /** Whether those chips show the pad's buttons. */
+  padKeys: boolean;
   cpuBtn: HTMLButtonElement | null;
+  soloBtn: HTMLButtonElement | null;
+  /** Player 2's panel only: the solo training settings. */
+  train: TrainRefs | null;
+}
+
+interface TrainRefs {
+  root: HTMLElement;
+  starts: Map<TrainStart, { btn: HTMLButtonElement; best: HTMLElement }>;
+  toggles: Map<'ghost' | 'traffic' | 'items', HTMLButtonElement>;
+  /** How to retry or leave a run (keys or pad). */
+  keys: HTMLElement;
 }
 
 export class BuildUI {
@@ -240,6 +304,11 @@ export class BuildUI {
   private readonly wind: HTMLElement;
   private readonly banner: HTMLElement;
   private readonly roundChip: HTMLElement;
+  /** The race's keys, for two players or one alone. */
+  private readonly drive: HTMLElement;
+  private driveKey: string | null = null;
+  /** How to build: with the mouse, or also with the pads once one is in use. */
+  private readonly howTo: HTMLElement;
   private readonly panels: [PanelRefs, PanelRefs];
   private view: BuildView | null = null;
   /** The part each player's pointer is over (previewed on the car and the stat bars). */
@@ -255,13 +324,8 @@ export class BuildUI {
     const bottom = el('div', 'bottombar', this.root);
     this.banner = el('div', 'banner', bottom);
     this.banner.id = 'garage-banner';
-    el('div', 'title-card', bottom, 'Click a part to fit it, click it again to remove it');
-    const drive = el('div', 'title-card drive', bottom);
-    drive.append('Race: ');
-    el('b', 'p1', drive, 'W A S D + SPACE');
-    drive.append(' · ');
-    el('b', 'p2', drive, '← ↑ → ↓ + ENTER');
-    drive.append(' · gamepads too');
+    this.howTo = el('div', 'title-card', bottom, 'Click a part to fit it, click it again to remove it');
+    this.drive = el('div', 'title-card drive', bottom);
     this.panels = [this.makePanel(0), this.makePanel(1)];
   }
 
@@ -288,12 +352,20 @@ export class BuildUI {
       e.stopPropagation();
     });
     let cpuBtn: HTMLButtonElement | null = null;
+    let soloBtn: HTMLButtonElement | null = null;
     if (p === 1) {
-      cpuBtn = el('button', 'cpu-btn', head, '🤖 CPU');
+      // Two ways to play without Player 2, stacked so the name keeps its room.
+      const modes = el('div', 'modes', head);
+      cpuBtn = el('button', 'cpu-btn', modes, '🤖 CPU');
       cpuBtn.type = 'button';
       cpuBtn.id = 'cpu-p2';
       cpuBtn.title = 'Let the computer drive Player 2';
       cpuBtn.addEventListener('click', () => this.h.onCpu(p));
+      soloBtn = el('button', 'cpu-btn solo-btn', modes, '🏁 Solo');
+      soloBtn.type = 'button';
+      soloBtn.id = 'solo-p2';
+      soloBtn.title = 'Race alone: practise from any part of the course against a ghost of your best run';
+      soloBtn.addEventListener('click', () => this.h.onSolo());
     }
     const money = el('div', 'money', head);
     money.id = `money-p${p + 1}`;
@@ -314,7 +386,7 @@ export class BuildUI {
     // Explains the gold tabs after a rematch.
     const changedKey = el('span', 'legend hidden', carHead, 'changed');
     changedKey.title = 'Gold tabs have changed since the last race';
-    keyHint(carHead, [keys.prevTab.label, keys.nextTab.label]);
+    const tabKeys = keyHint(carHead, [keys.prevTab.label, keys.nextTab.label]);
     const tabList = el('div', 'tabs', carWrap);
     tabList.setAttribute('role', 'tablist');
     tabList.setAttribute('aria-label', `Player ${p + 1}'s car`);
@@ -338,12 +410,14 @@ export class BuildUI {
     const parts = el('div', 'parts', options);
     const partsHead = el('div', 'section-title', parts);
     const partsTitle = el('span', '', partsHead);
-    keyHint(partsHead, [keys.prevPart.label, keys.nextPart.label]);
+    const partKeys = keyHint(partsHead, [keys.prevPart.label, keys.nextPart.label]);
     const cards = el('div', 'cards', parts);
     const readyCard = el('div', 'ready-card hidden', options);
     el('div', 'tick', readyCard, '✓');
     el('div', 'big', readyCard, 'Ready!');
     const readyWait = el('div', 'sub', readyCard);
+
+    const train = p === 1 ? this.makeTraining(root) : null;
 
     const readyBtn = el('button', 'ready-btn', root);
     readyBtn.type = 'button';
@@ -370,8 +444,58 @@ export class BuildUI {
       readyCard,
       readyWait,
       readyBtn,
+      tabKeys,
+      partKeys,
+      padKeys: false,
       cpuBtn,
+      soloBtn,
+      train,
     };
+  }
+
+  /** Player 2's panel while racing solo: where to start, the ghost, traffic and items. */
+  private makeTraining(panel: HTMLElement): TrainRefs {
+    const root = el('div', 'training hidden', panel);
+    root.id = 'training';
+    const head = el('div', 'section-title', root);
+    el('span', '', head, 'Solo training');
+    el('div', 'train-sub', root, 'Race alone, from the top or straight to the tricky bits. Beat your best run’s ghost.');
+    el('div', 'section-title', root).append('Start from');
+    const list = el('div', 'starts', root);
+    const starts = new Map<TrainStart, { btn: HTMLButtonElement; best: HTMLElement }>();
+    for (const st of TRAIN_STARTS) {
+      const btn = el('button', 'card start', list);
+      btn.type = 'button';
+      btn.dataset.start = st.id;
+      el('span', 'radio', btn);
+      el('span', 'name', btn, st.name);
+      const best = el('span', 'price best', btn);
+      el('span', 'tagline', btn, st.what);
+      btn.addEventListener('click', (e) => {
+        if (e.detail > 1) return;
+        this.h.onTraining({ start: st.id });
+      });
+      starts.set(st.id, { btn, best });
+    }
+    el('div', 'section-title', root).append('On the road');
+    const row = el('div', 'toggles', root);
+    const toggles = new Map<'ghost' | 'traffic' | 'items', HTMLButtonElement>();
+    for (const [key, label] of [
+      ['ghost', '👻 Ghost'],
+      ['traffic', '🚗 Traffic'],
+      ['items', '🎁 Items'],
+    ] as const) {
+      const b = el('button', 'toggle', row, label);
+      b.type = 'button';
+      b.dataset.toggle = key;
+      b.addEventListener('click', (e) => {
+        if (e.detail > 1 || !this.view) return;
+        this.h.onTraining({ [key]: !this.view.training[key] });
+      });
+      toggles.set(key, b);
+    }
+    const keys = el('div', 'train-keys', root, 'In a run: R to retry, Esc for the garage');
+    return { root, starts, toggles, keys };
   }
 
   show(visible: boolean): void {
@@ -386,7 +510,9 @@ export class BuildUI {
 
     const ready = PLAYERS.filter((p) => view.garage.builds[p].ready);
     this.banner.replaceChildren();
-    if (view.cpu[1] && !view.garage.builds[0].ready) {
+    if (view.solo) {
+      this.banner.append(`${view.round === 1 ? 'Build' : 'Tweak'} your car, then hit READY for a solo run`);
+    } else if (view.cpu[1] && !view.garage.builds[0].ready) {
       this.banner.append(`${view.round === 1 ? 'Build' : 'Tweak'} your car, then hit READY to race the CPU`);
     } else if (ready.length === 1) {
       const p = ready[0];
@@ -397,8 +523,37 @@ export class BuildUI {
       this.banner.append(`${view.round === 1 ? 'Build' : 'Tweak'} your cars, then both hit READY`);
     }
     this.banner.dataset.ready = ready.join(',');
+    this.renderDrive(view.solo || view.cpu[1], view.pads);
+    const pads = view.pads[0] || view.pads[1];
+    this.howTo.textContent = pads
+      ? `Click a part, or 🎮 ◀ ▶ tabs · ▲ ▼ parts · A ready · click the stick to swap pads · P1 View: VS / CPU / solo${view.solo ? ' · Y: start point' : ''}`
+      : 'Click a part to fit it, click it again to remove it';
 
     for (const p of PLAYERS) this.renderPanel(p, view);
+  }
+
+  /** The race's controls: both players' when they share the keyboard, Player 1's alone otherwise. */
+  private renderDrive(single: boolean, pads: [boolean, boolean]): void {
+    const key = `${single}${pads}`;
+    if (key === this.driveKey) return;
+    this.driveKey = key;
+    const shown = single ? [0 as const] : PLAYERS;
+    // Everyone on a pad: one line for all.
+    if (shown.every((p) => pads[p])) {
+      const k = PAD_LABELS;
+      this.drive.replaceChildren(
+        `Race 🎮: ${k.throttle} go · ${k.brake} brake · stick steer · ${k.boost} boost · ${k.item} item · ${k.swap} swap · tap ${k.brake} in a turn to drift`,
+      );
+      return;
+    }
+    this.drive.replaceChildren('Race: ');
+    for (const p of shown) {
+      const k = pads[p] ? PAD_LABELS : driveKeys(p, single).labels;
+      const move = pads[p] ? `🎮 RT go · LT brake · STICK steer` : k.move;
+      el('b', `p${p + 1}`, this.drive, `${move} · ${k.boost} boost · ${k.item} item · ${k.swap} swap`);
+      this.drive.append(' · ');
+    }
+    this.drive.append(pads[0] || pads[1] ? 'tap the brake in a turn to drift' : 'tap the brake in a turn to drift · pads too');
   }
 
   /** Drop a player's hover preview, e.g. when they act with the keyboard. */
@@ -461,8 +616,41 @@ export class BuildUI {
       refs.cpuBtn.textContent = cpu ? '🤖 CPU ON' : '🤖 CPU';
       refs.cpuBtn.title = cpu ? 'The computer drives Player 2: click to drive it yourself' : 'Let the computer drive Player 2';
     }
+    // Racing solo, Player 2's panel becomes the training settings.
+    const training = p === 1 && view.solo;
+    refs.root.classList.toggle('solo', training);
+    if (refs.soloBtn) {
+      refs.soloBtn.setAttribute('aria-pressed', String(view.solo));
+      refs.soloBtn.textContent = view.solo ? '👥 Add Player 2' : '🏁 Solo';
+      refs.soloBtn.title = view.solo ? 'Bring Player 2 back for a race' : 'Race alone: practise from any part of the course against a ghost of your best run';
+    }
+    if (refs.train) {
+      refs.train.root.classList.toggle('hidden', !training);
+      for (const [id, t] of refs.train.starts) {
+        const on = view.training.start === id;
+        t.btn.classList.toggle('fitted', on);
+        t.btn.setAttribute('aria-pressed', String(on));
+        const best = view.soloBests[id];
+        t.best.textContent = best === undefined ? '' : `best ${best.toFixed(1)} m`;
+        t.best.classList.toggle('hidden', best === undefined);
+      }
+      refs.train.keys.textContent = view.pads[0]
+        ? 'In a run: 🎮 Menu to retry, View for the garage · pad 2: A to join'
+        : 'In a run: R to retry, Esc for the garage';
+      for (const [key, b] of refs.train.toggles) {
+        b.classList.toggle('on', view.training[key]);
+        b.setAttribute('aria-pressed', String(view.training[key]));
+      }
+    }
     refs.readyBtn.replaceChildren(cpu ? 'CPU is ready' : b.ready ? 'Edit car' : 'Ready');
-    if (!cpu) el('kbd', '', refs.readyBtn, GARAGE_KEYS[p].ready.label);
+    const pad = view.pads[p];
+    if (!cpu) el('kbd', '', refs.readyBtn, pad ? GARAGE_PAD.ready : GARAGE_KEYS[p].ready.label);
+    if (refs.padKeys !== pad) {
+      refs.padKeys = pad;
+      const k = GARAGE_KEYS[p];
+      setKeys(refs.tabKeys, pad ? [GARAGE_PAD.prevTab, GARAGE_PAD.nextTab] : [k.prevTab.label, k.nextTab.label]);
+      setKeys(refs.partKeys, pad ? [GARAGE_PAD.prevPart, GARAGE_PAD.nextPart] : [k.prevPart.label, k.nextPart.label]);
+    }
     refs.readyBtn.disabled = cpu;
     refs.readyBtn.setAttribute('aria-pressed', String(b.ready));
 

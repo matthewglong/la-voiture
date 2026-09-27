@@ -5,8 +5,293 @@ Where this file and the prompt disagree, the prompt's intent was followed and th
 
 The game has had three shapes: the prompt's turn-based draft and hands-off run-up; the garage (both
 players building at once, see "Garage"); and now **the race**, where players drive the cars down a
-much longer course with items, traffic, collisions and a split screen. "The race" below records
-every decision behind that change; the older sections that still hold are kept after it.
+much longer course with items, traffic, collisions and a split screen. "The race" records every
+decision behind that change. The race then got arcade handling with a drift, a boost bottle in place
+of fuel, two item slots with more items, and a solo training mode: "Drift, boost and solo" comes
+first because it overrides parts of "The race" (those passages now point back to it). Most recently
+the keys were laid out afresh for one player or two, and the kicker started dropping once the first
+car is off it: "Keys, and a kicker worth racing to" comes first of all. The older sections that
+still hold are kept after them.
+
+## Keys, and a kicker worth racing to
+
+The request: new keys. Alone, the arrows drive, Space drops the item, Shift boosts and Tab swaps
+items. Two players: Player 1 keeps W, A, S and D with Shift to boost, Ctrl to use the item and Tab to
+swap; Player 2 keeps the arrows with P to boost, ; to use and O to swap; the garage keys stay as they
+are. And: make it worth being in the lead ("the entire game feels like a race, but then it's just
+the very last leg that really matters, because that's when you build up the speed to ramp off"),
+with the suggestion that the jump starts off pointing higher and is progressively lowered, so that
+whoever gets there late can't jump as far.
+
+### Keys
+
+| | Gas | Brake | Steer | Boost | Item | Swap items |
+|---|---|---|---|---|---|---|
+| Two players: Player 1 | W | S | A / D | Left Shift | Left Ctrl | Tab |
+| Two players: Player 2 | ↑ | ↓ | ← / → | P | ; | O |
+| One player (CPU or solo) | ↑ (or W) | ↓ (or S) | ← / → (or A / D) | either Shift | Space | Tab |
+
+- The layout is picked when a run starts (one player when the CPU drives Player 2 or racing solo).
+  The garage's race-keys strip follows the CPU and Solo toggles, and the countdown card, the HUD's
+  key chips and the hints read the layout in use. Alone, WASD drives as well as the arrows (the
+  garage still uses WASD, so nobody has to swap hands to start); Ctrl, P, ; and O do nothing.
+- The old keys are gone (Player 1's Space, Q and E, Player 2's Enter, Right Shift, / and .), so no
+  key has two jobs.
+- The keydown handler used to ignore every key while Ctrl, Cmd or Alt was held, to leave browser
+  shortcuts alone. With Ctrl as Player 1's item key that swallowed the item press itself, and every
+  key the other player pressed while Ctrl was down. Now, from the countdown to the end of the
+  flight, a driving key reaches the game even with Ctrl held, and is kept from the browser (Ctrl+S,
+  Ctrl+D and Ctrl+A do nothing mid-race). Cmd and Alt shortcuts, and Ctrl with any other key, still
+  reach the browser, and the garage is unchanged.
+- Tab no longer walks the focus mid-race. On the results card, for its first 1.5 s (the grace Enter
+  and Space already had), Tab doesn't move the focus onto a button and Enter or Space doesn't press
+  one: a swap mashed at the end of a race could otherwise tab onto Rematch and a Space press it.
+- **Conflicts a page can't fix.** On macOS, Control with an arrow key is a system shortcut (Mission
+  Control, application windows, move a space left or right, all on by default) that the browser
+  never sees: if Player 1 taps Ctrl just as Player 2 presses an arrow, the window slides away
+  mid-race. Turn those shortcuts off for two-player sessions (System Settings → Keyboard → Keyboard
+  Shortcuts → Mission Control); alone, Ctrl isn't used. Ctrl+Tab (both Player 1's keys at once)
+  switches browser tabs. On Windows and Linux, Ctrl+W closes the tab and pages can't stop it, so
+  Player 1 shouldn't hold Ctrl while pressing W. Gamepads avoid all of it.
+
+### Why the lead didn't matter
+
+The score is the jump, and the jump depends only on the launch: the speed at the lip (the last blocks
+and the pier), the boost burned on the pier, the launch rocket and HYPE. Being ahead paid only a
+little HYPE (leading 0.3/s, first onto the pier +10, overtakes +6). The autopilot shows the lead
+mattering anyway: in mirror matches (the same build for both cars, both on the drifting autopilot,
+traffic and items, 120 races) the first car to the lip won 84% of them. But that is because the
+autopilot drives the pier the same way every time, so the car ahead is simply the one with more HYPE
+and fewer knocks. People differ most in exactly that last leg (when to dump the boost, a clean run
+along the pier), so for them the order through the race counted for little, which is the feedback.
+
+### The dropping kicker
+
+Taken from the suggestion, with the trigger made precise:
+
+- **The first car off the kicker gets its full 25°** (exactly the old ramp). From that moment it
+  comes down **2° a second, to 12°**, so the gap at the lip turns straight into launch angle: 1 s
+  behind is 23°, 3 s is 19°, 6.5 s or more is 12°.
+- **Why the first launch starts the clock,** not GO or a par time: a clock from GO would give two
+  slow drivers who are racing each other closely flat ramps, would tie solo runs and the balance
+  check to the race time, and would shift every part's value with the autopilot's pace. From the
+  first launch only the gap counts. A lone car (solo, the balance check, `predict()`) always gets
+  25°, so the balance report is unchanged, bit for bit. Racing solo there's nobody to beat to it;
+  the ghost doesn't drop it (its run was flown off the full ramp).
+- **Why the leader's ramp isn't raised** above 25°: every flight would lengthen, and the best
+  tailwind build already flies 179.8 m against the check's 180 m cap.
+- **What a second is worth** (a car held on the grid, the calm-air best build, both on the
+  autopilot, an empty course): 1 s behind −5%, 1.5 s −8%, 2.5 s −13.5%, 3.5 s −19%, 4.5 s −24%,
+  12° (6.5 s or more) −35%. The steeper ramp costs the car some speed on the way up, and a lower lip
+  gives some of it back, so in the full sim the angle costs more than in the flight model alone
+  (about 2% a degree there). Slow, cheap cars hardly notice: at 12 m/s the all-$0 build flies about
+  as far off 12° as off 25°. For scale, full HYPE is worth +25-33% and a well-timed boost dump
+  +13-23%.
+- **Tuning** (the same 120 mirror matches under each setting: how much shorter the chasing car flew
+  than off the old kicker, and how often the first car to the lip won):
+
+  | Drop | < 1 s behind | 1-2 s | 2-4 s | 4 s + | First to the lip wins |
+  |---|---|---|---|---|---|
+  | none (the old kicker) | 0% | 0% | 0% | 0% | 84% |
+  | 1°/s to 10° | −1% | −4% | −8% | −13% | 89% |
+  | 1.5°/s to 10° | −1% | −5% | −11% | −19% | 90% |
+  | **2°/s to 12°** | −2% | −7% | −15% | −26% | 92% |
+  | 2.5°/s to 10° | −2% | −9% | −19% | −31% | 93% |
+
+  The first try, 2.5°/s to 10°, made a 4 s gap cost about as much as full HYPE is worth; 2°/s keeps a
+  photo finish a photo finish and still makes a clear lead count. The floor is what a straggler still
+  gets, a real jump. With the CPU's six builds mixed (80 races), the first car to the lip won 81% off
+  the old kicker and 88% now. It's two constants, `RAMP_RATE` and `RAMP_MIN` in `src/sim/race.ts`.
+- **It shows.** A klaxon and the hiss of the rams when it starts; "FULL RAMP!" on the leader's card;
+  "⚠ THE RAMP IS DROPPING!" and a HURRY! shout for the chaser, whose card then carries a live hazard
+  strip ("⚠ RAMP DROPPING · 19°", "DOWN" once it's at 12°); "RAMP DOWN TO 14°" at the chaser's
+  launch; each car's angle in the results; a line on the countdown card. The kicker's amber lamps
+  flash while it comes down in front of someone still racing.
+- **In the sim** the lip stays over the same spot (so the distance is still measured from it and the
+  buoys still line up) and only comes down: the kicker's rise scales by tan(angle)/tan(25°), and
+  everything that reads the road's height or grade asks the race (`RaceSim.roadY`, `gradeAt`), so a
+  car on the ramp rides down with it (at most a few centimetres a step), poo dropped on it comes down
+  too, and the pier crew's push leaves at the angle of the moment. The renderer pitches the car to
+  the moving slope.
+- **In the scene** the old timber posts couldn't hold up a ramp that moves, so the kicker is a
+  plywood leaf hinged to the pier with a steel frame under it, on two hydraulic rams (yellow barrels,
+  chrome rods) near the lip. The leaf stretches a little as it drops, so the lip stays over its spot;
+  the striped fascia rides down with the lip; amber lamps sit on the lip's corners. It's its own
+  module, `src/scene/kicker.ts`.
+- **Considered:** a bonus for the first car through each landmark (HYPE or boost at Hyde, Lombard and
+  the pier) pays for leading during the race too, but it's one more thing feeding HYPE, already the
+  least visible part of the launch; the ramp is plain to see and happens at the moment that decides
+  the round. A bonus added to the distance for the finishing order was arbitrary. Either could be
+  added later.
+
+## Drift, boost and solo
+
+The feedback, from playing it: there should be a solo/training mode; steering and handling needed
+work ("even the best optimized cars can't turn a corner"), with the question of whether drifting is
+part of the fix or the fix; each car should hold two power-ups and toggle between them; fuel doesn't
+really come into play unless you try to waste it, so should it be a nitro/boost meter that runs out
+much faster (pressure-test it); and more power-ups, including a partial and a rare full boost refill,
+keeping Determination.
+
+### Why the cars couldn't corner
+
+Measured with scripted keyboard drivers (full lock or nothing, a 0.15 s reaction) on an empty course:
+every build arrived at Hyde St's 90° corner at 28-31 m/s and, holding the gas and steering, hit the
+tyre wall at about 25 m/s; Lombard's entry corner took 5 s and three or four wall hits. A driver who
+braked for the corners still hit walls at 10-13 m/s. The physics was honest: the tyres gave about
+1 g sideways (μ 0.85-1.3), so the 7 m city corners wanted 9-12 m/s, and braking from 30 m/s to that
+takes 30-40 m of a steep block. The autopilot only got round by braking early to an exact plan;
+humans on keys couldn't.
+
+### Handling: arcade grip first, drifting on top
+
+Drifting is part of the fix, not all of it. Making the drift the only way round would put a skill
+wall in front of newcomers in a party game, and an automatic drift would take away the skill and its
+reward. So there are two layers:
+
+- **Arcade cornering grip.** Sideways grip is 1.6× the tyres' friction (`CORNER_GRIP`; braking and
+  traction are unchanged), and full lock now pushes the nose only 15% past what the tyres can follow
+  (was 40%), so plain steering grips cleanly instead of sliding wide. Brake to a sensible speed, turn,
+  and you're round.
+- **Drift: tap the brake while turning at speed** (over 8 m/s). No new key: it's the brake, and the
+  thing a panicking newcomer does anyway (brake and turn) now throws the car sideways and gets it
+  round. Only a fresh press counts (within 0.2 s of the brake going down): a brake held from before the
+  corner gives a normal braking turn, and holding the brake while unwinding a drift doesn't throw you
+  into another one the other way. (The first version triggered on a held brake and chained drifts
+  into the walls.) After a drift, the next can't start for 0.3 s.
+- **The wheel sets the slide's arc** (Mario Kart style): held into the slide, the car turns on 2.4×
+  the tyres' friction (1.5× plain cornering, so about 22% more corner speed); with the wheel let go the
+  arc widens to 55% of that, and counter-steered it runs nearly straight. Let go for 0.3 s and the tyres
+  grip again. The nose holds an angle to the direction of travel (17° let go, 35° held in) that settles
+  to nothing as the drift ends, so it doesn't snap straight or over-rotate. The first version let the
+  slip angle drive the turn, like a real car: on keys it over-rotated past the exit every time.
+- **What a drift costs and pays:** it scrubs a little speed (0.3 g at full bite), leaves the engine
+  55% of its traction (no free speed from the throttle), and pushes along the direction of travel.
+  It pays in HYPE (as before) and, above all, in **boost** (below).
+- A short hop mid-drift (up to 0.35 s, e.g. over the little crest into Lombard) keeps the drift;
+  leaving the road mid-turn no longer sets the car spinning in the air (a sedan used to land
+  backwards there). Tiny crests are ignored up to 1.6 m/s of drop (was 1.2).
+- **Hard wall hits cost more.** Before, a newcomer who never braked and bounced round the corners off
+  the tyre walls was *faster* over the lap than a careful driver. Now an impact over 8 m/s into a wall
+  takes up to 40% more speed and stuns the car for up to 0.6 s.
+- The first hard hit on a corner wall flashes "TAP S WHILE TURNING TO DRIFT!".
+
+With a "reasonable human" driver model (keys only, 0.15 s reaction, looks ahead and brakes to a
+corner speed learned by feel ±10%), time to the lip on good builds: grip drivers 32.6-39 s; drifters
+32.8-36 s on the kart, Bathtub and Sedan (the Bathtub 33.3 s against 37.5 s on grip). The long Pickup
+is the exception: drifting, it gets itself crosswise in a hairpin now and then (a real driver backs
+out; the model waits for the 6 s rescue). A newcomer who never brakes is now the slowest (34.6 s in
+the kart). The autopilot drives 27-32 s. In the browser, a brake tap on the keys carried 25 m/s
+through the Hyde St corner in one drift.
+
+### Fuel → boost: the pressure test
+
+**What fuel did.** It was a hidden budget, engine power × tank energy, burned only on the gas. In
+practice careful players never ran out (invisible), careless ones ran dry after Lombard and limped
+(harsh, late and confusing), and the only decision it asked for was "lift off the gas to save fuel",
+which is the opposite of fun in a racing game. Its real job was in the garage: the tank slot traded
+money and weight against how much of the engine you could use.
+
+**What a boost meter changes.**
+
+- The gas becomes free and unlimited: the base car always performs, nobody is ever stranded, and the
+  engine and wheels alone set the car's pace.
+- The resource becomes a decision every few seconds: spend now (overtake, climb out of a corner,
+  recover from a hit) or save it for the pier, where it sets the launch. That is visible and active,
+  instead of an invisible reserve.
+- It gives the drift a purpose: drifting refills the bottle, so a good corner pays out on the next
+  straight. That drift → boost → speed loop is what makes Mario Kart and Burnout feel good.
+- Items get a clean new category (refills), and refill odds that favour the chaser are a comeback
+  mechanism.
+
+**Risks, and what handles them.**
+
+- *Hoarding* (the launch is the score, so why boost before the pier?). The bottle has a cap, so
+  drifting on a full bottle banks nothing: spend some before a run of corners or lose the refill.
+  What's left at the lip is still wasted, so you want to arrive empty having burned it on the pier.
+  And racing position still pays through HYPE, item odds and first to the pier. The intended rhythm:
+  spend on the top blocks and Hyde St, refill through Lombard's drifts, dump it on the pier.
+- *Boost at the lip swamping everything else.* The push fades to nothing at 1.1× the engine's top
+  speed, and the engines' top speeds came down (below), so a full, well-timed dump adds 8-14% to the
+  launch speed of a real build (13-23% more distance), about what full HYPE gives. The rare full
+  refill late in the race is then a real comeback without being decisive.
+- *No fuel limit makes the V8 and jet stronger.* Rebalanced (below), with the balance check passing.
+- *One more button* on a shared keyboard. Boost is on Shift (a modifier key, so it never ghosts the
+  others); gamepads have it on the shoulders.
+
+**Verdict: better, as suggested,** and implemented:
+
+- **Bottles** (the old Fuel tank slot, now "Boost"): Nitro can (free, 8 kg, 1.5 s), Bottle ($10,
+  25 kg, 3 s), Big bottle ($20, 60 kg, 4.5 s). The meter starts full and drains 1 s per second held.
+- **The push:** 6 m/s² along the nose (the same for every car: boost is a driving tool, not a build
+  stat), at full strength up to 80% of the ceiling and fading to nothing at 1.1× the engine's top speed
+  (wind included). It works in the air (it's a rocket), not while spun out or stunned.
+- **Refills:** drifting banks up to 0.5 s of boost per second (more for a fast, tight slide); the Boost
+  +50% and Full boost items. A refill used on a full bottle is kept for later rather than wasted.
+- **The Launch rocket** (the old Nitro booster, renamed so it isn't confused with the boost) still
+  fires once at the lip. Its flames double as the boost flames; cars without one get a pair of small
+  boost nozzles in the same place. The bottles are nitrous blue.
+- Wheelspin no longer wastes anything: the tyres' "spin waste" is gone with the fuel. Tiny wheels still
+  lose traction, grip, brakes and 25% at each track.
+
+### Two item slots and more items
+
+- **Two slots:** a box's item goes in the free slot; the one you already hold stays the one the item
+  key uses. The **swap key** (P1 Q or E, P2 / or .; now Tab and O, see "Keys") switches which one fires. With both slots full,
+  boxes stay in place for the other car.
+- **New items:** ⚡ **Boost +50%** (refills half the bottle), 🌟 **Full boost** (rare: a full
+  bottle), 🐦 **Seagull**. 😤 **Determination** stays, and now also shoos a seagull.
+- **The seagull** flies down the course above the road (never through the houses), always at least
+  18 m/s faster than its target, dives onto the rival's windscreen and flaps there for 1.8 s: the
+  victim loses 15% speed, can use only 45% throttle and weaves. A Determined car swats it away. It's
+  the chaser's answer to a runaway leader, since poo only works backwards. With nobody left racing
+  it just flies off.
+- **Odds** (jump / Determination / poo / +50% / full / seagull): leading 26/8/44/18/1/3, within
+  30 m 22/18/20/22/4/14, further back 16/24/6/26/10/18, and alone (solo) 34/20/0/36/10/0.
+
+### Solo training
+
+- **🏁 Solo** on Player 2's panel (or `?solo=1`) takes Player 2 off the grid and turns their panel into
+  the training settings: where to start (the top, Larkin St for the fast Hyde St corners, Hyde St for
+  Lombard's switchbacks, or Leavenworth for the last blocks and the jump), a ghost, traffic and items.
+- **The ghost** is a see-through replay of the furthest run from that start, raced alongside you; its
+  marker (👻) rides the course strip. **Splits** at Hyde, Lombard, Leavenworth and the pier show
+  ±seconds against it as you pass, and the results card lists them all, with the lip.
+- **R** starts the run again at once with the same car, wind and traffic (for practising a section);
+  **Esc** goes back to the garage. Enter or Space on the results card also retries.
+- Starting further down, the start is cleared: traffic on it moves on, and on Hyde St the cable car
+  waits at the far end of its line for 12 s, something to steer round rather than a wall at GO (the
+  first try started the car right behind it). The camera jumps there behind the white fade.
+- One car, one screen: the camera follows Player 1 and never splits, the HUD shows one card, and the
+  item odds leave out poo and the seagull.
+- Bests and ghosts last for the session, like the session best; New players clears them.
+
+### Controls
+
+(Superseded for the keys: see "Keys" under "Keys, and a kicker worth racing to". The gamepad row
+still holds.)
+
+| | Gas | Brake (tap while turning: drift) | Steer | Boost | Item | Swap items |
+|---|---|---|---|---|---|---|
+| Player 1 | W | S | A / D | Left Shift | Space | Q or E |
+| Player 2 | ↑ | ↓ | ← / → | Right Shift | Enter | / or . |
+| Gamepad | RT or A | LT or B | stick, d-pad | LB or RB | X | Y |
+
+Solo adds R (retry) and Esc (garage). E and Left Shift were spare item keys for P1, and Right Shift
+and / for P2; they now have jobs. (On Windows, pressing Shift five times in a row can open the Sticky
+Keys prompt; gamepads avoid it.)
+
+### The CPU
+
+- It drifts the big corners (Hyde St's two, Lombard's entry and its four hairpins): a brake tap at the
+  way in, then the wheel sets the arc so its direction of travel follows the racing line, planned at
+  80% of the slide's grip round the corner's average bend. That's 1-2 s a race over grip driving,
+  with the odd scrape.
+- It spends boost down to half a bottle on the straights before Lombard (so the drifts have somewhere
+  to go), then dumps the rest on the run to the kicker, starting just early enough to empty it at the
+  lip. It uses a refill only when there's road left to burn it, and swaps to the other item when only
+  that one is worth using now.
+- The balance check's autopilot doesn't drift (it compares the cars, not the driving).
 
 ## The race
 
@@ -30,8 +315,9 @@ first half would have been pointless. Two things tie the whole race to the jump:
   (−12, or −5 for a glancing hit), a tourist (−8), a poo spin (−10), a hard wall (−3), a rescue
   (−5). Tuned so a typical race ends between about 30 and 85 and 100 is rare. It's the original
   ideation's "style points", made to matter.
-- **Fuel** only burns when you press the gas, so what you spend on the way down is not there for the
-  run along the pier (see "Fuel").
+- **Fuel** only burned when you pressed the gas, so what you spent on the way down was not there for
+  the run along the pier. (Superseded: the gas is free now, and a boost bottle, refilled by drifting,
+  plays that part; see "Fuel → boost".)
 
 The winner is still the furthest splash; the results also show each player's awards (first to the
 lip, rocket start, hedge hopper, poo sniper, bully, drift king, Waymo magnet, ...) and a running score of
@@ -85,12 +371,14 @@ rounds won.
   gravity accelerates the car at g·grade/(1+grade²) along the road's fall line, which is exact for a
   plane. Drag uses the airspeed against the wind (horizontal, along x); rolling resistance and brakes
   slow the rolling speed without ever reversing it.
-- **Tyres:** each step the velocity is turned towards the nose as far as the lateral grip allows. Within
+- **Tyres** (the grip is now arcade grip, 1.6× the tyres' friction sideways, and there's a proper
+  drift: see "Handling"): each step the velocity is turned towards the nose as far as the lateral grip allows. Within
   grip the car rolls (no speed lost); beyond it the tyres slide and friction opposing the sideways
   slip scrubs speed. That is a real drift: flick into a hairpin too fast and the car slides wide and
   sheds speed. Braking hard or spinning the wheels leaves less grip for turning.
 - **Steering:** the input sets a target yaw rate, the smallest of v / turning radius (the chassis), the
-  grip limit × 1.4 (a touch of oversteer, so full lock at speed drifts), and 3.3 rad/s. The nose
+  grip limit × 1.4 (a touch of oversteer, so full lock at speed drifts; now × 1.15, with the drift on
+  the brake), and 3.3 rad/s. The nose
   follows it at the chassis' response rate, slowed by weight (mass^0.2). With no steering input above
   5 m/s, the nose eases along the road at 0.35 rad/s: keys can only give full lock or none. Keys
   ramp the wheel at 8 lock/s.
@@ -108,11 +396,9 @@ rounds won.
 - **Wind** shifts the top speed by 0.3 × the wind (a headwind loads the engine). With speeds capped,
   launches had become wind-proof while a headwind still adds lift, so some slow gliders flew further
   into a headwind; now the strongest headwind shortens every build, as the brief requires.
-- **Fuel** burns at the engine's power while the gas is held, scaled by how much it can still push
-  (an engine on its rev limiter burns 8%). Good tyres waste little of the power they can't put down
-  (standard 30%, monster 15%); tiny wheels spin all of it away ("bad tyres just spin"). A jet ignores
-  grip. With the tank empty a car can still limp on 5 kW. At the lip the engine shuts off and what's
-  left is wasted, as before.
+- **Fuel** burned at the engine's power while the gas was held, less on the rev limiter, and tiny
+  wheels spun all the power they couldn't put down away. Superseded: the engine now runs on unlimited
+  gas and the tyres' "spin waste" is gone; see "Fuel → boost".
 - **Crests and landings:** a grounded car leaves the road when the road's vertical speed drops more
   than 1.2 m/s below what gravity could follow in one step; tiny hops are ignored. In practice cars
   faster than about 9 m/s take off at the intersections (even the all-$0 build gets a small hop). In
@@ -133,7 +419,7 @@ rounds won.
   TRACK"); sitting still or reversing never triggers it. A car driving the wrong way for 5 s (the
   HUD says WRONG WAY! after 1.2 s), or facing the wrong way for 8 s, is turned round the same way.
   A car too slow to climb the kicker (the last 12 m before it) is shoved over the lip by the pier crew
-  after 2.5 s instead of ending the round on the ramp. Reverse is free (no fuel).
+  after 2.5 s instead of ending the round on the ramp. Reverse is free.
 - **Rocket start:** throttle held from less than 0.6 s before GO, or pressed within 0.15 s after it,
   gives a 7 m/s push and +8 HYPE; held for more than 1.4 s bogs the engine for 0.7 s.
 - **The end:** when the first car splashes, the other has 25 s to reach the lip (a countdown shows in
@@ -159,7 +445,8 @@ rounds won.
 ### Items
 
 - Rainbow boxes in rows (Greenwich St, Hyde St, Lombard, the block after Leavenworth, the start of
-  the pier). Driving through one starts a 0.9 s roulette; you hold one item at a time; a box pops
+  the pier). Driving through one starts a 0.9 s roulette; you hold up to two items (see "Two item
+  slots"); a box pops
   back after 3 s.
 - **Odds lean on the race order:** the leader draws Poo 55%, Jump 35%, Determination 10%; within
   30 m it's even; further behind, Determination 50%, Jump 35%, Poo 15%.
@@ -204,9 +491,10 @@ rounds won.
   at about a 6.5 m radius and the Hyde corners at 13 m.
 - A **speed plan** per car from its grip (with downforce), turning radius and brakes, braking back
   from every corner.
-- Pure-pursuit steering, dodging whatever is ahead near its line, items used sensibly, fuel saved for
+- Pure-pursuit steering, dodging whatever is ahead near its line, items used sensibly, boost saved for
   the run to the kicker. It drives the CPU opponent (a little less than full speed, and leaning on
-  you when alongside), `?autodrive`, and the balance check (with dodging and items off).
+  you when alongside), `?autodrive`, and the balance check (with dodging and items off). The CPU and
+  `?autodrive` also drift the big corners (see "The CPU" under "Drift, boost and solo").
 - **Turning round:** facing backwards (knocked round, or landed that way), it makes a three-point
   turn: forward on full lock until its nose is about to meet an edge, back with the wheel the other
   way until its tail is, and so on. The first swing takes the nose away from the nearer wall (the
@@ -255,19 +543,25 @@ rounds won.
 
 ### Driving controls
 
-- P1: W gas, S brake/reverse, A/D steer, Space item (also E, Left Shift). P2: ↑, ↓, ←/→, Enter (also
-  Right Shift, /, Numpad 0). The spares help keyboards that ghost with six keys held.
+- P1: W gas, S brake/reverse, A/D steer, Space item. P2: ↑, ↓, ←/→, Enter (also Numpad Enter,
+  Numpad 0). The old spare item keys (E, Left Shift, Right Shift, /) now boost and swap items: see
+  "Controls" under "Drift, boost and solo". (Superseded: see "Keys" under "Keys, and a kicker worth
+  racing to".)
 - Gamepads: the first connected pad drives Player 1 and the second Player 2, alongside the keys.
-  Right trigger or A for gas, left trigger or B to brake, the stick or d-pad to steer, X, Y or the
-  right shoulder for the item.
+  Right trigger or A for gas, left trigger or B to brake, the stick or d-pad to steer, X for the item,
+  Y to swap, either shoulder to boost. (Extended: see "Xbox controllers".)
 - An item press is taken once per key-down, on the first physics step of a frame.
 
 ### HUD
 
-- Each card: name, race position and gap, speed (then the live distance in flight), fuel, HYPE with
-  the launch boost it's worth, the item slot (with a roulette), and flashes. Flashes that name a
-  cause (WAYMO'D!, SPUN BY SAM'S POO!, NEAR MISS!, SLIPSTREAM!, LOW FUEL · save it for the kicker!,
-  ...) and big shouts over the car for the moments that matter. At most four timed flashes per card.
+- Each card: name, race position and gap, speed (then the live distance in flight), the boost bottle
+  (with its key; it burns blue-white while firing and pulses while a drift fills it), HYPE with the
+  launch boost it's worth, two item slots (the one the item key uses, and the one the swap key
+  switches to, each with its key; a roulette spins in the slot the new item will land in), and
+  flashes. Flashes that name a cause (WAYMO'D!, SPUN BY SAM'S POO!, NEAR MISS!, SLIPSTREAM!, DRIFT +20%
+  BOOST, 🐦 SEAGULL!, ...) and big shouts over the car for the moments that matter. At most four
+  timed flashes per card. Hints: tap the brake to drift (after the first hard corner-wall hit), and
+  empty the boost before the pier.
 - Shouts ride along just above the car's name tag in that player's view, stack upwards when two
   come at once, and are skipped for a car that's only a speck near the horizon (the card's flash
   still says it).
@@ -286,9 +580,9 @@ rounds won.
 
 ### Garage stats and parts
 
-- Stats: Mass, Power, **Fuel as seconds of full throttle** ("6.9 s gas" means more to players than
-  kJ), Grip (μ, with "4WD" when traction is well above grip), **Handling** (0-10: nose response and
-  turning radius), **Brakes** (g), Drag, Lift.
+- Stats: Mass, Power, **Boost** in seconds (was Fuel as seconds of full throttle), Grip (μ, with
+  "4WD" when traction is well above grip), **Handling** (0-10: nose response and turning radius),
+  **Brakes** (g), Drag, Lift.
 - Every tagline was rewritten to state the part's tradeoff in the race as well as in the air (for
   example the kart "turns on a dime, but gets shoved around", the pickup is "a tall-geared 4WD
   bulldozer that wins every shove, but slow to turn, stop and jump").
@@ -306,13 +600,18 @@ chassis, a rocket start (or a bogged-down sputter), HYPE blips and a near-miss w
 
 `window.__game` keeps everything listed under "Test hooks" below, and adds:
 
-- `cars` (live race state per car: position, speed, fuel, HYPE, item, tallies, ...), `world` (the
-  traffic, tourists, boxes, poo and the cable car), `split` (0-1), `wins`, `course` (landmark arc
-  lengths), `cpu`.
-- `input(p, {throttle, brake, steer, item})` drives a car from a script (`null` gives it back),
-  `autodrive(p, on)`, `setCpu(on)`, `giveItem(p, 'jump' | 'grit' | 'poo')`, `place(p, s, d, speed)`.
+- `cars` (live race state per car: position, speed, boost, drift, HYPE, items and the selected one,
+  tallies, ...), `world` (the traffic, tourists, boxes, poo, seagulls and the cable car), `split`
+  (0-1), `wins`, `course` (landmark arc lengths), `cpu`.
+- `input(p, {throttle, brake, steer, boost, item, swap})` drives a car from a script (`null` gives it
+  back), `autodrive(p, on)`, `setCpu(on)`, `giveItem(p, 'jump' | 'grit' | 'poo' | 'topup' | 'refill'
+  | 'gull')`, `place(p, s, d, speed)`.
+- Solo: `setSolo(on)`, `solo`, `setTraining({start, ghost, traffic, items})`, `training`, `retry()`,
+  `toGarage()`, `soloBests` and `ghostVisible`.
+- `ramp` (the kicker's angle in degrees, and the race time the first car went off it, or null) and
+  `keyLayout` (`'single'` or `'duo'`).
 - `predict()` and `simulateToEnd(stats, wind)` now mean the autopilot's run on an empty course.
-- URL: `?autodrive=1|p1|p2`, `?cpu=1`, `?traffic=0`, `?items=0`.
+- URL: `?autodrive=1|p1|p2`, `?cpu=1`, `?solo=1`, `?traffic=0`, `?items=0`.
 
 ## Tooling and environment
 
@@ -418,15 +717,15 @@ players use at the same time. (`BUILD_PROMPT.md` still describes the draft as it
   - Unaffordable cards stay hoverable: they're `aria-disabled`, not `disabled`.
   - Clicking a part, or pressing that player's garage keys, ends the preview. The car shows the
     change at once, and a removed part doesn't linger as a preview under the pointer.
-- The stat bars show what matters on the road and in the air: Mass, Power, Fuel, Grip, Handling,
+- The stat bars show what matters on the road and in the air: Mass, Power, Boost, Grip, Handling,
   Brakes, Drag and Lift (see "Garage stats" under "The race").
 - The Lift bar shows lift at a typical 30 m/s as a share of the car's weight ("65% wt"; a full bar
   means lift equal to weight). It is composed exactly like the physics: body and spoiler lift, plus
   the kite and glider wings together (wings capped by their trim, the kite by its maximum pull).
   The same wings read higher on a light car (a go-kart shows 65%, a pickup 45%), matching where
   they help most.
-- Stat bars: Power and Fuel use a square-root scale so the lawnmower and jerry can are still
-  visible. Bump resistance moved out of the bars into the wheels' taglines.
+- Stat bars: Power uses a square-root scale so the lawnmower is still visible (Fuel did too; Boost is
+  linear). Bump resistance moved out of the bars into the wheels' taglines.
 - Toppers have 1–2 kg of mass (the table says "small"), and `computeStats` includes it, so the game
   and `simulateToEnd` stay identical. The balance check uses the no-topper default.
 - **"New players"** resets names, the round counter, last round's cars and distances, and the
@@ -519,6 +818,33 @@ spirit as the spec's kite that opens at the lip:
 
 Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exactly.
 
+## Xbox controllers
+
+Two Xbox pads can play the whole game without touching the keyboard or mouse.
+
+- **Seats stick.** Each pad takes the first free player seat when it's first *used* (a button, a
+  trigger or the stick) and keeps it until it disconnects, so a pad dropping out doesn't hand the
+  other player's car over. Not when it's first listed: once one pad is pressed, Chrome lists every
+  connected pad at once in its own order, which put the pad that was pressed first in Player 2's
+  seat. Clicking the left stick in the garage swaps the pads (and buzzes them: short for P1, long for
+  P2). Alone at the
+  controls (solo or against the CPU), a lone pad in Player 2's seat moves to Player 1.
+- **Menus.** Garage: ◀ ▶ or LB/RB change tabs, ▲ ▼ step parts (the stick works as a d-pad, and held
+  directions repeat like keys), A or Menu readies, B un-readies. Player 1's View cycles two players →
+  CPU → solo, and Y picks the solo start. A second pad's A while the CPU drives, or in solo, brings
+  Player 2 back. Results: A (or Menu) rematches or retries, Y is New players, solo B is Garage; the
+  same 1.5 s grace as the keys stops race mashing skipping the card. In a solo run Menu retries and
+  View goes to the garage (R and Esc on the keys).
+- **Hints follow the device.** Each player's hints (garage key chips, READY, the race line, the
+  countdown card, the HUD's boost chip, the drift and jump tips) show pad buttons once they last
+  used their pad, and keys once they press a key again. The countdown card and HUD are set when the
+  countdown starts.
+- **Rumble** through `vibrationActuator.playEffect('dual-rumble')` (Chrome and Edge; Safari and
+  Firefox ignore it): hard landings, walls, shoves (both cars), traffic hits, spin-outs, a rocket
+  start, the launch and the splash. The CPU's seat never rumbles.
+- **Not on the pad:** the name boxes, the solo ghost, traffic and items toggles, and mute. They stay
+  on the mouse and keyboard.
+
 ## Known minor issues (left as is)
 
 - **Glider unfold from the side view.** From the side camera the wing unfold is hard to see: the
@@ -527,10 +853,18 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
 - **First-launch hitch.** The first race of a session can stall a countdown beat for a moment while
   the flame and effect shaders compile.
 - **Very wide names** (e.g. sixteen "W"s) are ellipsized in the name box but shown in full elsewhere.
-- **Keyboard ghosting.** Some keyboards can't register every combination of six held keys; the
-  spare item keys and gamepads are the way round it.
+- **Keyboard ghosting.** Some keyboards can't register every combination of six held keys; boost sits
+  on Shift (a modifier, which doesn't ghost), and gamepads are the way round the rest.
 - **The autopilot is decent, not great.** It hits Lombard's tourists more often than a careful human,
-  its line through the hairpins is conservative, and it never hedge-hops.
+  its line through the hairpins is conservative, it never hedge-hops, and a good human drifter is
+  quicker through Hyde St than the CPU (it plans its drifts round the corner's average bend, with a
+  margin).
+- **The seagull at a distance.** Perched on a car far down the road it's a small white blob with
+  flapping wings; the SEAGULL! shout and the victim's card say what happened.
+- **Solo bests don't persist.** Bests and ghosts last for the session, like the session best.
+- **The kicker dropping is hard to see from the chaser's own camera:** the chase view looks down the
+  course, so the kicker sits at the top edge of it until the last second. The card's hazard strip,
+  the flash and the klaxon carry the news; the side-on flight view shows the lower launch.
 - **Results card at 1280×720** sits a few pixels above the sound button (not overlapping).
 
 ## Test hooks
@@ -557,14 +891,37 @@ It takes about 35 s. It fails on:
 - a paid part that never makes the top 10% in any wind, or that is never the strictly best pick for
   its slot (the other six slots fixed) in any build and wind;
 - a free part that isn't on the price/distance Pareto front in some wind (every free part is the
-  "keep the money" option now, not just the empty wing, nose and booster: the lawnmower and jerry
+  "keep the money" option now, not just the empty wing, nose and booster: the lawnmower and the nitro
   can can't win a long race on their own, but they fund everything else);
 - the same #1 build in every wind with fewer than three chassis in any top 5;
 - any build that fails to reach the lip; the strongest headwind lengthening any flight; glider wings
-  that don't visibly glide; sensible builds (a V8 or jet with a real tank) taking more than 50 s;
-  any flight over 7 s; the all-$0 build outside 5-30 m in calm air; the best build outside 80-180 m.
+  that don't visibly glide; sensible builds (a V8 or jet) taking more than 50 s; any flight over 7 s;
+  the all-$0 build outside 5-30 m in calm air; the best build outside 80-180 m.
 
-What changed for the race, and why:
+The autopilot in the check keeps its boost for the run to the kicker and dumps it there (starting
+just early enough to empty the bottle at the lip), and doesn't drift, so a bottle's worth is what it
+holds at the start. Its "boost" column is the share of the bottle left unspent at the lip.
+
+What changed for boost and the arcade handling, and why. With no fuel to save, every car ran flat out
+all race, and boost on the pier raised the launch further: the first run of the check flew the best
+builds 204-282 m (launches of 41-50 m/s) against the 180 m cap.
+
+| Part | Before | Now | Why |
+|---|---|---|---|
+| V8 | top 32 m/s | top 26 m/s | Launch speeds with free gas and a boost bottle on the pier |
+| Jet | top 33 m/s | top 27.5 m/s | As above; still wins some headwinds |
+| Lawnmower | top 17 m/s | top 16 m/s | Keeps the all-$0 build in 5-30 m |
+| Monster wheels | gearing ×1.18 | ×1.15 | The best tailwind build flew 184 m |
+| Sedan | 660 kg, CdA 0.9 | 620 kg, CdA 0.76 | Never the best pick for its slot; now the slipperiest chassis |
+| Nitro → Launch rocket | 110 kJ | 95 kJ | Best pick in over 2,100 contexts; renamed so it isn't confused with the boost |
+| Fuel tanks → boost bottles | 250 kJ / 1.4 MJ / 2.6 MJ | 1.5 s / 3 s / 4.5 s (8 / 25 / 60 kg) | See "Fuel → boost" |
+| Wheels | spin waste 100/30/15% | gone | Nothing to waste without fuel |
+
+Tried and reverted: a gentler wind effect on top speed (0.2 × the wind instead of 0.3) brought the
+tailwind distances down, but slow glider builds flew further into a headwind again, which the check
+forbids (see "Wind"); so did taking the wind out of the boost's ceiling.
+
+What changed for the race (the version before boost), and why:
 
 | Part | Before | Now | Why |
 |---|---|---|---|
@@ -581,16 +938,21 @@ What changed for the race, and why:
 | Spoiler | | downforce 2.4 m² | Grip in fast turns |
 | Noses | | bull bar / wedge / spike | The free Blunt nose shoves hardest |
 
-**How the winds differ:** a Bathtub with a Jet, Glider wings and Nitro wins headwinds and calm air; a
-Go-kart with Monster wheels, a V8, Glider wings and Nitro wins tailwinds. The chassis' race times on
-Lombard (the kart quickest, the pickup slowest) and their shoving weight are what the balance check
-can't see; they are what makes the Sedan and Pickup worth racing.
+**How the winds differ:** a Bathtub with Monster wheels, a V8, a Nitro can, Glider wings and the
+Launch rocket wins headwinds and calm air; a Go-kart with Monster wheels, a V8, a Bottle, Glider wings
+and the Launch rocket wins tailwinds. The free Nitro can is in the top builds because its $10 goes on
+the Launch rocket or the Cone. The chassis' race times on Lombard (the kart quickest, the pickup
+slowest), how well they drift and their shoving weight are what the balance check can't see; they
+are what makes the Sedan and Pickup worth racing.
 
-**Driving tests** (scripts, not in the repo): a "keyboard" driver (the autopilot's intent quantised
-to on/off keys with a 0.15 s reaction) gets round every build cleanly; one that holds the gas all
-race runs dry after Lombard with a Standard tank (a LOW FUEL warning comes first) but not with an
-Oversized one; in 16 two-car races with traffic, V8 karts land 90-137 m in 37-57 s, and the obstacles
-hit most are Lombard's tourists.
+**Driving tests** (scripts, not in the repo): see "Handling" for the keyboard drivers. In 60 two-car
+races with traffic and items, both cars on the drifting autopilot: no NaNs, no DNFs, no rescues, a
+median 33.5 s to the lip, 17 seagulls landed and 2 shooed, 87 item swaps.
+
+Before boost (the fuel version): a "keyboard" driver (the autopilot's intent quantised to on/off keys
+with a 0.15 s reaction) got round every build cleanly; one that held the gas all race ran dry after
+Lombard with a Standard tank but not with an Oversized one; in 16 two-car races with traffic, V8
+karts landed 90-137 m in 37-57 s.
 
 ### Final balance report (`npm run balance`)
 
@@ -601,131 +963,131 @@ Every affordable build (performance slots, budget $100): 2428, each raced down t
 Top 10% = 243 builds per wind
 
 ## Top 15, headwind -8 m/s
-  #   dist m    $  lip m/s  race s  air s  waste  build
-  1    147.1   98     33.5    37.1    6.1    29%  Bathtub · Tiny · Jet · Standard · Glider wings · Wedge · Nitro
-  2    143.7  100     32.9    37.4    6.1    39%  Bathtub · Standard · V8 · Standard · Glider wings · Cone · Nitro
-  3    142.0   93     32.9    37.5    6.1    38%  Bathtub · Standard · V8 · Standard · Glider wings · Wedge · Nitro
-  4    141.6   95     34.1    34.8    6.0    23%  Bathtub · Monster · V8 · Standard · Glider wings · Blunt · Nitro
-  5    137.9   90     33.1    37.3    6.0    26%  Bathtub · Tiny · Jet · Standard · Glider wings · Blunt · Nitro
-  6    136.0  100     32.7    36.6    5.9    28%  Bathtub · Standard · Jet · Standard · Glider wings · Blunt · Nitro
-  7    134.0  100     32.2    37.8    5.6    56%  Bathtub · Tiny · Jet · Oversized · Glider wings · Blunt · Nitro
-  8    133.8   98     35.4    34.3    5.0    32%  Go-kart · Monster · V8 · Standard · Glider wings · Wedge · Nitro
-  9    133.1   85     32.6    37.7    6.0    34%  Bathtub · Standard · V8 · Standard · Glider wings · Blunt · Nitro
- 10    130.2  100     34.3    36.8    4.9    35%  Go-kart · Tiny · Jet · Standard · Glider wings · Cone · Nitro
- 11    128.7   95     31.5    37.9    5.6    62%  Bathtub · Standard · V8 · Oversized · Glider wings · Blunt · Nitro
- 12    128.5   93     34.3    36.8    4.9    35%  Go-kart · Tiny · Jet · Standard · Glider wings · Wedge · Nitro
- 13    127.0   95     30.9    34.6    5.5    28%  Bathtub · Monster · V8 · Standard · Glider wings · Cone · None
- 14    126.6   90     34.9    34.5    5.0    28%  Go-kart · Monster · V8 · Standard · Glider wings · Blunt · Nitro
- 15    125.6  100     33.8    34.8    4.9    58%  Go-kart · Monster · V8 · Oversized · Glider wings · Blunt · Nitro
+  #   dist m    $  lip m/s  race s  air s  boost  build
+  1    136.7  100     32.5    30.1    5.8     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Cone · Launch rocket
+  2    135.1   93     32.4    30.1    5.8     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Wedge · Launch rocket
+  3    131.5   95     32.6    30.2    5.8     0%  Bathtub · Monster · V8 · Bottle · Glider wings · Blunt · Launch rocket
+  4    130.9   98     31.3    32.9    5.8     0%  Bathtub · Tiny · Jet · Bottle · Glider wings · Wedge · Launch rocket
+  5    130.4   95     31.0    33.0    5.7     0%  Bathtub · Tiny · Jet · Nitro can · Glider wings · Cone · Launch rocket
+  6    130.3  100     33.7    30.8    4.8     0%  Pickup 4x4 · Monster · V8 · Bottle · Glider wings · Blunt · None
+  7    129.0   88     31.0    33.0    5.8     0%  Bathtub · Tiny · Jet · Nitro can · Glider wings · Wedge · Launch rocket
+  8    128.4   85     32.2    30.3    5.7     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Blunt · Launch rocket
+  9    127.8  100     31.5    33.0    5.7     1%  Bathtub · Tiny · Jet · Big bottle · Glider wings · Blunt · Launch rocket
+ 10    127.4   98     30.7    32.2    5.6     0%  Bathtub · Standard · Jet · Nitro can · Glider wings · Wedge · Launch rocket
+ 11    126.0   98     32.6    30.9    4.7     0%  Pickup 4x4 · Monster · V8 · Nitro can · Glider wings · Wedge · None
+ 12    125.0  100     32.3    31.0    5.0     0%  Pickup 4x4 · Monster · V8 · Nitro can · Glider wings · Blunt · Kite
+ 13    123.8   90     31.0    33.1    5.7     0%  Bathtub · Tiny · Jet · Bottle · Glider wings · Blunt · Launch rocket
+ 14    122.9  100     29.9    33.4    5.6     0%  Bathtub · Standard · V8 · Bottle · Glider wings · Cone · Launch rocket
+ 15    122.6  100     30.7    32.2    5.6     0%  Bathtub · Standard · Jet · Bottle · Glider wings · Blunt · Launch rocket
 DNFs in this wind: 0
 
 ## Top 15, calm (0 m/s)
-  #   dist m    $  lip m/s  race s  air s  waste  build
-  1    168.4   98     35.8    36.6    6.0    33%  Bathtub · Tiny · Jet · Standard · Glider wings · Wedge · Nitro
-  2    166.0   95     36.5    34.1    5.9    30%  Bathtub · Monster · V8 · Standard · Glider wings · Blunt · Nitro
-  3    165.2  100     35.2    36.8    5.9    42%  Bathtub · Standard · V8 · Standard · Glider wings · Cone · Nitro
-  4    164.0   93     35.3    36.8    6.0    42%  Bathtub · Standard · V8 · Standard · Glider wings · Wedge · Nitro
-  5    161.9   90     35.6    36.7    5.9    32%  Bathtub · Tiny · Jet · Standard · Glider wings · Blunt · Nitro
-  6    159.1  100     35.1    35.9    5.8    34%  Bathtub · Standard · Jet · Standard · Glider wings · Blunt · Nitro
-  7    158.1   98     37.6    33.6    5.2    35%  Go-kart · Monster · V8 · Standard · Glider wings · Wedge · Nitro
-  8    157.4   85     35.0    37.0    5.9    41%  Bathtub · Standard · V8 · Standard · Glider wings · Blunt · Nitro
-  9    153.8  100     34.5    37.3    5.5    59%  Bathtub · Tiny · Jet · Oversized · Glider wings · Blunt · Nitro
- 10    153.1  100     36.5    36.4    5.1    37%  Go-kart · Tiny · Jet · Standard · Glider wings · Cone · Nitro
- 11    152.4   98     33.4    33.9    6.2    31%  Bathtub · Monster · V8 · Standard · Glider wings · Wedge · Kite
- 12    152.0   93     36.5    36.3    5.1    38%  Go-kart · Tiny · Jet · Standard · Glider wings · Wedge · Nitro
- 13    152.0   90     37.2    33.8    5.2    34%  Go-kart · Monster · V8 · Standard · Glider wings · Blunt · Nitro
- 14    149.7   95     33.9    37.1    5.5    65%  Bathtub · Standard · V8 · Oversized · Glider wings · Blunt · Nitro
- 15    148.9   95     36.0    36.5    5.1    45%  Go-kart · Standard · V8 · Standard · Glider wings · Cone · Nitro
+  #   dist m    $  lip m/s  race s  air s  boost  build
+  1    162.7  100     35.4    29.1    5.8     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Cone · Launch rocket
+  2    160.8   93     35.3    29.1    5.8     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Wedge · Launch rocket
+  3    160.5   95     35.8    29.1    5.8     0%  Bathtub · Monster · V8 · Bottle · Glider wings · Blunt · Launch rocket
+  4    156.9   98     34.3    31.8    5.8     0%  Bathtub · Tiny · Jet · Bottle · Glider wings · Wedge · Launch rocket
+  5    155.1   85     35.1    29.2    5.7     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Blunt · Launch rocket
+  6    154.0  100     34.5    31.8    5.7     4%  Bathtub · Tiny · Jet · Big bottle · Glider wings · Blunt · Launch rocket
+  7    154.0   95     33.8    31.9    5.7     0%  Bathtub · Tiny · Jet · Nitro can · Glider wings · Cone · Launch rocket
+  8    152.7   88     33.8    31.8    5.7     0%  Bathtub · Tiny · Jet · Nitro can · Glider wings · Wedge · Launch rocket
+  9    150.9   98     33.5    31.0    5.6     0%  Bathtub · Standard · Jet · Nitro can · Glider wings · Wedge · Launch rocket
+ 10    150.6   90     34.1    31.8    5.7     0%  Bathtub · Tiny · Jet · Bottle · Glider wings · Blunt · Launch rocket
+ 11    149.9   98     36.4    28.7    5.1     0%  Go-kart · Monster · V8 · Bottle · Glider wings · Wedge · Launch rocket
+ 12    148.7  100     33.8    31.0    5.6     0%  Bathtub · Standard · Jet · Bottle · Glider wings · Blunt · Launch rocket
+ 13    148.6   98     32.8    28.9    6.2     0%  Bathtub · Monster · V8 · Bottle · Glider wings · Wedge · Kite
+ 14    147.8  100     36.5    28.7    5.1     4%  Go-kart · Monster · V8 · Big bottle · Glider wings · Blunt · Launch rocket
+ 15    147.1   80     33.6    31.9    5.6     0%  Bathtub · Tiny · Jet · Nitro can · Glider wings · Blunt · Launch rocket
 DNFs in this wind: 0
 
 ## Top 15, tailwind +8 m/s
-  #   dist m    $  lip m/s  race s  air s  waste  build
-  1    179.9   98     39.6    33.2    5.3    35%  Go-kart · Monster · V8 · Standard · Glider wings · Wedge · Nitro
-  2    178.5   98     38.0    36.3    5.6    34%  Bathtub · Tiny · Jet · Standard · Glider wings · Wedge · Nitro
-  3    178.1   93     37.5    36.3    5.6    43%  Bathtub · Standard · V8 · Standard · Glider wings · Wedge · Nitro
-  4    176.8  100     37.4    36.3    5.6    42%  Bathtub · Standard · V8 · Standard · Glider wings · Cone · Nitro
-  5    175.5  100     38.5    36.1    5.3    38%  Go-kart · Tiny · Jet · Standard · Glider wings · Cone · Nitro
-  6    175.2   93     38.6    36.0    5.3    38%  Go-kart · Tiny · Jet · Standard · Glider wings · Wedge · Nitro
-  7    173.8   90     39.5    33.2    5.3    36%  Go-kart · Monster · V8 · Standard · Glider wings · Blunt · Nitro
-  8    172.2   90     37.8    36.3    5.5    34%  Bathtub · Tiny · Jet · Standard · Glider wings · Blunt · Nitro
-  9    172.1   95     38.8    33.4    5.3    32%  Bathtub · Monster · V8 · Standard · Glider wings · Blunt · Nitro
- 10    171.9   95     38.1    36.1    5.3    45%  Go-kart · Standard · V8 · Standard · Glider wings · Cone · Nitro
- 11    171.6   85     37.4    36.3    5.5    43%  Bathtub · Standard · V8 · Standard · Glider wings · Blunt · Nitro
- 12    171.6   88     38.2    36.1    5.3    46%  Go-kart · Standard · V8 · Standard · Glider wings · Wedge · Nitro
- 13    171.3   85     38.5    36.0    5.3    39%  Go-kart · Tiny · Jet · Standard · Glider wings · Blunt · Nitro
- 14    167.9  100     36.2    33.2    5.7    36%  Go-kart · Monster · V8 · Standard · Glider wings · Cone · Kite
- 15    167.6   93     36.2    33.1    5.7    36%  Go-kart · Monster · V8 · Standard · Glider wings · Wedge · Kite
+  #   dist m    $  lip m/s  race s  air s  boost  build
+  1    179.8   98     39.5    28.0    5.4     0%  Go-kart · Monster · V8 · Bottle · Glider wings · Wedge · Launch rocket
+  2    176.3   95     39.0    28.2    5.5     0%  Bathtub · Monster · V8 · Bottle · Glider wings · Blunt · Launch rocket
+  3    175.6  100     39.6    27.9    5.3     4%  Go-kart · Monster · V8 · Big bottle · Glider wings · Blunt · Launch rocket
+  4    173.8   98     37.4    30.9    5.5     0%  Bathtub · Tiny · Jet · Bottle · Glider wings · Wedge · Launch rocket
+  5    173.7  100     38.3    28.4    5.4     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Cone · Launch rocket
+  6    173.6   90     39.3    28.0    5.3     0%  Go-kart · Monster · V8 · Bottle · Glider wings · Blunt · Launch rocket
+  7    173.4   93     38.3    28.3    5.4     0%  Bathtub · Monster · V8 · Nitro can · Glider wings · Wedge · Launch rocket
+  8    172.6   95     38.7    28.1    5.2     0%  Go-kart · Monster · V8 · Nitro can · Glider wings · Cone · Launch rocket
+  9    172.3   88     38.7    28.1    5.3     0%  Go-kart · Monster · V8 · Nitro can · Glider wings · Wedge · Launch rocket
+ 10    172.2   98     36.3    28.2    6.0     0%  Bathtub · Monster · V8 · Bottle · Glider wings · Wedge · Kite
+ 11    171.4  100     36.5    28.0    5.8     0%  Go-kart · Monster · V8 · Bottle · Glider wings · Cone · Kite
+ 12    169.8   93     36.4    27.9    5.8     0%  Go-kart · Monster · V8 · Bottle · Glider wings · Wedge · Kite
+ 13    169.6  100     37.7    30.7    5.2     0%  Go-kart · Tiny · Jet · Bottle · Glider wings · Cone · Launch rocket
+ 14    168.8  100     36.4    28.1    5.9     4%  Bathtub · Monster · V8 · Big bottle · Glider wings · Blunt · Kite
+ 15    168.7   93     37.8    30.6    5.2     0%  Go-kart · Tiny · Jet · Bottle · Glider wings · Wedge · Launch rocket
 DNFs in this wind: 0
 
 ## Options: best rank, appearances in the top 10% (243 builds), and median times (calm)
 slot       option         best  (wind)   top@-8   top@0  top@+8   race s Lombard s
-Chassis    Go-kart           1    (+8)      102     114     125     44.8      12.0
-Chassis    Bathtub           1    (-8)      128     122     115     45.8      12.2
-Chassis    Sedan            47    (-8)       10       7       3     47.9      12.6
-Chassis    Pickup 4x4      142    (-8)        3       0       0     49.5      13.0
-Wheels     Tiny              1    (-8)       80      82      76     49.2      12.8
-Wheels     Standard          2    (-8)       92      93      96     47.6      12.4
-Wheels     Monster           1    (+8)       71      68      71     45.1      11.2
-Engine     Lawnmower       360    (+8)        0       0       0     49.0      12.5
-Engine     V8                1    (+8)      139     141     138     38.6      12.1
-Engine     Jet               1    (-8)      104     102     105     38.6      12.1
-Fuel tank  Jerry can        51    (+8)       14      20      15     48.6      13.2
-Fuel tank  Standard          1    (-8)      148     154     162     38.5      12.0
-Fuel tank  Oversized         7    (-8)       81      69      66     39.6      12.2
-Wing       None             42    (-8)       53      48      66     45.7      12.2
-Wing       Spoiler          23    (-8)       66      59      65     46.1      12.1
-Wing       Glider wings      1    (-8)      124     136     112     47.9      12.5
-Nose       Blunt             2     (0)       72      79      87     46.2      12.2
-Nose       Wedge             1    (-8)       90      88      84     46.4      12.2
-Nose       Cone              2    (-8)       81      76      72     47.0      12.3
-Booster    None             13    (-8)       43      44      34     45.9      12.2
-Booster    Nitro             1    (-8)      125     112     120     47.2      12.3
-Booster    Kite             11     (0)       75      87      89     46.8      12.2
+Chassis    Go-kart           1    (+8)       54      79      93     31.9       9.6
+Chassis    Bathtub           1    (-8)      118     106      93     32.2       9.7
+Chassis    Sedan            28    (-8)       26      21      22     35.5      10.2
+Chassis    Pickup 4x4        6    (-8)       45      37      35     35.6      10.4
+Wheels     Tiny              4    (-8)       59      54      45     35.4      10.3
+Wheels     Standard          9     (0)       55      58      45     32.5       9.9
+Wheels     Monster           1    (-8)      129     131     153     30.0       8.8
+Engine     Lawnmower       623    (-8)        0       0       0     42.9      10.3
+Engine     V8                1    (-8)      160     158     174     32.4       9.8
+Engine     Jet               4    (-8)       83      85      69     31.2       9.8
+Boost      Nitro can         1    (-8)       98      96      81     34.3       9.9
+Boost      Bottle            1    (+8)       83      86      98     34.8       9.9
+Boost      Big bottle        3    (+8)       62      61      64     35.3      10.0
+Wing       None             56    (-8)       45      38      52     32.8       9.9
+Wing       Spoiler          50    (-8)       57      42      50     34.5       9.8
+Wing       Glider wings      1    (-8)      141     163     141     35.7      10.1
+Nose       Blunt             2    (+8)       84      92      94     34.2       9.9
+Nose       Wedge             1    (+8)       87      82      84     34.9       9.9
+Nose       Cone              1    (-8)       72      69      65     35.1      10.0
+Booster    None              6    (-8)       57      56      45     34.2       9.9
+Booster    Launch rocket     1    (-8)      124      87      92     35.2      10.0
+Booster    Kite             10    (+8)       62     100     106     34.9       9.9
 
 ## Best pick for its slot (other six slots fixed, any wind)
-Chassis    Go-kart       free: on the price/distance Pareto front (best pick in 823 contexts)
-Chassis    Bathtub       697 contexts
-Chassis    Sedan         8 contexts
-Chassis    Pickup 4x4    439 contexts
-Wheels     Tiny          free: on the price/distance Pareto front (best pick in 905 contexts)
-Wheels     Standard      430 contexts
-Wheels     Monster       1090 contexts
+Chassis    Go-kart       free: on the price/distance Pareto front (best pick in 133 contexts)
+Chassis    Bathtub       977 contexts
+Chassis    Sedan         16 contexts
+Chassis    Pickup 4x4    841 contexts
+Wheels     Tiny          free: on the price/distance Pareto front (best pick in 620 contexts)
+Wheels     Standard      299 contexts
+Wheels     Monster       1528 contexts
 Engine     Lawnmower     free: on the price/distance Pareto front (best pick in 0 contexts)
-Engine     V8            1613 contexts
-Engine     Jet           910 contexts
-Fuel tank  Jerry can     free: on the price/distance Pareto front (best pick in 415 contexts)
-Fuel tank  Standard      1392 contexts
-Fuel tank  Oversized     596 contexts
-Wing       None          free: on the price/distance Pareto front (best pick in 161 contexts)
-Wing       Spoiler       401 contexts
-Wing       Glider wings  1971 contexts
-Nose       Blunt         free: on the price/distance Pareto front (best pick in 0 contexts)
-Nose       Wedge         461 contexts
-Nose       Cone          1845 contexts
+Engine     V8            1176 contexts
+Engine     Jet           1353 contexts
+Boost      Nitro can     free: on the price/distance Pareto front (best pick in 369 contexts)
+Boost      Bottle        460 contexts
+Boost      Big bottle    1553 contexts
+Wing       None          free: on the price/distance Pareto front (best pick in 2 contexts)
+Wing       Spoiler       567 contexts
+Wing       Glider wings  1976 contexts
+Nose       Blunt         free: on the price/distance Pareto front (best pick in 139 contexts)
+Nose       Wedge         439 contexts
+Nose       Cone          1735 contexts
 Booster    None          free: on the price/distance Pareto front (best pick in 0 contexts)
-Booster    Nitro         2189 contexts
-Booster    Kite          215 contexts
+Booster    Launch rocket 2016 contexts
+Booster    Kite          380 contexts
 
 ## Wind
 Builds that fly further into the strongest headwind (-8 m/s) than in calm air (by more than 0.5 m): 0
-Builds that fly shorter with a tailwind than in calm air (by more than 0.5 m): 44
+Builds that fly shorter with a tailwind than in calm air (by more than 0.5 m): 3
 
 ## Glide (calm air): go-kart with glider wings vs the same kart with none
-Go-kart · Tiny · Lawnmower · Jerry can · Glider wings · Wedge · Nitro: 95.3 vs 79.4 m, air 4.3 vs 3.1 s, water entry 26° vs 37°
-Go-kart · Standard · V8 · Oversized · Glider wings · Cone · None: 120.8 vs 89.9 m, air 4.6 vs 3.2 s, water entry 22° vs 34°
+Go-kart · Tiny · Lawnmower · Nitro can · Glider wings · Wedge · Launch rocket: 88.8 vs 72.9 m, air 4.2 vs 3.0 s, water entry 26° vs 37°
+Go-kart · Standard · V8 · Big bottle · Glider wings · Cone · None: 109.3 vs 80.1 m, air 4.4 vs 3.1 s, water entry 23° vs 36°
 
 ## Race pacing (calm air, the autopilot)
-V8 or jet with a Standard or Oversized tank (894 builds): median 36.7 s, 90% within 39.5 s
-Lawnmower or jerry-can builds (1534 builds): median 48.9 s, 90% within 52.2 s
+V8 or jet builds (1472): median 31.7 s, 90% within 35.3 s
+Lawnmower builds (956): median 42.9 s, 90% within 45.4 s
 
-## All-$0 build (Go-kart · Tiny · Lawnmower · Jerry can · None · Blunt · None)
-headwind -8 m/s      9.4 m  lip 6.7 m/s, race 57.9 s, air 1.7 s, wasted 69% fuel
-calm (0 m/s)         18.1 m  lip 10.8 m/s, race 49.4 s, air 1.9 s, wasted 74% fuel
-tailwind +8 m/s      34.0 m  lip 16.8 m/s, race 45.4 s, air 2.3 s, wasted 73% fuel
+## All-$0 build (Go-kart · Tiny · Lawnmower · Nitro can · None · Blunt · None)
+headwind -8 m/s      16.1 m  lip 10.4 m/s, race 55.4 s, air 1.9 s, 0% boost left
+calm (0 m/s)         21.8 m  lip 12.5 m/s, race 45.5 s, air 2.0 s, 0% boost left
+tailwind +8 m/s      34.1 m  lip 16.9 m/s, race 41.2 s, air 2.3 s, 0% boost left
 
 ## Checks
 - Distinct #1 builds across winds: 2
 - Distinct chassis in each wind's top 5: -8: 1, 0: 1, +8: 2 (union: 2)
-- Race time, all builds: 32.8-59.6 s; flight time: 1.7-6.2 s
+- Race time, all builds: 27.5-56.4 s; flight time: 1.8-6.2 s
 - PASS: every paid part reaches the top 10% in some wind and is the best pick for its slot in some build, every free part is on the price/distance front, the winner changes with wind, every build reaches the lip in every wind, the strongest headwind shortens every flight, glider wings visibly glide, sensible builds reach the lip within 50 s, no flight lasts over 7 s, the all-$0 build splashes 5-30 m out in calm air, best builds fly 80-180 m, no NaNs.
 ```
