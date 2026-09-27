@@ -123,6 +123,17 @@ export class Sound {
     this.tone(1250, 0.05, 'triangle', 0.12);
   }
 
+  /** READY: a bright rising pair of notes (a falling pair when a player goes back to editing). */
+  readyChime(on: boolean): void {
+    this.tone(on ? 784 : 1047, 0.08, 'triangle', 0.13);
+    this.tone(on ? 1175 : 698, 0.16, 'triangle', 0.13, 0.08);
+  }
+
+  /** A part the player can't afford: a short low buzz. */
+  deny(): void {
+    this.tone(190, 0.12, 'square', 0.06, 0, 150);
+  }
+
   /** Countdown beep; `go` is the long high one. */
   beep(go: boolean): void {
     if (go) {

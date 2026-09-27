@@ -49,7 +49,7 @@ const CHASSIS: OptionDef[] = [
     price: 15,
     mass: 660,
     cdA: 0.9,
-    tagline: 'Balanced and slippery for its size, but 660 kg needs a strong engine',
+    tagline: 'Balanced and slippery for its size, but 660\u00a0kg needs a strong engine',
   },
   {
     id: 'pickup',
@@ -103,7 +103,7 @@ const ENGINES: OptionDef[] = [
     price: 0,
     mass: 30,
     power: 2500,
-    tagline: 'Free and light, but only 2.5 kW: it putters down the hill',
+    tagline: 'Free and light, but only 2.5\u00a0kW: it putters down the hill',
   },
   {
     id: 'v8',
@@ -111,7 +111,7 @@ const ENGINES: OptionDef[] = [
     price: 20,
     mass: 250,
     power: 185_000,
-    tagline: '185 kW of shove for $20, but wheel-driven: bad tyres just spin',
+    tagline: '185\u00a0kW of shove for $20, but wheel-driven: bad tyres just spin',
   },
   {
     id: 'jet',
@@ -140,7 +140,7 @@ const FUEL: OptionDef[] = [
     price: 10,
     mass: 60,
     energy: 460_000,
-    tagline: '460 kJ: a few seconds of V8 or jet for 60 kg',
+    tagline: '460\u00a0kJ: a few seconds of V8 or jet for 60\u00a0kg',
   },
   {
     id: 'big',
@@ -148,7 +148,7 @@ const FUEL: OptionDef[] = [
     price: 20,
     mass: 230,
     energy: 760_000,
-    tagline: '760 kJ, the most push, but 230 kg to haul and leftovers are wasted',
+    tagline: '760\u00a0kJ, the most push, but 230\u00a0kg to haul and leftovers are wasted',
   },
 ];
 
@@ -191,7 +191,7 @@ const BOOSTERS: OptionDef[] = [
     price: 15,
     mass: 30,
     nitroJ: 110_000,
-    tagline: '+110 kJ kick at the lip: huge on light cars, small on heavy ones',
+    tagline: '+110\u00a0kJ kick at the lip: huge on light cars, small on heavy ones',
   },
   {
     id: 'kite',
@@ -238,7 +238,7 @@ export const PARTS: Record<SlotId, PartOption[]> = {
   topper: withSlot('topper', TOPPERS),
 };
 
-/** Default paint per player so the two cars differ before Paint is drafted. */
+/** Default paint per player so the two cars differ until someone picks a paint. */
 export const DEFAULT_PAINT: Record<PlayerIndex, string> = { 0: 'red', 1: 'blue' };
 
 export function getOption(slot: SlotId, id: string): PartOption {

@@ -1,34 +1,64 @@
-// Build phase UI: two player panels (P1 left, P2 right), wind forecast, draft banner, LAUNCH.
-import {
-  activePlayer,
-  canAfford,
-  currentSlot,
-  displayConfig,
-  isDone,
-  moneyLeft,
-  previousPick,
-  type Draft,
-} from '../draft';
+// Build phase UI: the garage. Two player panels (P1 left, P2 right) that both players use at the
+// same time: stat bars, a tab per slot showing the fitted part, the parts for the open tab, and a
+// READY button. Plus the wind forecast and a status banner.
+import { fittedPart, moneyAfter, moneyLeft, stockPart, swappedOut, type Garage } from '../garage';
 import { PARTS, SLOT_LABELS, computeStats } from '../parts';
 import { G, RHO } from '../sim/physics';
-import { SLOT_ORDER, type CarConfig, type CarStats, type PlayerIndex } from '../types';
+import { SLOT_ORDER, type CarConfig, type CarStats, type PartOption, type PlayerIndex, type SlotId } from '../types';
 
 export interface BuildHandlers {
-  onPick(optionIndex: number): void;
-  onKeep(): void;
-  /** Preview a config on a player's car (null restores the drafted car). */
+  /** A click on a part: fit it, or remove it when it is the paid part already fitted. */
+  onPart(player: PlayerIndex, slot: SlotId, optionId: string): void;
+  /** A click on a part the player can't afford. */
+  onDenied(player: PlayerIndex): void;
+  onTab(player: PlayerIndex, slot: SlotId): void;
+  /** Toggle READY. */
+  onReady(player: PlayerIndex): void;
+  /** Preview a config on a player's car (null restores the fitted car). */
   onHover(player: PlayerIndex, config: CarConfig | null): void;
-  onLaunch(): void;
   onName(player: PlayerIndex, name: string): void;
 }
 
+export interface LastRun {
+  distance: number;
+  dnf: boolean;
+}
+
 export interface BuildView {
-  draft: Draft;
+  garage: Garage;
   names: [string, string];
   colors: [string, string];
   wind: number;
   round: number;
+  /** Each player's result in the last race (null in round 1). */
+  lastRuns: [LastRun | null, LastRun | null];
 }
+
+export type GarageAction = 'prevTab' | 'nextTab' | 'prevPart' | 'nextPart' | 'ready';
+
+/**
+ * Garage keys, so both players can build at once on one keyboard: P1 on the left, P2 on the
+ * arrows. `codes` are KeyboardEvent.code values (the same physical keys on any layout); the panels
+ * show the labels.
+ */
+export const GARAGE_KEYS: Record<PlayerIndex, Record<GarageAction, { codes: string[]; label: string }>> = {
+  0: {
+    prevTab: { codes: ['KeyA'], label: 'A' },
+    nextTab: { codes: ['KeyD'], label: 'D' },
+    prevPart: { codes: ['KeyW'], label: 'W' },
+    nextPart: { codes: ['KeyS'], label: 'S' },
+    ready: { codes: ['Space'], label: 'SPACE' },
+  },
+  1: {
+    prevTab: { codes: ['ArrowLeft'], label: '←' },
+    nextTab: { codes: ['ArrowRight'], label: '→' },
+    prevPart: { codes: ['ArrowUp'], label: '↑' },
+    nextPart: { codes: ['ArrowDown'], label: '↓' },
+    ready: { codes: ['Enter', 'NumpadEnter'], label: 'ENTER' },
+  },
+};
+
+const PLAYERS: PlayerIndex[] = [0, 1];
 
 // ---------- Stat bars ----------
 
@@ -128,6 +158,11 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+function keyHint(parent: HTMLElement, labels: string[]): void {
+  const keys = el('span', 'keys', parent);
+  for (const label of labels) el('kbd', '', keys, label);
+}
+
 export function windText(wind: number): { value: string; arrow: string; kind: 'head' | 'tail' | 'calm' } {
   const kmh = Math.round(Math.abs(wind) * 3.6);
   if (kmh === 0) return { value: 'CALM', arrow: '·', kind: 'calm' };
@@ -146,14 +181,38 @@ export function renderWind(host: HTMLElement, wind: number, label = 'WIND FORECA
   host.dataset.wind = wind.toFixed(2);
 }
 
+interface TabRefs {
+  btn: HTMLButtonElement;
+  cost: HTMLElement;
+  part: HTMLElement;
+}
+
+interface CardRefs {
+  btn: HTMLButtonElement;
+  opt: PartOption;
+  /** Status tag on the card's bottom edge (fitted, can't afford, last race). */
+  tag: HTMLElement;
+}
+
 interface PanelRefs {
   root: HTMLElement;
   name: HTMLInputElement;
   money: HTMLElement;
+  lastRun: HTMLElement;
   stats: HTMLElement;
   statEls: Map<string, { row: HTMLElement; fill: HTMLElement; ghost: HTMLElement; val: HTMLElement }>;
-  picks: HTMLElement;
-  options: HTMLElement;
+  /** "changed" legend for the gold tabs. */
+  changedKey: HTMLElement;
+  tabs: Map<SlotId, TabRefs>;
+  parts: HTMLElement;
+  partsTitle: HTMLElement;
+  cards: HTMLElement;
+  cardEls: CardRefs[];
+  /** The slot the cards were built for (they are rebuilt only when the open tab changes). */
+  cardsSlot: SlotId | null;
+  readyCard: HTMLElement;
+  readyWait: HTMLElement;
+  readyBtn: HTMLButtonElement;
 }
 
 export class BuildUI {
@@ -162,13 +221,10 @@ export class BuildUI {
   private readonly wind: HTMLElement;
   private readonly banner: HTMLElement;
   private readonly roundChip: HTMLElement;
-  private readonly launchBtn: HTMLButtonElement;
-  private readonly hint: HTMLElement;
-  private readonly bottom: HTMLElement;
   private readonly panels: [PanelRefs, PanelRefs];
   private view: BuildView | null = null;
-  /** Stops re-rendering the option cards while the pointer is over them. */
-  private optionsKey = ['', ''];
+  /** The part each player's pointer is over (previewed on the car and the stat bars). */
+  private hover: [string | null, string | null] = [null, null];
 
   constructor(parent: HTMLElement, handlers: BuildHandlers) {
     this.h = handlers;
@@ -179,17 +235,13 @@ export class BuildUI {
     this.wind.id = 'wind-forecast';
     const bottom = el('div', 'bottombar', this.root);
     this.banner = el('div', 'banner', bottom);
-    this.banner.id = 'draft-banner';
+    this.banner.id = 'garage-banner';
+    el('div', 'title-card', bottom, 'Click a part to fit it, click it again to remove it');
     this.panels = [this.makePanel(0), this.makePanel(1)];
-    this.launchBtn = el('button', 'launch hidden', this.root);
-    this.launchBtn.id = 'launch-btn';
-    this.launchBtn.innerHTML = 'LAUNCH ▶<small>ENTER</small>';
-    this.launchBtn.addEventListener('click', () => this.h.onLaunch());
-    this.hint = el('div', 'title-card', bottom);
-    this.bottom = bottom;
   }
 
   private makePanel(p: PlayerIndex): PanelRefs {
+    const keys = GARAGE_KEYS[p];
     const root = el('section', `panel p${p + 1}`, this.root);
     root.dataset.player = String(p);
     root.id = `panel-p${p + 1}`;
@@ -212,168 +264,290 @@ export class BuildUI {
     });
     const money = el('div', 'money', head);
     money.id = `money-p${p + 1}`;
+    money.title = 'Money left';
+    money.addEventListener('animationend', () => money.classList.remove('shake'));
 
     const statsWrap = el('div', '', root);
-    el('div', 'section-title', statsWrap, 'Stats');
+    const statsHead = el('div', 'section-title', statsWrap);
+    el('span', '', statsHead, 'Stats');
+    const lastRun = el('span', 'aside', statsHead);
     const stats = el('div', 'stats', statsWrap);
     const statEls = new Map<string, { row: HTMLElement; fill: HTMLElement; ghost: HTMLElement; val: HTMLElement }>();
 
-    const picksWrap = el('div', '', root);
-    el('div', 'section-title', picksWrap, 'Build so far');
-    const picks = el('div', 'picks', picksWrap);
+    // One tab per slot, showing the part fitted there and what it cost.
+    const carWrap = el('div', '', root);
+    const carHead = el('div', 'section-title', carWrap);
+    el('span', '', carHead, 'Your car');
+    // Explains the gold tabs after a rematch.
+    const changedKey = el('span', 'legend hidden', carHead, 'changed');
+    changedKey.title = 'Gold tabs have changed since the last race';
+    keyHint(carHead, [keys.prevTab.label, keys.nextTab.label]);
+    const tabList = el('div', 'tabs', carWrap);
+    tabList.setAttribute('role', 'tablist');
+    tabList.setAttribute('aria-label', `Player ${p + 1}'s car`);
+    const tabs = new Map<SlotId, TabRefs>();
+    for (const slot of SLOT_ORDER) {
+      const btn = el('button', 'tab', tabList);
+      btn.type = 'button';
+      btn.dataset.slot = slot;
+      btn.setAttribute('role', 'tab');
+      const top = el('span', 'top', btn);
+      el('span', 'slot', top, SLOT_LABELS[slot]);
+      const cost = el('span', 'cost', top);
+      const part = el('span', 'part', btn);
+      btn.addEventListener('click', () => this.h.onTab(p, slot));
+      tabs.set(slot, { btn, cost, part });
+    }
+
+    // The open tab's parts, or the READY card once the car is locked in.
     const options = el('div', 'options', root);
-    return { root, name, money, stats, statEls, picks, options };
+    options.setAttribute('role', 'tabpanel');
+    const parts = el('div', 'parts', options);
+    const partsHead = el('div', 'section-title', parts);
+    const partsTitle = el('span', '', partsHead);
+    keyHint(partsHead, [keys.prevPart.label, keys.nextPart.label]);
+    const cards = el('div', 'cards', parts);
+    const readyCard = el('div', 'ready-card hidden', options);
+    el('div', 'tick', readyCard, '✓');
+    el('div', 'big', readyCard, 'Ready!');
+    const readyWait = el('div', 'sub', readyCard);
+
+    const readyBtn = el('button', 'ready-btn', root);
+    readyBtn.type = 'button';
+    readyBtn.id = `ready-p${p + 1}`;
+    // The second click of a double-click would undo the first.
+    readyBtn.addEventListener('click', (e) => {
+      if (e.detail <= 1) this.h.onReady(p);
+    });
+
+    return {
+      root,
+      name,
+      money,
+      lastRun,
+      stats,
+      statEls,
+      changedKey,
+      tabs,
+      parts,
+      partsTitle,
+      cards,
+      cardEls: [],
+      cardsSlot: null,
+      readyCard,
+      readyWait,
+      readyBtn,
+    };
   }
 
   show(visible: boolean): void {
     this.root.classList.toggle('hidden', !visible);
+    if (!visible) this.hover = [null, null];
   }
 
   render(view: BuildView): void {
     this.view = view;
-    const d = view.draft;
-    const active = activePlayer(d);
-    const slot = currentSlot(d);
-
     this.roundChip.textContent = `ROUND ${view.round}`;
     renderWind(this.wind, view.wind);
 
-    if (slot && active !== null) {
-      this.banner.replaceChildren();
-      this.banner.append(`Slot ${d.slotIndex + 1}/${SLOT_ORDER.length} · ${SLOT_LABELS[slot].toUpperCase()} · `);
-      const who = el('span', 'who', this.banner, `${view.names[active]}'s pick`);
-      who.style.background = view.colors[active];
-      this.banner.dataset.slot = slot;
-      this.banner.dataset.active = String(active);
-      this.banner.classList.remove('hidden');
+    const ready = PLAYERS.filter((p) => view.garage.builds[p].ready);
+    this.banner.replaceChildren();
+    if (ready.length === 1) {
+      const p = ready[0];
+      // Only the name sits in the pill, so a long name is cut without losing "is ready".
+      el('span', 'who', this.banner, view.names[p]).style.background = view.colors[p];
+      this.banner.append(` is ready · waiting for ${view.names[1 - p]}`);
     } else {
-      this.banner.textContent = 'Both cars are built!';
-      this.banner.dataset.slot = 'done';
-      this.banner.dataset.active = '';
+      this.banner.append(`${view.round === 1 ? 'Build' : 'Tweak'} your cars, then both hit READY`);
     }
-    this.launchBtn.classList.toggle('hidden', !isDone(d));
-    this.bottom.classList.toggle('hidden', isDone(d));
-    this.hint.textContent = isDone(d)
-      ? 'Click LAUNCH (or press Enter) to race'
-      : `Click a card or press 1-${Math.min(9, PARTS[slot!].length)} · M mutes`;
+    this.banner.dataset.ready = ready.join(',');
 
-    for (const p of [0, 1] as PlayerIndex[]) this.renderPanel(p, view);
+    for (const p of PLAYERS) this.renderPanel(p, view);
+  }
+
+  /** Drop a player's hover preview, e.g. when they act with the keyboard. */
+  endPreview(p: PlayerIndex): void {
+    if (this.hover[p] === null) return;
+    this.hover[p] = null;
+    this.applyPreview(p);
+  }
+
+  /** Shake a player's money: they clicked a part they can't afford. */
+  deny(p: PlayerIndex): void {
+    const money = this.panels[p].money;
+    money.classList.remove('shake');
+    void money.offsetWidth;
+    money.classList.add('shake');
   }
 
   private renderPanel(p: PlayerIndex, view: BuildView): void {
-    const d = view.draft;
+    const g = view.garage;
+    const b = g.builds[p];
     const refs = this.panels[p];
-    const active = activePlayer(d);
-    const isActive = active === p;
     refs.root.style.setProperty('--pc', view.colors[p]);
-    refs.root.classList.toggle('active', isActive);
-    refs.root.classList.toggle('dim', active !== null && !isActive);
-    refs.root.dataset.active = String(isActive);
+    refs.root.classList.toggle('ready', b.ready);
+    refs.root.dataset.ready = String(b.ready);
     if (document.activeElement !== refs.name) refs.name.value = view.names[p];
-    const money = moneyLeft(d, p);
-    refs.money.textContent = `$${money}`;
-    refs.money.classList.toggle('low', money < 10);
-    refs.money.dataset.money = String(money);
 
-    this.renderStats(p, displayConfig(d, p), null);
+    const last = view.lastRuns[p];
+    refs.lastRun.textContent = last ? `last race ${last.dnf ? 'DNF' : `${last.distance.toFixed(1)} m`}` : '';
 
-    // Picks so far.
-    refs.picks.replaceChildren();
-    SLOT_ORDER.forEach((slot, i) => {
-      const id = d.picks[p][slot];
-      const row = el('div', 'pick', refs.picks);
-      if (!id) row.classList.add('empty');
-      if (i === d.slotIndex && !isDone(d)) row.classList.add('current');
-      el('span', 'k', row, SLOT_LABELS[slot]);
-      const opt = id ? PARTS[slot].find((o) => o.id === id) : null;
-      el('span', 'v', row, opt ? opt.name : '—');
-      row.dataset.slot = slot;
-      row.dataset.pick = id ?? '';
-    });
-
-    // Option cards (active player only).
-    const slot = currentSlot(d);
-    const key = `${isActive}|${slot}|${money}|${d.slotIndex}|${d.turn}|${view.round}|${view.names.join('|')}`;
-    if (key === this.optionsKey[p]) return;
-    this.optionsKey[p] = key;
-    refs.options.replaceChildren();
-    if (!slot) {
-      const w = el('div', 'waiting', refs.options);
-      w.innerHTML = `<b>Ready!</b><br/>Final price $${100 - money}`;
-      return;
+    let anyChanged = false;
+    for (const slot of SLOT_ORDER) {
+      const t = refs.tabs.get(slot)!;
+      const opt = fittedPart(g, p, slot);
+      const was = swappedOut(g, p, slot);
+      const open = slot === b.tab;
+      anyChanged ||= was !== null;
+      t.btn.classList.toggle('open', open);
+      t.btn.setAttribute('aria-selected', String(open));
+      t.btn.disabled = b.ready;
+      t.btn.classList.toggle('changed', was !== null);
+      t.btn.title = was ? `Changed since the last race (was ${was.name})` : '';
+      t.btn.dataset.part = opt.id;
+      t.cost.textContent = opt.price > 0 ? `$${opt.price}` : '';
+      t.part.replaceChildren();
+      if (opt.color) el('i', 'sw', t.part).style.background = opt.color;
+      t.part.append(opt.name);
     }
-    if (!isActive) {
-      const w = el('div', 'waiting', refs.options);
-      const other = view.names[active ?? 0];
-      w.append('Waiting for ');
-      el('b', '', w, other);
-      const label = SLOT_LABELS[slot].toLowerCase();
-      w.append(` to pick ${/^[aeiou]/.test(label) ? 'an' : 'a'} ${label}…`);
-      return;
-    }
-    el('div', 'section-title', refs.options, `Pick your ${SLOT_LABELS[slot].toLowerCase()}`);
-    const cards = el('div', 'cards', refs.options);
-    const opts = PARTS[slot];
-    const simple = slot === 'paint' || slot === 'topper';
-    if (simple) cards.classList.add('grid2');
-    const prev = previousPick(d, p);
-    opts.forEach((opt, i) => {
-      const card = el('button', 'card', cards);
-      card.type = 'button';
-      card.dataset.optionIndex = String(i);
-      card.dataset.optionId = opt.id;
-      const affordable = canAfford(d, p, opt);
-      card.disabled = !affordable;
-      card.setAttribute('aria-disabled', String(!affordable));
-      if (prev === opt.id) {
-        card.classList.add('prev');
-        card.dataset.prev = 'true';
-      }
-      if (i < 9) el('span', 'key', card, String(i + 1));
+    refs.changedKey.classList.toggle('hidden', !anyChanged);
+
+    if (refs.cardsSlot !== b.tab) this.buildCards(p, b.tab);
+    for (const c of refs.cardEls) this.renderCard(p, c, g);
+    refs.parts.classList.toggle('hidden', b.ready);
+    refs.readyCard.classList.toggle('hidden', !b.ready);
+    refs.readyWait.textContent = `Waiting for ${view.names[1 - p]}…`;
+
+    refs.readyBtn.replaceChildren(b.ready ? 'Edit car' : 'Ready');
+    el('kbd', '', refs.readyBtn, GARAGE_KEYS[p].ready.label);
+    refs.readyBtn.setAttribute('aria-pressed', String(b.ready));
+
+    if (b.ready) this.hover[p] = null;
+    this.applyPreview(p);
+  }
+
+  private buildCards(p: PlayerIndex, slot: SlotId): void {
+    const refs = this.panels[p];
+    refs.cardsSlot = slot;
+    refs.cardEls = [];
+    refs.cards.replaceChildren();
+    // The card under the pointer (if any) is gone, and no pointerleave will fire for it.
+    this.hover[p] = null;
+    // Cosmetic slots are all free: say so once instead of on every card.
+    const allFree = PARTS[slot].every((o) => o.price === 0);
+    refs.partsTitle.textContent = allFree ? `${SLOT_LABELS[slot]} · all free` : SLOT_LABELS[slot];
+    refs.cards.classList.toggle('grid2', slot === 'paint');
+    refs.cards.classList.toggle('cosmetic', allFree);
+    PARTS[slot].forEach((opt, i) => {
+      const btn = el('button', 'card', refs.cards);
+      btn.type = 'button';
+      btn.dataset.optionIndex = String(i);
+      btn.dataset.optionId = opt.id;
       if (slot === 'paint') {
-        card.classList.add('swatch');
-        const chip = el('span', 'chip', card);
-        chip.style.background = opt.color ?? '#fff';
-        el('span', 'name', card, opt.name);
+        btn.classList.add('swatch');
+        el('span', 'chip', btn).style.background = opt.color ?? '#fff';
+        el('span', 'name', btn, opt.name);
       } else {
-        if (simple) card.classList.add('compact');
-        el('span', 'name', card, opt.name);
-        const price = el('span', 'price', card, opt.price === 0 ? 'FREE' : `$${opt.price}`);
-        if (opt.price === 0) price.classList.add('free');
-        el('span', 'tagline', card, opt.tagline);
+        el('span', 'radio', btn);
+        el('span', 'name', btn, opt.name);
+        if (!allFree) {
+          const price = el('span', 'price', btn, opt.price === 0 ? 'FREE' : `$${opt.price}`);
+          if (opt.price === 0) price.classList.add('free');
+        }
+        el('span', 'tagline', btn, opt.tagline);
       }
-      card.title = affordable ? opt.tagline : `Can't afford: $${opt.price} > $${money} left`;
-      card.addEventListener('click', () => this.h.onPick(i));
-      card.addEventListener('pointerenter', () => this.preview(p, opt.id));
-      card.addEventListener('pointerleave', () => this.preview(p, null));
+      const tag = el('span', 'tag', btn);
+      // Unaffordable cards stay hoverable (the preview shows what the part would do), so they are
+      // aria-disabled rather than disabled.
+      btn.addEventListener('click', (e) => {
+        // The second click of a double-click would undo the first (fit, then remove).
+        if (e.detail > 1) return;
+        if (btn.getAttribute('aria-disabled') === 'true') {
+          this.deny(p);
+          this.h.onDenied(p);
+          return;
+        }
+        // Show the car as it now is (a removed part must not linger as a preview); the preview
+        // comes back on the next hover.
+        this.endPreview(p);
+        this.h.onPart(p, slot, opt.id);
+      });
+      btn.addEventListener('pointerenter', () => {
+        this.hover[p] = opt.id;
+        this.applyPreview(p);
+      });
+      btn.addEventListener('pointerleave', () => {
+        if (this.hover[p] !== opt.id) return;
+        this.hover[p] = null;
+        this.applyPreview(p);
+      });
+      refs.cardEls.push({ btn, opt, tag });
     });
-    if (prev) {
-      const prevOpt = opts.find((o) => o.id === prev);
-      const keep = el('button', 'keep', refs.options);
-      keep.id = `keep-p${p + 1}`;
-      keep.type = 'button';
-      keep.textContent = `Keep ${prevOpt?.name ?? prev}`;
-      el('kbd', '', keep, 'ENTER');
-      keep.disabled = !prevOpt || !canAfford(d, p, prevOpt);
-      keep.addEventListener('click', () => this.h.onKeep());
-      keep.addEventListener('pointerenter', () => this.preview(p, prev));
-      keep.addEventListener('pointerleave', () => this.preview(p, null));
+  }
+
+  private renderCard(p: PlayerIndex, c: CardRefs, g: Garage): void {
+    const { btn, opt, tag } = c;
+    const fitted = g.builds[p].config[opt.slot] === opt.id;
+    const after = moneyAfter(g, p, opt);
+    const locked = !fitted && after < 0;
+    const last = !fitted && g.prev[p]?.[opt.slot] === opt.id;
+    const removable = fitted && opt.price > 0;
+    btn.classList.toggle('fitted', fitted);
+    btn.classList.toggle('locked', locked);
+    btn.classList.toggle('last', last);
+    btn.classList.toggle('removable', removable);
+    btn.setAttribute('aria-pressed', String(fitted));
+    btn.setAttribute('aria-disabled', String(locked));
+    // The full tagline leads every tooltip (short windows cut taglines to one line).
+    const status = locked
+      ? `Can't afford: $${opt.price}, you're $${-after} short`
+      : removable
+        ? `Fitted. Click to remove it and get $${opt.price} back (back to the free ${stockPart(opt.slot).name})`
+        : fitted
+          ? 'Fitted'
+          : '';
+    btn.title = status ? `${opt.tagline}\n${status}` : opt.tagline;
+    tag.replaceChildren();
+    if (fitted) {
+      el('span', 'rest', tag, 'FITTED');
+      if (removable) el('span', 'hover', tag, '✕ REMOVE');
+    } else if (locked) {
+      tag.textContent = `${last ? 'LAST RACE · ' : ''}NEED $${-after} MORE`;
+    } else if (last) {
+      tag.textContent = 'LAST RACE';
     }
   }
 
-  private preview(p: PlayerIndex, optionId: string | null): void {
+  /**
+   * Preview what clicking the hovered card would do, on the stat bars, the money and the car: fit
+   * that part, or, on the fitted paid part, remove it. (A click ends the preview until the pointer
+   * comes back, so a part just fitted doesn't flip to showing its removal.)
+   */
+  private applyPreview(p: PlayerIndex): void {
     const v = this.view;
     if (!v) return;
-    const slot = currentSlot(v.draft);
-    const base = displayConfig(v.draft, p);
-    if (!slot || optionId === null) {
-      this.renderStats(p, base, null);
-      this.h.onHover(p, null);
-      return;
-    }
-    const cfg = { ...base, [slot]: optionId } as CarConfig;
-    this.renderStats(p, base, cfg);
+    const b = v.garage.builds[p];
+    const id = this.hover[p];
+    const opt = id !== null && !b.ready ? PARTS[b.tab].find((o) => o.id === id) : undefined;
+    let preview: PartOption | null = null;
+    if (opt && b.config[b.tab] !== opt.id) preview = opt;
+    else if (opt && opt.price > 0) preview = stockPart(b.tab);
+    const cfg = preview ? ({ ...b.config, [b.tab]: preview.id } as CarConfig) : null;
+    this.renderStats(p, b.config, cfg);
+    this.renderMoney(p, v.garage, preview);
     this.h.onHover(p, cfg);
+  }
+
+  private renderMoney(p: PlayerIndex, g: Garage, preview: PartOption | null): void {
+    const m = this.panels[p].money;
+    const left = moneyLeft(g, p);
+    const after = preview ? moneyAfter(g, p, preview) : left;
+    m.textContent = after < 0 ? `−$${-after}` : `$${after}`;
+    m.classList.toggle('preview', after !== left);
+    m.classList.toggle('up', after > left);
+    // Red only for a part you can't afford: spending right down to $0 is fine.
+    m.classList.toggle('short', after < 0);
+    m.dataset.money = String(left);
   }
 
   private renderStats(p: PlayerIndex, cfg: CarConfig, preview: CarConfig | null): void {

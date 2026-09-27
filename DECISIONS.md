@@ -95,20 +95,87 @@ spirit as the spec's kite that opens at the lip:
 
 Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exactly.
 
+## Garage (replaces the turn-based draft)
+
+The brief's turn-based draft (one slot at a time, players alternating, no going back) didn't work in
+play. You could only act on your turn, and you had to commit to a part before seeing what the later
+slots cost, so budgets went wrong. At the team's request the build phase is now a garage that both
+players use at the same time. (`BUILD_PROMPT.md` still describes the draft as it was first built.)
+
+- **A tab per slot.** Each panel has a 3×3 grid of tabs, one per slot, showing the part fitted there
+  and what it cost. Every price is one click away, and the grid is the budget breakdown. The open
+  tab's parts are listed below it.
+- **Fit and remove.** Every slot always holds a part: its free stock part (the first, $0 option)
+  until something else is fitted. So a car is always complete and within budget, and there's no
+  "unfinished" state to fill in at launch.
+  - Clicking a part fits it. Swapping refunds the part it replaces, so a part is affordable when
+    `price ≤ money left + price of the part fitted in that slot`.
+  - Clicking the fitted paid part again removes it, and the slot falls back to its free part. Free
+    parts can only be swapped, since there's nothing to refund.
+  - Parts you can't afford show "NEED $X MORE". Clicking one shakes the money and buzzes. So does W/S
+    or ↑/↓ when every part that way costs too much. At the end of the list they stay quiet.
+  - Hovering previews what a click would do, including hovering the fitted paid part: that shows
+    its removal (the refund in green, the free part's stats, and the car with it). A click ends the
+    preview until the pointer comes back, so a part you've just fitted doesn't flip to showing its
+    removal.
+  - Cosmetic slots are all free, so their title says "· all free" instead of a FREE chip on every
+    card.
+- **READY per player.** READY locks a car in: its parts give way to a READY card, and READY again
+  ("Edit car") unlocks it. The race starts as soon as both players are ready.
+  - A single LAUNCH button would let one player start the race while the other is still building.
+  - The `launch()` hook still starts at once, ready or not.
+- **Rematch keeps the cars.** A rematch starts from both cars exactly as they raced, and each
+  player's open tab is kept. To make tweaking quick:
+  - Slots changed since the last race turn gold with a gold edge, and their tooltip says what was
+    there. A "changed" legend appears next to YOUR CAR while any slot differs.
+  - Last race's part is tagged LAST RACE in its slot.
+  - The Stats header shows each player's last distance.
+
+  New players resets both cars to the free build.
+- **Two players on one keyboard.** Keys are `KeyboardEvent.code` values, so the same physical keys
+  work on any layout. The panels show them next to the tabs, the parts and READY.
+  - P1 uses the left of the keyboard: A/D for slot tabs, W/S for parts, Space for READY.
+  - P2 uses the arrows: ←/→, ↑/↓, Enter.
+  - W/S and ↑/↓ fit the next or previous affordable part straight away. Tab keys wrap around.
+  - The old number keys are gone. With both players building at once they'd be ambiguous.
+- **Sounds.** A rising chime plays for READY and a falling one when a player goes back to editing.
+  A low buzz plays for a part you can't afford.
+- **No turn order.** The first-picker swap is gone with the turns.
+- **Mashing is safe.** Space and Enter are both READY keys and the results screen's rematch keys,
+  so:
+  - The results ignore them for 1 s. Otherwise keys still being mashed from the race skip the
+    results.
+  - A fresh garage ignores the READY keys for 0.6 s, so the press that left the results doesn't
+    also ready a player.
+
+  Both grace periods are real time, whatever `?speed` is. On part cards and READY, the second click
+  of a double-click is ignored, since it would undo the first (fit then remove, ready then unready).
+- **Short windows.** A 1366×768 laptop minus the browser's toolbars leaves about 610–660 px. There
+  the 11 px text floor stops the UI shrinking with the height, and the cards spilled over READY. So:
+  - Panels never get narrower than at 720p (`--panel-w`).
+  - Windows up to 660 px tall get one-line taglines (each card's tooltip leads with the full text),
+    no cosmetic taglines, and tighter spacing.
+  - The part list scrolls as a last resort, and READY always paints on top.
+
+  Everything fits down to 580 px. At 560 px, Chassis scrolls by 13 px.
+
 ## Game flow and UI
 
 - **Wind** is rolled uniformly in −8…+8 m/s at the start of each round and rounded to 0.1 m/s.
   Anything under 0.5 km/h displays as "CALM".
-- **Keys 1–9** pick the Nth option (the prompt says 1–4, but Paint has eight options).
-  **Enter** keeps last round's pick during a rematch draft, launches once the draft is complete, and
-  starts a rematch from the results screen. **M** mutes; a clickable sound button does the same for
-  mouse-only players.
-- Before a slot is drafted, a car shows last round's part (rematch) or the $0 part (round 1). Each
-  player's car starts in their own default paint (P1 red, P2 blue) until Paint is drafted.
+- **Keys.** The garage keys are listed under "Garage" above. **Enter** or **Space** starts a
+  rematch from the results screen, after a 1 s grace period. **M** mutes, and a clickable sound button does the same for
+  mouse-only players. Keys pressed with Ctrl, Cmd or Alt are left to the browser.
+- In round 1 a car is the all-$0 build in its player's own default paint (P1 red, P2 blue). On a
+  rematch it's last race's car.
 - Player identity colours: P1 `#ff5a36` (coral), P2 `#2e8bff` (blue). They tint panels, HUD cards,
-  name tags over the cars and the flight trails; the drafted Paint colours the car body.
-- Hovering a card previews the part on the car **and** on the stat bars (striped ghost bar,
-  green/red value when it is better/worse).
+  name tags over the cars and the flight trails; the chosen Paint colours the car body.
+- Hovering a card previews the part on the car, on the stat bars (striped ghost bar, green/red
+  value when it is better/worse) and on the money (dashed, showing what would be left after the
+  swap; negative for a part you can't afford).
+  - Unaffordable cards stay hoverable: they're `aria-disabled`, not `disabled`.
+  - Clicking a part, or pressing that player's garage keys, ends the preview. The car shows the
+    change at once, and a removed part doesn't linger as a preview under the pointer.
 - The Lift bar shows lift at a typical 30 m/s as a share of the car's weight ("65% wt"; a full bar
   means lift equal to weight). It is composed exactly like the physics: body and spoiler lift, plus
   the kite and glider wings together (wings capped by their trim, the kite by its maximum pull).
@@ -118,22 +185,39 @@ Body lift (the bathtub), the spoiler and the kite otherwise follow the spec exac
   visible; Bump resistance shows the kinetic energy lost per cable-car crossing.
 - Toppers have 1–2 kg of mass (the table says "small"), and `computeStats` includes it, so the game
   and `simulateToEnd` stay identical. The balance check uses the no-topper default.
-- **"New players"** resets names, the round counter, the first picker (P1), last round's cars and
-  the session best (and hides the best-distance buoy). The wind RNG simply continues.
+- **"New players"** resets names, the round counter, last round's cars and distances, and the
+  session best (and hides the best-distance buoy). The wind RNG simply continues.
 - The best-distance flag buoy sits between the lanes at the record distance and is labelled with
   the record holder's name, tinted in their colour.
 - Buoys float in both lanes every 10 m out to 250 m. Their number labels sit between the lanes so
   the two rows never overlap on screen; every 50 m gets a big yellow buoy with a tall marker label.
 - `?speed=N` scales all game time (countdown, race, pause before results), clamped to 0.05–50.
-- The inactive player's panel is greyed and slightly shrunk rather than made see-through, so both
-  builds stay readable on a TV.
-- The "central banner" sits bottom-centre, above the key hint. The in-world "LA VOITURE" start
-  gantry then stays visible under the wind forecast rather than hidden behind the UI.
-- Small text never drops below ~11 px (panels, taglines, HUD) so 1280×720 on a TV stays legible.
+- Both panels are live at once, and each glows in its player's colour while they build. A ready
+  player's panel loses the glow and its tabs read as a plain summary.
+- The status banner ("Build your cars…", "Sam is ready · waiting for Alex") sits bottom-centre,
+  above the hint. The in-world "LA VOITURE" start gantry then stays visible under the wind forecast
+  rather than hidden behind the UI.
+- Topper parts are listed one per row like the performance slots. Only Paint uses the two-column
+  swatch grid.
+- Small text never drops below ~11 px (panels, taglines, card tags, key chips, HUD) so 1280×720 on a
+  TV stays legible.
+  - The card tags' fills give their white text at least 5:1 contrast (the FITTED tag is the player
+    colour darkened to 72%).
+  - Preview numbers use a darker green and red than the bars (`#0f7a4a`, `#c62f35`).
+  - The name box is a dark recess, even while typing, so its white text reads on both player
+    colours.
+  - The stat value column fits "−0.5%/bump" in the fallback fonts too (no web font is bundled).
+  - In the "… is ready" banner only the name sits in the coloured pill, so a very long name is cut
+    without losing "is ready".
+  - The money turns green when a hovered swap gives money back, and red only for a part you can't
+    afford. Spending right down to $0 is fine.
+  - Taglines keep numbers and units together (`660\u00a0kg`).
 - Buttons drop keyboard focus after a mouse click, and the game's keys call `preventDefault`, so
   Enter never re-presses the last clicked button (e.g. the sound toggle). A button reached with Tab
   keeps its native Enter/Space press.
-- Names are trimmed, cut to 16 characters and trimmed again; an empty name falls back to "Player N".
+- Names are trimmed, cut to 16 characters and trimmed again; an empty name falls back to
+  "Player N". Characters are user-perceived ones (`Intl.Segmenter`), so an emoji, even a flag or a
+  family, is never split.
   The name box accepts up to 40 raw characters so leading spaces don't eat into the 16.
 - Name tags over the cars stack instead of overlapping when the cars are side by side. The vertical
   gap they need shrinks smoothly as they separate sideways, and a tag only moves as far as it has to,
@@ -209,17 +293,25 @@ The straggler camera keeps these runs watchable.
 
 ## Test hooks
 
-`window.__game` exposes everything the prompt lists (`state`, `pick(i)`, `configs`, `wind`,
-`results`, `launch()`, `rematch()`, `newPlayers()`, `setSpeed(n)`) plus: `ready`, `keep()`,
-`draft` (slot, active player, first picker, money, picks, previous picks), `cars` (live sim
-states), `events` (bump/fuelEmpty/launch/splash/dnf log), `sessionBest`, `round`, `names`,
-`setName(p, name)`, `sound` (`ready`, `muted` and the output RMS `level` from an analyser on the
-master bus, so tests can prove audio plays and that M silences it), `toggleMute()`, `predict()`
-(simulateToEnd for the current configs and wind), `computeStats`, `simulateToEnd` and `parts`.
+`window.__game` exposes everything the prompt lists (`state`, `configs`, `wind`, `results`,
+`launch()`, `rematch()`, `newPlayers()`, `setSpeed(n)`) except `pick(i)`, which went with the
+turn-based draft. It adds:
 
-- `launch()` works from the build phase at any time: unfinished picks are completed by keeping last
-  round's part when affordable, otherwise the $0 option.
-- `?autobuild=1` drafts both cars at random (affordable options only) at the start of every round.
+- **Garage:** `select(p, slot, option)` (fit a part by id or index), `remove(p, slot)`,
+  `openTab(p, slot)`, `setReady(p, on)` (the countdown starts once both are ready), and `garage`.
+  `garage` holds the configs, money, ready flags, open tabs, and last race's cars and distances.
+- **Everything else:**
+  - `ready`, `round`, `names`, `setName(p, name)` and `sessionBest`.
+  - `cars` (live sim states) and `events` (the bump/fuelEmpty/launch/splash/dnf log).
+  - `sound`: `ready`, `muted`, and the output RMS `level` from an analyser on the master bus, so
+    tests can prove audio plays and that M silences it. Plus `toggleMute()`.
+  - `predict()` (simulateToEnd for the current configs and wind), `computeStats`, `simulateToEnd`
+    and `parts`.
+
+- `launch()` works from the build phase at any time. It races both cars as they are, whether or not
+  the players are ready.
+- `?autobuild=1` builds both cars at random (affordable parts only) at the start of every round.
+  Nobody is marked ready, so tests still call `launch()`.
 - `?wind=W` (extra) pins the wind to W m/s for every round, for deterministic physics checks.
 
 ## Balance tuning

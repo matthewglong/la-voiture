@@ -4,18 +4,20 @@ import './style.css';
 import * as THREE from 'three';
 import { Sound, type EngineKind, type EngineVoice, type WindVoice } from './audio';
 import {
-  activePlayer,
-  applyPick,
-  completeWithDefaults,
-  currentSlot,
-  displayConfig,
-  isDone,
+  allReady,
+  cyclePart,
+  fitPart,
+  hasPartBeyond,
   moneyLeft,
-  newDraft,
-  previousPick,
-  canAfford,
-  type Draft,
-} from './draft';
+  newGarage,
+  openTab,
+  randomize,
+  removePart,
+  setReady,
+  stepTab,
+  togglePart,
+  type Garage,
+} from './garage';
 import { PARTS, computeStats, getOption } from './parts';
 import { buildBay } from './scene/bay';
 import { CameraRig, type CameraTarget } from './scene/camera';
@@ -27,8 +29,8 @@ import { damp, makeRng } from './scene/util';
 import { createWorld } from './scene/world';
 import { CarSim, DT, simulateToEnd, type SimEvent, type SimResult } from './sim/physics';
 import { TRACK, sampleTrack } from './track';
-import type { CarConfig, PlayerIndex } from './types';
-import { BuildUI } from './ui/build';
+import type { CarConfig, PlayerIndex, SlotId } from './types';
+import { BuildUI, GARAGE_KEYS, type GarageAction, type LastRun } from './ui/build';
 import { HUD, type ResultsView } from './ui/hud';
 
 type GameState = 'BUILD' | 'COUNTDOWN' | 'RACE' | 'FLIGHT' | 'RESULTS';
@@ -38,6 +40,9 @@ const DEFAULT_NAMES: [string, string] = ['Player 1', 'Player 2'];
 const PLAYERS: PlayerIndex[] = [0, 1];
 const COUNT_STEP = 0.85; // seconds per countdown number
 const RESULTS_DELAY = 2.6; // seconds after the last car finishes
+// Real-time grace periods, so keys still being mashed don't skip a screen.
+const RESULTS_KEY_GRACE = 1000; // ms before Enter/Space can leave the results
+const READY_KEY_GRACE = 600; // ms before the READY keys work in a fresh garage
 
 // ---------- URL parameters ----------
 const params = new URLSearchParams(location.search);
@@ -60,10 +65,16 @@ const fixedWind =
 const windRng = makeRng(seed);
 const buildRng = makeRng(seed ^ 0x5bd1e995);
 
+const graphemes = new Intl.Segmenter();
+
 function cleanName(p: PlayerIndex, raw: string): string {
-  const name = raw.trim().slice(0, 16).trim();
+  // Cut by user-perceived characters, so an emoji (even a flag or a family) is never split.
+  const chars = Array.from(graphemes.segment(raw.trim()), (s) => s.segment);
+  const name = chars.slice(0, 16).join('').trim();
   return name === '' ? DEFAULT_NAMES[p] : name;
 }
+
+const isPlayer = (p: unknown): p is PlayerIndex => p === 0 || p === 1;
 
 function rollWind(): number {
   const rolled = Math.round((windRng() * 16 - 8) * 10) / 10;
@@ -178,9 +189,14 @@ let state: GameState = 'BUILD';
 let names: [string, string] = [...DEFAULT_NAMES];
 let round = 1;
 let wind = rollWind();
-let firstPicker: PlayerIndex = 0;
-let draft: Draft = newDraft(0, [null, null]);
+let garage: Garage = newGarage([null, null]);
+/** The part each player is hovering, previewed on their car (null: the fitted car). */
+const previews: [CarConfig | null, CarConfig | null] = [null, null];
 let lastConfigs: [CarConfig | null, CarConfig | null] = [null, null];
+let lastRuns: [LastRun | null, LastRun | null] = [null, null];
+/** performance.now() when the garage and the results card last appeared. */
+let garageAt = 0;
+let resultsAt = 0;
 let sims: [CarSim, CarSim] | null = null;
 let raceConfigs: [CarConfig, CarConfig] | null = null;
 let accumulator = 0;
@@ -201,21 +217,21 @@ overlay.className = 'overlay';
 app.appendChild(overlay);
 
 const buildUI = new BuildUI(overlay, {
-  onPick: (i) => {
+  onPart: (p, slot, id) => {
+    if (state !== 'BUILD' || !togglePart(garage, p, slot, id)) return;
     sound.click();
-    doPick(i);
+    renderBuild();
   },
-  onKeep: () => {
+  onDenied: () => sound.deny(),
+  onTab: (p, slot) => {
+    if (state !== 'BUILD' || !openTab(garage, p, slot)) return;
     sound.click();
-    doKeep();
+    renderBuild();
   },
+  onReady: (p) => toggleReady(p),
   onHover: (p, cfg) => {
-    if (state !== 'BUILD') return;
-    cars[p].setConfig(cfg ?? displayConfig(draft, p));
-  },
-  onLaunch: () => {
-    sound.click();
-    startCountdown();
+    previews[p] = cfg;
+    if (state === 'BUILD') refreshCars();
   },
   onName: (p, name) => {
     names[p] = cleanName(p, name);
@@ -256,56 +272,55 @@ sound.onMuteChange(renderMute);
 renderMute();
 
 function renderBuild(): void {
-  buildUI.render({ draft, names, colors: PLAYER_COLORS, wind, round });
+  buildUI.render({ garage, names, colors: PLAYER_COLORS, wind, round, lastRuns });
 }
 
+/** Show each player's fitted car, or the part they are hovering. */
 function refreshCars(): void {
-  for (const p of PLAYERS) cars[p].setConfig(displayConfig(draft, p));
+  for (const p of PLAYERS) cars[p].setConfig(previews[p] ?? garage.builds[p].config);
 }
 
-function doPick(optionIndex: number): boolean {
-  if (state !== 'BUILD') return false;
-  const slot = currentSlot(draft);
-  if (!slot) return false;
-  const opt = PARTS[slot][optionIndex];
-  if (!opt) return false;
-  if (!applyPick(draft, opt.id)) return false;
-  refreshCars();
+/** READY locks a player's car in; the race starts as soon as both players are ready. */
+function toggleReady(p: PlayerIndex, ready = !garage.builds[p].ready): boolean {
+  if (state !== 'BUILD' || !setReady(garage, p, ready)) return false;
+  sound.readyChime(ready);
   renderBuild();
+  if (allReady(garage)) startCountdown();
   return true;
 }
 
-function doKeep(): boolean {
-  if (state !== 'BUILD') return false;
-  const p = activePlayer(draft);
-  const slot = currentSlot(draft);
-  if (p === null || !slot) return false;
-  const prev = previousPick(draft, p);
-  if (!prev) return false;
-  const idx = PARTS[slot].findIndex((o) => o.id === prev);
-  return idx >= 0 && doPick(idx);
-}
-
-function runAutobuild(): void {
-  while (!isDone(draft)) {
-    const slot = currentSlot(draft)!;
-    const p = activePlayer(draft)!;
-    const options = PARTS[slot].map((o, i) => ({ o, i })).filter(({ o }) => canAfford(draft, p, o));
-    const pick = options[Math.floor(buildRng() * options.length)];
-    applyPick(draft, pick.o.id);
+function garageKey(p: PlayerIndex, action: GarageAction, repeat: boolean): void {
+  // Keys win over a mouse preview on the same car, so the change shows at once.
+  buildUI.endPreview(p);
+  if (action === 'ready') {
+    // The key that left the results screen mustn't also ready a player in the fresh garage.
+    if (!repeat && performance.now() - garageAt >= READY_KEY_GRACE) toggleReady(p);
+    return;
   }
-  refreshCars();
-  renderBuild();
+  const dir = action === 'nextTab' || action === 'nextPart' ? 1 : -1;
+  const isTab = action === 'prevTab' || action === 'nextTab';
+  if (isTab ? stepTab(garage, p, dir) : cyclePart(garage, p, dir)) {
+    sound.click();
+    renderBuild();
+  } else if (!isTab && !repeat && !garage.builds[p].ready && hasPartBeyond(garage, p, dir)) {
+    // Every part that way costs too much: the same feedback as clicking a locked card.
+    sound.deny();
+    buildUI.deny(p);
+  }
 }
 
-function enterBuild(): void {
+/** Enter the garage with last race's cars (or the free build), keeping each player's open tab. */
+function enterBuild(tabs?: [SlotId, SlotId]): void {
   state = 'BUILD';
   stateTime = 0;
   sims = null;
   raceConfigs = null;
   results = null;
   firstLaunchSeen = false;
-  draft = newDraft(firstPicker, lastConfigs);
+  garage = newGarage(lastConfigs, tabs);
+  garageAt = performance.now();
+  if (autobuild) for (const p of PLAYERS) randomize(garage, p, buildRng);
+  previews[0] = previews[1] = null;
   for (const c of cars) {
     c.stopAudio();
     c.trail.clear();
@@ -319,14 +334,12 @@ function enterBuild(): void {
   hud.showCountdown(null);
   buildUI.show(true);
   renderBuild();
-  if (autobuild) runAutobuild();
 }
 
 function startCountdown(): boolean {
   if (state !== 'BUILD') return false;
-  if (!isDone(draft)) completeWithDefaults(draft);
-  refreshCars();
-  raceConfigs = [displayConfig(draft, 0), displayConfig(draft, 1)];
+  raceConfigs = [{ ...garage.builds[0].config }, { ...garage.builds[1].config }];
+  previews[0] = previews[1] = null;
   for (const p of PLAYERS) cars[p].setConfig(raceConfigs[p]);
   state = 'COUNTDOWN';
   stateTime = 0;
@@ -426,6 +439,10 @@ function finishRace(): void {
   }
   if (sessionBest) bay.setBest(sessionBest.distance, sessionBest.name, PLAYER_COLORS[sessionBest.player]);
   lastConfigs = [raceConfigs[0], raceConfigs[1]];
+  lastRuns = [
+    { distance: d[0], dnf: res[0].dnf },
+    { distance: d[1], dnf: res[1].dnf },
+  ];
   results = {
     round,
     wind,
@@ -464,6 +481,7 @@ function finishRace(): void {
   };
   state = 'RESULTS';
   stateTime = 0;
+  resultsAt = performance.now();
   rig.setMode(firstLaunchSeen ? 'results' : 'stalled');
   hud.showCars(false);
   for (const p of PLAYERS) hud.setTag(p, 0, 0, false);
@@ -481,12 +499,12 @@ function finishRace(): void {
   sound.cheer();
 }
 
+/** Back to the garage with both cars as they raced, ready to tweak. */
 function rematch(): boolean {
   if (state !== 'RESULTS') return false;
   round++;
-  firstPicker = (1 - firstPicker) as PlayerIndex;
   wind = rollWind();
-  enterBuild();
+  enterBuild([garage.builds[0].tab, garage.builds[1].tab]);
   cutToStart();
   return true;
 }
@@ -494,8 +512,8 @@ function rematch(): boolean {
 function newPlayers(): boolean {
   names = [...DEFAULT_NAMES];
   round = 1;
-  firstPicker = 0;
   lastConfigs = [null, null];
+  lastRuns = [null, null];
   sessionBest = null;
   bay.setBest(null);
   wind = rollWind();
@@ -508,10 +526,18 @@ function newPlayers(): boolean {
 window.addEventListener('pointerdown', () => sound.unlock(), { capture: true });
 // Buttons drop focus after a click so Enter/Space never re-press them behind the game's back.
 document.addEventListener('click', (e) => (e.target as HTMLElement | null)?.closest('button')?.blur());
+const garageKeys = new Map<string, { p: PlayerIndex; action: GarageAction }>();
+for (const p of PLAYERS) {
+  for (const [action, key] of Object.entries(GARAGE_KEYS[p])) {
+    for (const code of key.codes) garageKeys.set(code, { p, action: action as GarageAction });
+  }
+}
 window.addEventListener('keydown', (e) => {
   sound.unlock();
   const target = e.target as HTMLElement | null;
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+  // Leave browser shortcuts (Cmd+D, Ctrl+W, ...) alone.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === 'm' || e.key === 'M') {
     e.preventDefault();
     sound.toggleMute();
@@ -519,21 +545,15 @@ window.addEventListener('keydown', (e) => {
   }
   // A button reached with Tab keeps its native Enter/Space press (mouse clicks blur buttons).
   if ((e.key === 'Enter' || e.key === ' ') && target?.closest('button')) return;
-  if (e.key === 'Enter' || e.key === ' ' || /^[1-9]$/.test(e.key)) e.preventDefault();
   if (state === 'BUILD') {
-    if (/^[1-9]$/.test(e.key)) {
-      const slot = currentSlot(draft);
-      const i = Number(e.key) - 1;
-      if (slot && i < PARTS[slot].length && doPick(i)) sound.click();
-    } else if (e.key === 'Enter') {
-      if (isDone(draft)) {
-        sound.click();
-        startCountdown();
-      } else if (doKeep()) {
-        sound.click();
-      }
-    }
-  } else if (state === 'RESULTS' && e.key === 'Enter') {
+    const key = garageKeys.get(e.code);
+    if (!key) return;
+    e.preventDefault();
+    garageKey(key.p, key.action, e.repeat);
+  } else if (state === 'RESULTS' && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    // READY keys still being mashed from the race mustn't skip the results.
+    if (e.repeat || performance.now() - resultsAt < RESULTS_KEY_GRACE) return;
     sound.click();
     rematch();
   }
@@ -576,7 +596,7 @@ function updateCars(dt: number, gdt: number, t: number): void {
     const car = cars[p];
     const mesh = car.mesh;
     const z = TRACK.laneZ[p];
-    // Turntable while drafting; face forward otherwise.
+    // Turntable in the garage; face forward otherwise.
     if (building) {
       car.yaw += dt * 0.55;
       car.holder.rotation.y = car.yaw + (p === 0 ? 0.6 : -0.6);
@@ -757,16 +777,32 @@ const api = {
   get state(): GameState {
     return state;
   },
-  pick(optionIndex: number): boolean {
-    return doPick(optionIndex);
+  /** Fit a part (by id or option index) on a player's car. */
+  select(p: PlayerIndex, slot: SlotId, option: string | number): boolean {
+    const id = typeof option === 'number' ? PARTS[slot]?.[option]?.id : option;
+    if (state !== 'BUILD' || !isPlayer(p) || id === undefined || !fitPart(garage, p, slot, id)) return false;
+    renderBuild();
+    return true;
   },
-  keep(): boolean {
-    return doKeep();
+  /** Remove a paid part: the slot falls back to its free part. */
+  remove(p: PlayerIndex, slot: SlotId): boolean {
+    if (state !== 'BUILD' || !isPlayer(p) || !removePart(garage, p, slot)) return false;
+    renderBuild();
+    return true;
+  },
+  openTab(p: PlayerIndex, slot: SlotId): boolean {
+    if (state !== 'BUILD' || !isPlayer(p) || !openTab(garage, p, slot)) return false;
+    renderBuild();
+    return true;
+  },
+  /** Set a player's READY; the countdown starts once both are ready. */
+  setReady(p: PlayerIndex, ready = true): boolean {
+    return isPlayer(p) && toggleReady(p, ready);
   },
   get configs(): [CarConfig, CarConfig] {
     return raceConfigs && state !== 'BUILD'
       ? [{ ...raceConfigs[0] }, { ...raceConfigs[1] }]
-      : [displayConfig(draft, 0), displayConfig(draft, 1)];
+      : [{ ...garage.builds[0].config }, { ...garage.builds[1].config }];
   },
   get wind(): number {
     return wind;
@@ -803,16 +839,14 @@ const api = {
     names[p] = cleanName(p, name);
     if (state === 'BUILD') renderBuild();
   },
-  get draft() {
+  get garage() {
     return {
-      slot: currentSlot(draft),
-      slotIndex: draft.slotIndex,
-      activePlayer: activePlayer(draft),
-      firstPicker: draft.firstPicker,
-      done: isDone(draft),
-      money: [moneyLeft(draft, 0), moneyLeft(draft, 1)],
-      picks: [{ ...draft.picks[0] }, { ...draft.picks[1] }],
-      previous: [draft.prev[0] ? { ...draft.prev[0] } : null, draft.prev[1] ? { ...draft.prev[1] } : null],
+      configs: [{ ...garage.builds[0].config }, { ...garage.builds[1].config }],
+      money: [moneyLeft(garage, 0), moneyLeft(garage, 1)],
+      ready: [garage.builds[0].ready, garage.builds[1].ready],
+      tabs: [garage.builds[0].tab, garage.builds[1].tab],
+      previous: [garage.prev[0] ? { ...garage.prev[0] } : null, garage.prev[1] ? { ...garage.prev[1] } : null],
+      lastRuns: [lastRuns[0] ? { ...lastRuns[0] } : null, lastRuns[1] ? { ...lastRuns[1] } : null],
     };
   },
   /** Live sim state per car during a race. */

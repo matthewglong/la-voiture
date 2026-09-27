@@ -9,11 +9,14 @@ Two players build cars on one shared screen, then both cars launch down a San Fr
 - **Sound:** procedural Web Audio for engines, bumps, wind, splash, countdown and cheering.
 - **Wind:** a random headwind or tailwind each round, shown *before* building.
 
-## Build phase
-- A **turn-based draft, one slot at a time.** For each slot, the first picker chooses, then the other player. The first picker swaps on each rematch.
-- Both builds are visible live, with no going back.
-- A **$100 budget** as a hard cap. Every slot has a $0 option, so nobody can get stuck.
+## Build phase (the garage)
+- **Both players build at the same time**, with no turns, and can change any part until they press READY. Both builds are visible live.
+- **A tab per slot** shows the fitted part and its price, so every price is visible before anyone spends.
+- **Click a part to fit it.** Swapping refunds the part it replaces. **Click the fitted part again to remove it**, and the slot falls back to its free part.
+- A **$100 budget** as a hard cap. Every slot has a $0 option, so nobody can get stuck. Parts you can't afford show how much you're short.
 - Slots: Chassis, Wheels, Engine, Fuel tank, Wing, Nose, Booster, then the free cosmetics (Paint, Topper).
+- **READY** locks a car in. The race starts as soon as both players are ready.
+- **One keyboard, two players:** P1 uses A/D (slot tabs), W/S (parts) and Space (READY). P2 uses the arrow keys and Enter.
 - **No dominated options:** every part must be the best choice for *some* build. This is checked by `npm run balance`.
 
 ## Physics (`src/sim/physics.ts`, deterministic, shared by the game and the balance check)
@@ -25,4 +28,4 @@ Two players build cars on one shared screen, then both cars launch down a San Fr
 - **Score:** the horizontal distance from the lip to the first contact with the water.
 
 ## Rematch
-- Cars are kept, a new wind is rolled, and the first picker swaps. "New players" resets everything.
+- Both cars are kept exactly as they raced, and players tweak them in the garage. Changed slots and last race's parts are marked, and each panel shows the last distance. A new wind is rolled. "New players" resets everything.

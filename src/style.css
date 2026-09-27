@@ -14,6 +14,8 @@
   --font: 'Arial Rounded MT Bold', 'Nunito', 'Varela Round', ui-rounded, 'Segoe UI', system-ui, sans-serif;
   /* Scale the whole UI with the viewport height so 720p fits and 1080p reads from a sofa. */
   font-size: clamp(11px, 1.78vh, 21px);
+  /* Garage panels are never narrower than at 720p (short laptop windows would truncate the tabs). */
+  --panel-w: max(23rem, 294px);
 }
 
 * {
@@ -130,6 +132,9 @@ button:disabled {
 }
 
 .banner {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 0.55rem 1.3rem;
   border-radius: 0.9rem;
   background: var(--ink);
@@ -142,6 +147,11 @@ button:disabled {
 }
 
 .banner .who {
+  display: inline-block;
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   padding: 0.05rem 0.5rem;
   border-radius: 0.5rem;
   color: #fff;
@@ -156,22 +166,23 @@ button:disabled {
   border-radius: 999px;
 }
 
-/* ---------- Player panels ---------- */
+/* ---------- Player panels (the garage) ---------- */
 
 .panel {
   position: absolute;
   top: 0.9rem;
   bottom: 0.9rem;
-  width: 23rem;
+  width: var(--panel-w);
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.55rem;
   padding: 0.8rem;
   border-radius: 1.3rem;
   background: rgba(255, 253, 247, 0.94);
   border: 0.2rem solid var(--line);
-  box-shadow: var(--shadow);
-  transition: opacity 0.25s ease, transform 0.25s ease, filter 0.25s ease, box-shadow 0.25s ease;
+  /* Both players build at once, so both panels glow in their player's colour. */
+  box-shadow: 0 0 0 0.3rem var(--pc), var(--shadow);
+  transition: box-shadow 0.25s ease;
   overflow: hidden;
 }
 
@@ -183,19 +194,19 @@ button:disabled {
   right: 0.9rem;
 }
 
-.panel.dim {
-  /* Still readable from the sofa: grey it out rather than making it see-through. */
-  background: rgba(236, 234, 228, 0.97);
-  filter: saturate(0.3) brightness(0.97);
-  transform: scale(0.97);
+/* A ready player's car is locked in: the glow goes out and the tabs read as a plain summary. */
+.panel.ready {
+  box-shadow: var(--shadow);
 }
 
-.panel.dim .panel-head {
-  opacity: 0.8;
+.panel.ready .tab.open {
+  background: var(--paper-2);
+  border-color: transparent;
+  box-shadow: none;
 }
 
-.panel.active {
-  box-shadow: 0 0 0 0.3rem var(--pc), var(--shadow);
+.panel.ready .section-title .keys {
+  visibility: hidden;
 }
 
 .panel-head {
@@ -229,8 +240,8 @@ button:disabled {
   font-size: 1.15rem;
   font-weight: 900;
   color: #fff;
-  background: rgba(255, 255, 255, 0.16);
-  border: 0.12rem dashed rgba(255, 255, 255, 0.55);
+  background: rgba(22, 32, 58, 0.22);
+  border: 0.12rem dashed rgba(255, 255, 255, 0.6);
   border-radius: 0.55rem;
   padding: 0.25rem 0.45rem;
   outline: none;
@@ -238,7 +249,7 @@ button:disabled {
 }
 
 .panel-head input:focus {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(22, 32, 58, 0.34);
   border-style: solid;
 }
 
@@ -252,18 +263,100 @@ button:disabled {
   padding: 0.1rem 0.5rem;
   min-width: 4.2rem;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
-.money.low {
-  color: var(--bad);
+/* Hovering a part previews the money left after swapping it in. */
+.money.preview {
+  outline: 0.14rem dashed var(--ink);
+  outline-offset: -0.28rem;
+}
+
+.money.up {
+  color: #0f7a4a;
+}
+
+.money.short {
+  color: #c62f35;
+}
+
+.money.shake {
+  animation: shake 0.4s ease;
+}
+
+@keyframes shake {
+  20% {
+    transform: translateX(-0.3rem);
+  }
+  40% {
+    transform: translateX(0.3rem);
+  }
+  60% {
+    transform: translateX(-0.2rem);
+  }
+  80% {
+    transform: translateX(0.12rem);
+  }
 }
 
 .section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 1.2rem;
   font-size: max(0.68rem, 11px);
   letter-spacing: 0.16em;
   color: var(--ink-soft);
   margin: 0 0 0.3rem 0.1rem;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.section-title .aside {
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-weight: 900;
+  color: var(--ink);
+}
+
+.section-title .legend {
+  margin-left: auto;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.section-title .legend::before {
+  content: '';
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.7rem;
+  margin-right: 0.3rem;
+  border-radius: 0.18rem;
+  background: #fff3cf;
+  box-shadow: inset 0.2rem 0 0 #8f5b0c, 0 0 0 0.08rem rgba(22, 32, 58, 0.25);
+  vertical-align: -0.08rem;
+}
+
+.keys {
+  display: inline-flex;
+  gap: 0.2rem;
+  letter-spacing: 0;
+}
+
+kbd {
+  font-family: inherit;
+  font-size: max(0.7rem, 11px);
+  font-weight: 900;
+  line-height: 1.3;
+  min-width: 1.3rem;
+  padding: 0 0.3rem;
+  border-radius: 0.3rem;
+  text-align: center;
+  color: var(--ink);
+  background: #fff;
+  border: 0.1rem solid rgba(22, 32, 58, 0.6);
+  box-shadow: 0 0.1rem 0 rgba(22, 32, 58, 0.6);
 }
 
 .stats {
@@ -273,7 +366,9 @@ button:disabled {
 
 .stat {
   display: grid;
-  grid-template-columns: 6.6rem 1fr 4.9rem;
+  /* The 11px text floor needs fixed minimum widths on shorter windows. The value column also fits
+     "−0.5%/bump" in the wider fallback fonts (system-ui, Segoe UI). */
+  grid-template-columns: max(6.6rem, 84px) 1fr max(5.4rem, 78px);
   align-items: center;
   gap: 0.45rem;
   font-size: max(0.78rem, 11px);
@@ -326,72 +421,117 @@ button:disabled {
 }
 
 .stat .val.up {
-  color: var(--good);
+  color: #0f7a4a;
 }
 
 .stat .val.down {
-  color: var(--bad);
+  color: #c62f35;
 }
 
-.picks {
+/* ----- Slot tabs: one per slot, showing the fitted part and what it cost ----- */
+
+.tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.2rem 0.5rem;
-  font-size: max(0.74rem, 11px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.3rem;
 }
 
-.pick {
+.tab {
+  position: relative;
+  display: grid;
+  gap: 0.06rem;
+  min-width: 0;
+  padding: 0.26rem 0.45rem 0.3rem;
+  border-radius: 0.6rem;
+  border: 0.14rem solid transparent;
+  background: var(--paper-2);
+  text-align: left;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.tab:hover:not(:disabled) {
+  background: #fff;
+  border-color: rgba(22, 32, 58, 0.3);
+}
+
+.tab.open {
+  background: #fff;
+  border-color: var(--pc);
+  box-shadow: 0 0.16rem 0 var(--pc);
+}
+
+.tab:disabled {
+  cursor: default;
+}
+
+.tab .top {
   display: flex;
   justify-content: space-between;
-  gap: 0.3rem;
-  padding: 0.14rem 0.4rem;
-  border-radius: 0.4rem;
-  background: var(--paper-2);
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.pick .k {
+  gap: 0.25rem;
+  font-size: max(0.66rem, 11px);
   color: var(--ink-soft);
+  white-space: nowrap;
 }
 
-.pick .v {
+.tab.open .slot {
+  color: var(--ink);
+}
+
+.tab .cost {
   font-weight: 900;
+  color: #8f5b0c;
+}
+
+.tab .part {
+  font-weight: 900;
+  font-size: max(0.8rem, 11px);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.pick.empty .v {
-  color: #a3a9b8;
-  font-weight: 400;
+.tab .part .sw {
+  display: inline-block;
+  width: 0.72rem;
+  height: 0.72rem;
+  margin-right: 0.25rem;
+  border-radius: 50%;
+  border: 0.1rem solid var(--line);
+  vertical-align: -0.08rem;
 }
 
-.pick.current {
-  outline: 0.14rem solid var(--pc);
+/* Swapped since the last race: last race's gold, as on the cards' LAST RACE tags. */
+.tab.changed {
+  background: #fff3cf;
+  box-shadow: inset 0.26rem 0 0 #8f5b0c;
 }
 
+.tab.changed.open {
+  box-shadow: inset 0.26rem 0 0 #8f5b0c, 0 0.16rem 0 var(--pc);
+}
+
+.panel.ready .tab.changed.open {
+  background: #fff3cf;
+  box-shadow: inset 0.26rem 0 0 #8f5b0c;
+}
+
+/* ----- Parts for the open tab ----- */
+
+/* If a short window can't fit the parts, they scroll rather than spill over READY. */
 .options {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.options .waiting {
-  margin: auto;
-  text-align: center;
-  color: var(--ink-soft);
-  font-size: 0.9rem;
-  line-height: 1.5;
-}
-
-.options .waiting b {
-  color: var(--ink);
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .cards {
   display: grid;
-  gap: 0.42rem;
+  /* Room for the status tags on the cards' bottom edges. */
+  gap: max(0.85rem, 11px);
+  padding-bottom: 0.8rem;
 }
 
 .cards.grid2 {
@@ -413,30 +553,33 @@ button:disabled {
   transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.15s ease;
 }
 
-.card:hover:not(:disabled) {
+.card:hover:not(.locked) {
   transform: translateY(-0.1rem);
   box-shadow: 0 0.32rem 0 var(--line);
   background: #fffaf0;
 }
 
-.card:active:not(:disabled) {
+.card:active:not(.locked) {
   transform: translateY(0.15rem);
   box-shadow: 0 0.06rem 0 var(--line);
 }
 
-.card .key {
+/* A radio dot: one part per slot. */
+.card .radio {
   position: absolute;
-  left: 0.5rem;
+  left: 0.55rem;
   top: 50%;
   transform: translateY(-50%);
-  width: 1.2rem;
-  height: 1.2rem;
-  border-radius: 0.35rem;
-  background: var(--ink);
-  color: #fff;
-  font-size: max(0.72rem, 11px);
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 50%;
+  border: 0.14rem solid var(--line);
+  background: #fff;
   display: grid;
   place-items: center;
+  color: #fff;
+  font-size: max(0.7rem, 10px);
+  font-weight: 900;
 }
 
 .card .name {
@@ -465,47 +608,96 @@ button:disabled {
   color: var(--ink-soft);
 }
 
-.card.prev {
-  background: #fff6d6;
-  border-color: #b7791f;
+.card.fitted,
+.card.fitted:hover {
+  border-color: var(--pc);
+  box-shadow: 0 0.22rem 0 var(--pc);
+  background: color-mix(in srgb, var(--pc) 9%, #fff);
 }
 
-.card.prev::after {
-  content: 'LAST TIME';
-  position: absolute;
-  right: 0.5rem;
-  bottom: -0.55rem;
-  font-size: max(0.56rem, 9px);
-  letter-spacing: 0.12em;
-  padding: 0.08rem 0.35rem;
-  border-radius: 0.3rem;
-  background: #b7791f;
-  color: #fff;
+.card.fitted .radio {
+  background: var(--pc);
+  border-color: var(--pc);
 }
 
-.card:disabled {
+.card.fitted .radio::after {
+  content: '✓';
+}
+
+/* Unaffordable parts stay hoverable so the preview can show what they would do. */
+.card.locked {
+  cursor: not-allowed;
   background: #eceae4;
   border-color: #a3a9b8;
   box-shadow: 0 0.22rem 0 #a3a9b8;
-  color: #8a90a0;
+  color: #5d6478;
 }
 
-.card:disabled .price {
+.card.locked .tagline {
+  color: #7b8193;
+}
+
+.card.locked .price {
   background: #f6d5d5;
-  color: var(--bad);
+  color: #b3261e;
 }
 
-.card:disabled .key {
-  background: #a3a9b8;
+.card.locked .radio {
+  border-color: #a3a9b8;
+  background: #eceae4;
+}
+
+/* Status tag on the bottom edge: FITTED (REMOVE on hover), NEED $X MORE, LAST RACE. */
+.card .tag {
+  position: absolute;
+  right: 0.55rem;
+  /* Floored like the text, so the tag never rides up into the tagline on short windows. */
+  bottom: min(-0.72rem, -9.5px);
+  font-size: max(0.66rem, 11px);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.35;
+  padding: 0.04rem 0.42rem;
+  border-radius: 0.32rem;
+  white-space: nowrap;
+  color: #fff;
+  background: var(--ink);
+}
+
+.card .tag:empty {
+  display: none;
+}
+
+.card.fitted .tag {
+  background: color-mix(in srgb, var(--pc) 72%, #000);
+}
+
+.card.last .tag {
+  background: #8f5b0c;
+}
+
+.card.locked .tag {
+  background: #c62f35;
+}
+
+.card.removable:hover .tag {
+  background: var(--ink);
+}
+
+.card.removable:hover .tag .rest,
+.card:not(.removable:hover) .tag .hover {
+  display: none;
 }
 
 .card.swatch {
   grid-template-columns: auto 1fr;
   align-items: center;
-  padding: 0.4rem 0.5rem 0.4rem 2.1rem;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.55rem;
 }
 
 .card.swatch .chip {
+  position: relative;
   width: 1.5rem;
   height: 1.5rem;
   border-radius: 50%;
@@ -513,83 +705,124 @@ button:disabled {
   box-shadow: inset -0.2rem -0.25rem 0 rgba(0, 0, 0, 0.18), inset 0.15rem 0.15rem 0 rgba(255, 255, 255, 0.45);
 }
 
+.card.swatch.fitted .chip::after {
+  content: '✓';
+  position: absolute;
+  right: -0.45rem;
+  bottom: -0.4rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: max(0.56rem, 9px);
+  font-weight: 900;
+  color: #fff;
+  background: var(--ink);
+}
+
 .card.swatch .name {
   font-size: 0.82rem;
 }
 
-.card.compact {
-  padding-top: 0.35rem;
-  padding-bottom: 0.35rem;
+/* ----- READY ----- */
+
+.ready-card {
+  margin: auto;
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  text-align: center;
 }
 
-.card.compact .tagline {
-  font-size: max(0.64rem, 10.5px);
-}
-
-.keep {
-  margin-top: 0.7rem;
-  padding: 0.5rem 0.8rem;
-  border-radius: 0.8rem;
+.ready-card .tick {
+  width: 3.6rem;
+  height: 3.6rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 2rem;
   font-weight: 900;
-  font-size: 0.92rem;
-  background: #fff6d6;
-  border: 0.16rem solid #b7791f;
-  box-shadow: 0 0.22rem 0 #b7791f;
-}
-
-.keep:disabled {
-  opacity: 0.5;
-}
-
-.keep kbd {
-  font-family: inherit;
-  font-size: max(0.7rem, 10.5px);
-  padding: 0.05rem 0.35rem;
-  border-radius: 0.3rem;
-  background: #b7791f;
   color: #fff;
-  margin-left: 0.35rem;
+  background: var(--good);
+  border: 0.2rem solid var(--line);
+  box-shadow: 0 0.3rem 0 var(--line);
+  animation: pop-in 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
 }
 
-/* ---------- Launch ---------- */
+@keyframes pop-in {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+}
 
-.launch {
-  position: absolute;
-  left: 50%;
-  bottom: 3.4rem;
-  transform: translateX(-50%);
-  font-size: 2.3rem;
+.ready-card .big {
+  font-size: 1.9rem;
+  font-weight: 900;
+}
+
+.ready-card .sub {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.ready-btn {
+  /* Always above the parts, even if a tiny window makes them overflow. */
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.95rem;
+  font-size: 1.4rem;
   font-weight: 900;
   letter-spacing: 0.08em;
-  padding: 0.7rem 2.6rem;
-  border-radius: 1.2rem;
+  text-transform: uppercase;
   color: #fff;
-  background: linear-gradient(180deg, #ff7a2f, #f0431b);
-  border: 0.22rem solid var(--line);
-  box-shadow: 0 0.45rem 0 var(--line), 0 1rem 2.5rem rgba(240, 67, 27, 0.45);
-  animation: pulse 1.2s ease-in-out infinite;
-  z-index: 6;
+  background: var(--pc);
+  border: 0.2rem solid var(--line);
+  box-shadow: 0 0.32rem 0 var(--line);
 }
 
-.launch:active {
-  transform: translateX(-50%) translateY(0.3rem);
-  box-shadow: 0 0.15rem 0 var(--line);
+.ready-btn:hover {
+  filter: brightness(1.06);
 }
 
-.launch small {
-  display: block;
-  font-size: max(0.75rem, 10.5px);
-  letter-spacing: 0.1em;
-  opacity: 0.85;
+.ready-btn:active {
+  transform: translateY(0.22rem);
+  box-shadow: 0 0.1rem 0 var(--line);
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    filter: brightness(1);
+.panel.ready .ready-btn {
+  color: var(--ink);
+  background: #fff;
+}
+
+/* Short laptop windows (e.g. 1366×768 minus the browser's toolbars): one-line taglines and tighter
+   spacing, so the parts still fit above READY. Each card's tooltip has the full tagline. */
+@media (max-height: 660px) {
+  .panel {
+    gap: 0.4rem;
   }
-  50% {
-    filter: brightness(1.12);
+
+  .stats {
+    gap: 0.1rem;
+  }
+
+  .card .tagline {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+    overflow: hidden;
+  }
+
+  /* Cosmetic taglines are just flavour ("Cosmetic: squeak"). */
+  .cards.cosmetic .tagline {
+    display: none;
   }
 }
 
@@ -987,6 +1220,7 @@ button:disabled {
   left: 50%;
   bottom: 2.8rem;
   transform: translateX(-50%);
+  max-width: calc(100vw - 2 * (var(--panel-w) + 1.8rem));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -996,6 +1230,9 @@ button:disabled {
 }
 
 .title-card {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.85rem;
   color: var(--ink);
   background: rgba(255, 253, 247, 0.85);
