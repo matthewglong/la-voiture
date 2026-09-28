@@ -2,7 +2,7 @@
 // at its full angle for the first car to reach it, then drops (RAMP_RATE in sim/race.ts) while amber
 // lamps flash at the lip. The lip stays over the same spot and only comes down, as in the sim.
 import * as THREE from 'three';
-import { COURSE, DECK_Y, KICKER_ANGLE } from '../track';
+import { DECK_Y, KICKER_ANGLE, KICKER_X, RUSSIAN_HILL } from '../maps/russianHill';
 import { GeoBuilder, _q, box, cyl, meshOf, type V3 } from './geo';
 
 export interface Kicker {
@@ -11,9 +11,9 @@ export interface Kicker {
   set(angle: number, alarm: boolean, t: number): void;
 }
 
-const LIP = COURSE.lip;
+const LIP = RUSSIAN_HILL.lip!;
 /** The hinge, and how far out the lip is from it (fixed: the ramp drops, it doesn't move out). */
-const X0 = COURSE.kickerX;
+const X0 = KICKER_X;
 const RUN = LIP.x - X0;
 /** The ramp's length at full angle; the leaf is built at that length and stretched to fit. */
 const LEN = RUN / Math.cos(KICKER_ANGLE);

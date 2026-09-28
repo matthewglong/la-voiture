@@ -1,6 +1,6 @@
 // The Bay: animated water, distance buoys with labels, and the session-record flag buoy.
 import * as THREE from 'three';
-import { TRACK } from '../track';
+import { LANE_Z, RUSSIAN_HILL } from '../maps/russianHill';
 import { canvasTexture } from './util';
 
 export interface Bay {
@@ -104,7 +104,7 @@ function makeLabel(text: string, big: boolean, height: number): THREE.Sprite {
 export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } = {}): Bay {
   const group = new THREE.Group();
   group.name = 'bay';
-  const lip = TRACK.lip;
+  const lip = RUSSIAN_HILL.lip!;
 
   // Water: one big plane, two scrolling ripple layers (normal map + clearcoat normal map).
   const normals = makeWaterNormals(256, 7);
@@ -157,7 +157,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
   const labels: THREE.Sprite[] = [];
   for (let d = BUOY_SPACING; d <= BUOY_MAX; d += BUOY_SPACING) {
     const big = d % 50 === 0;
-    for (const z of TRACK.laneZ) {
+    for (const z of LANE_Z) {
       const b = new THREE.Group();
       const body = new THREE.Mesh(buoyGeo, big ? yellow : orange);
       body.scale.y = 0.8;

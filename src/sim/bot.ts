@@ -1,7 +1,8 @@
 // Autopilot: a racing line through the course, a speed plan from the car's grip and brakes,
-// dodging traffic, using items, and saving the boost for the run to the kicker. It drives the CPU
-// car, the balance check and the automated tests. Deterministic; no Three.js or DOM imports.
-import { COURSE, DS, indexAt, locate, pointAt, toWorld, type Course, type CoursePoint } from '../track';
+// dodging traffic, using items, and spending the boost where it pays (saved for the run to the
+// kicker in the long jump; on the straights in a race). It drives the CPU car, the balance check
+// and the automated tests. Deterministic; no Three.js or DOM imports.
+import { DS, deltaS, indexAt, locate, pointAt, toWorld, type Course, type CoursePoint } from '../track';
 import type { PlayerIndex } from '../types';
 import { G, RHO } from './physics';
 import { CORNER_GRIP, DRIFT_GRIP, DRIFT_MIN, MAX_YAW, OVERSTEER, TOPUP, type CarInput, type ItemKind, type RaceCar, type RaceSim } from './race';
@@ -29,9 +30,16 @@ const lines = new Map<Course, Line>();
  * descent on the summed squared curvature, on a 2 m resampling of the centreline (fast to converge),
  * then interpolated back onto every sample.
  */
-export function racingLine(c: Course = COURSE): Line {
+export function racingLine(c: Course): Line {
   const cached = lines.get(c);
   if (cached) return cached;
+  const line = c.loop ? loopLine(c) : openLine(c);
+  lines.set(c, line);
+  return line;
+}
+
+/** Point to point: the line's ends stay on the centreline, and it runs straight at the kicker. */
+function openLine(c: Course): Line {
   const P = c.points;
   const n = P.length;
   const STEP = 8;
@@ -67,7 +75,7 @@ export function racingLine(c: Course = COURSE): Line {
     const b = idx[j + 1];
     for (let i = a; i <= b; i++) full[i] = d[j] + ((d[j + 1] - d[j]) * (i - a)) / (b - a);
   }
-  const kick = c.marks.pierS0;
+  const kick = c.lip ? c.lip.runupS0 : Infinity;
   for (let i = 0; i < n; i++) {
     if (P[i].s > kick) full[i] *= clamp(1 - (P[i].s - kick) / 12, 0, 1);
     const mm = Math.max(0, P[i].hw - 2.2);
@@ -95,9 +103,73 @@ export function racingLine(c: Course = COURSE): Line {
     const cross = Math.abs((bx - ax) * (ez - az) - (bz - az) * (ex - ax));
     kk[i] = ab * bc * ca > 1e-9 ? (2 * cross) / (ab * bc * ca) : 0;
   }
-  const line = { d: full, k: kk };
-  lines.set(c, line);
-  return line;
+  return { d: full, k: kk };
+}
+
+/** A loop: the same minimum-curvature line, solved all the way round (no ends to pin). */
+function loopLine(c: Course): Line {
+  const P = c.points;
+  const n = P.length;
+  // The closing sample is the first one again.
+  const segs = n - 1;
+  const STEP = 8;
+  const idx: number[] = [];
+  for (let i = 0; i < segs; i += STEP) idx.push(i);
+  const m = idx.length;
+  const at = (j: number): number => ((j % m) + m) % m;
+  const cx = idx.map((i) => P[i].x);
+  const cz = idx.map((i) => P[i].z);
+  const nx = idx.map((i) => -P[i].tz);
+  const nz = idx.map((i) => P[i].tx);
+  const lim = idx.map((i) => Math.max(0, P[i].hw - 2.2));
+  const d = new Float64Array(m);
+  const X = new Float64Array(m);
+  const Z = new Float64Array(m);
+  const g = new Float64Array(m);
+  for (let it = 0; it < 4000; it++) {
+    for (let j = 0; j < m; j++) {
+      X[j] = cx[j] + nx[j] * d[j];
+      Z[j] = cz[j] + nz[j] * d[j];
+    }
+    for (let j = 0; j < m; j++) {
+      const fx = X[at(j - 2)] - 4 * X[at(j - 1)] + 6 * X[j] - 4 * X[at(j + 1)] + X[at(j + 2)];
+      const fz = Z[at(j - 2)] - 4 * Z[at(j - 1)] + 6 * Z[j] - 4 * Z[at(j + 1)] + Z[at(j + 2)];
+      g[j] = fx * nx[j] + fz * nz[j];
+    }
+    for (let j = 0; j < m; j++) d[j] = clamp(d[j] - 0.03 * g[j], -lim[j], lim[j]);
+  }
+  const full = new Float64Array(n);
+  for (let j = 0; j < m; j++) {
+    const a = idx[j];
+    const b = j + 1 < m ? idx[j + 1] : segs;
+    const db = d[at(j + 1)];
+    for (let i = a; i <= b; i++) full[i] = d[j] + ((db - d[j]) * (i - a)) / (b - a);
+  }
+  const FX = new Float64Array(segs);
+  const FZ = new Float64Array(segs);
+  for (let i = 0; i < segs; i++) {
+    FX[i] = P[i].x - P[i].tz * full[i];
+    FZ[i] = P[i].z + P[i].tx * full[i];
+  }
+  const kk = new Float64Array(n);
+  const h = 8;
+  const w = (i: number): number => ((i % segs) + segs) % segs;
+  for (let i = 0; i < segs; i++) {
+    const ax = FX[w(i - h)];
+    const az = FZ[w(i - h)];
+    const bx = FX[i];
+    const bz = FZ[i];
+    const ex = FX[w(i + h)];
+    const ez = FZ[w(i + h)];
+    const ab = Math.hypot(bx - ax, bz - az);
+    const bc = Math.hypot(ex - bx, ez - bz);
+    const ca = Math.hypot(ax - ex, az - ez);
+    const cross = Math.abs((bx - ax) * (ez - az) - (bz - az) * (ex - ax));
+    kk[i] = ab * bc * ca > 1e-9 ? (2 * cross) / (ab * bc * ca) : 0;
+  }
+  kk[segs] = kk[0];
+  full[segs] = full[0];
+  return { d: full, k: kk };
 }
 
 /** A corner worth drifting: where it is along the course, which way it turns (+1 right), and its
@@ -113,7 +185,7 @@ export interface DriftCorner {
 const cornerCache = new Map<Course, DriftCorner[]>();
 
 /** The big corners of the racing line (turning 50° or more): Hyde St's two and Lombard's hairpins. */
-export function driftCorners(c: Course = COURSE): DriftCorner[] {
+export function driftCorners(c: Course): DriftCorner[] {
   const cached = cornerCache.get(c);
   if (cached) return cached;
   const line = racingLine(c);
@@ -207,7 +279,13 @@ export class Bot {
 
   /** The drift corner the car is in, or about to enter (within `ahead` metres). */
   private cornerAt(s: number, ahead: number): DriftCorner | null {
-    for (const dc of this.corners) if (s > dc.s0 - ahead && s < dc.s1) return dc;
+    const c = this.sim.course;
+    for (const dc of this.corners) {
+      if (c.loop) {
+        const u = deltaS(c, dc.s0, s);
+        if (u > -ahead && u < dc.s1 - dc.s0) return dc;
+      } else if (s > dc.s0 - ahead && s < dc.s1) return dc;
+    }
     return null;
   }
 
@@ -235,10 +313,17 @@ export class Bot {
       v[i] = Math.min(60, lim * safety);
     }
     const brake = Math.min(k.mu * G, k.brakeForce / k.mass) * 0.85 * this.opt.skill;
-    for (let i = n - 2; i >= 0; i--) {
-      const a = Math.max(1.5, brake + G * P[i].grade);
-      v[i] = Math.min(v[i], Math.sqrt(v[i + 1] * v[i + 1] + 2 * a * DS));
+    // Braking back from what's ahead (on a loop twice round, so the end of the lap brakes for the
+    // first corner of the next).
+    const passes = c.loop ? 2 : 1;
+    for (let pass = 0; pass < passes; pass++) {
+      if (c.loop) v[n - 1] = v[0];
+      for (let i = n - 2; i >= 0; i--) {
+        const a = Math.max(1.5, brake + G * P[i].grade);
+        v[i] = Math.min(v[i], Math.sqrt(v[i + 1] * v[i + 1] + 2 * a * DS));
+      }
     }
+    if (c.loop) v[n - 1] = v[0];
     return v;
   }
 
@@ -263,7 +348,7 @@ export class Bot {
 
     // --- Where to aim: the line, bent round anything in the way.
     const look = 3 + 0.3 * Math.max(v, 4);
-    const sT = Math.min(car.s + look, c.length - 0.1);
+    const sT = c.loop ? car.s + look : Math.min(car.s + look, c.length - 0.1);
     let dT = this.line.d[indexAt(c, sT)];
     const threat = this.opt.dodge ? this.nextThreat(car, 34) : null;
     let blocked = false;
@@ -293,7 +378,7 @@ export class Bot {
     if (this.opt.aggression > 0) {
       for (const o of sim.cars) {
         if (o === car || o.phase !== 'race') continue;
-        const ds = o.s - car.s;
+        const ds = deltaS(c, car.s, o.s);
         if (Math.abs(ds) < 3.5 && Math.abs(o.d - car.d) < 4.5) dT += Math.sign(o.d - car.d) * 1.8 * this.opt.aggression;
       }
     }
@@ -337,10 +422,17 @@ export class Bot {
       out.throttle = 1;
     }
     this.steerDrift(car, out, v, tgt);
-    // --- Boost: dump the bottle on the run to the kicker (whatever is left at the lip is wasted),
-    // starting just soon enough to empty it at the lip.
-    const toLip = c.length - car.s;
-    if (car.boost > 0 && car.s > c.marks.lombardS1 && toLip / Math.max(v, 5) <= car.boost + 0.4) out.boost = true;
+    if (c.lip) {
+      // --- Boost: dump the bottle on the run to the kicker (whatever is left at the lip is wasted),
+      // starting just soon enough to empty it at the lip.
+      const toLip = c.length - car.s;
+      if (car.boost > 0 && car.s > c.lip.finalS0 && toLip / Math.max(v, 5) <= car.boost + 0.4) out.boost = true;
+    } else if (car.boost > 0 && car.grounded && car.drift === 0 && out.brake === 0) {
+      // A race: boost wherever the speed plan says there's no braking coming for a good while.
+      let clear = Infinity;
+      for (let s = car.s; s <= car.s + 25 + v * 1.2; s += 2) clear = Math.min(clear, this.planAt(s));
+      if (clear > v + 4) out.boost = true;
+    }
     const dtStep = 1 / 120;
     if (this.turnDir !== 0) {
       // A three-point turn: forward on full lock until the nose is about to meet an edge (or the
@@ -348,7 +440,7 @@ export class Bot {
       this.turnT += dtStep;
       const reach = (k.length / 2 + 0.8 + v * 0.25) * (this.turnRev ? -1 : 1);
       const loc = locate(c, car.x + Math.cos(car.heading) * reach, car.z + Math.sin(car.heading) * reach, car.s, 12);
-      const edge = Math.abs(loc.d) > pointAt(c, loc.s, this.tmp).hw - k.width / 2 - 0.3 || loc.s < 1.2;
+      const edge = Math.abs(loc.d) > pointAt(c, loc.s, this.tmp).hw - k.width / 2 - 0.3 || (!c.loop && loc.s < 1.2);
       if ((edge && this.turnT > 0.3) || (this.turnT > 0.6 && v < 0.4) || this.turnT > 3.5) {
         this.turnRev = !this.turnRev;
         this.turnT = 0;
@@ -386,20 +478,23 @@ export class Bot {
     // --- Items: use the selected one when it's worth it; if only the other one is, swap to it.
     if (this.opt.items && car.items.length) {
       const rival = sim.cars.find((o) => o !== car && o.phase === 'race');
+      const lip = c.lip;
       const worth = (it: ItemKind): boolean => {
-        if (it === 'grit') return !!threat || car.s > c.marks.pierS0;
+        if (it === 'grit') return !!threat || (lip !== null && car.s > lip.runupS0);
         if (it === 'jump') {
-          const onRamp = car.s > c.marks.kickerS0 + 3;
-          const tHit = threat ? (threat.s - car.s - k.length / 2) / Math.max(v, 1) : Infinity;
+          const onRamp = lip !== null && car.s > lip.rampS0 + 3;
+          const tHit = threat ? (deltaS(c, car.s, threat.s) - k.length / 2) / Math.max(v, 1) : Infinity;
           return onRamp || (blocked && tHit < 0.45 && tHit > 0.1);
         }
-        if (it === 'poo') return (rival !== undefined && rival.s < car.s - 3 && rival.s > car.s - 30) || car.s > c.marks.pierS0 + 10;
-        // A refill only pays if there's road left to burn it on before the lip.
-        const runway = (c.length - car.s) / Math.max(v, 5);
+        const behind = rival !== undefined ? car.prog - rival.prog : 0;
+        if (it === 'poo') return (rival !== undefined && behind > 3 && behind < 30) || (lip !== null && car.s > lip.runupS0 + 10);
+        // A refill only pays if there's road left to burn it on before the lip (a race always has more).
+        const runway = lip ? (c.length - car.s) / Math.max(v, 5) : Infinity;
         if (it === 'topup') return car.boostFrac < 0.45 && runway > car.boost + TOPUP * k.boostCap + 0.5;
         if (it === 'refill') return car.boostFrac < 0.15 && runway > k.boostCap + 0.5;
         // Seagull: at a rival that's ahead (or, late on, behind), while they're still well short of the lip.
-        return rival !== undefined && rival.s < c.marks.kickerS0 - 30 && (rival.s > car.s + 4 || car.s > c.marks.embS0 - 40);
+        if (!lip) return rival !== undefined && behind < -4;
+        return rival !== undefined && rival.s < lip.rampS0 - 30 && (rival.s > car.s + 4 || car.s > lip.runupS0 - 70);
       };
       const sel = car.items[car.sel];
       const other = car.items.length > 1 ? car.items[1 - car.sel] : null;
@@ -449,11 +544,14 @@ export class Bot {
       if (out.brake > 0) out.brake = Math.min(out.brake, 0.6);
     }
     // Drifts fill the bottle, so before a run of them leave it room: spend down to half on a
-    // straight (where the push isn't wasted past the engine's reach), never into a corner.
+    // straight (where the push isn't wasted past the engine's reach), never into a corner. (A race
+    // spends it on every straight anyway.)
+    const lip = this.sim.course.lip;
+    if (!lip) return;
     const toLip = this.sim.course.length - car.s;
     const straight = !this.cornerAt(car.s, 25 + v) && car.drift === 0 && car.grounded;
     const reach = (k.topSpeed + 0.3 * this.sim.wind) * 0.95;
-    if (car.boostFrac > 0.5 && straight && v < reach && car.s < this.sim.course.marks.lombardS1 && toLip > 150) out.boost = true;
+    if (car.boostFrac > 0.5 && straight && v < reach && car.s < lip.finalS0 && toLip > 150) out.boost = true;
   }
 
   /** The nearest thing ahead on or near the car's path. */
@@ -462,15 +560,15 @@ export class Bot {
     const c = sim.course;
     let best: Threat | null = null;
     const consider = (s: number, d: number, r: number, tall: boolean): void => {
-      const ahead = s - car.s;
+      const ahead = deltaS(c, car.s, s);
       if (ahead < 0.5 || ahead > range) return;
       if (!best || s < best.s) best = { s, d, r, tall };
     };
     for (const w of sim.waymos) {
       if (w.kind === 'cross') {
-        const loc = locate(c, w.x, w.z, c.marks.embS0 + 10, 25);
+        const loc = locate(c, w.x, w.z, w.crossS, 25);
         if (Math.abs(loc.d) < pointAt(c, loc.s, this.tmp).hw + 3) consider(loc.s, loc.d, 1.9, true);
-      } else if (Math.abs(w.s - car.s) < range + 5) {
+      } else if (Math.abs(deltaS(c, car.s, w.s)) < range + 5) {
         const loc = locate(c, w.x, w.z, w.s, 4);
         consider(loc.s, loc.d, 1.6, true);
       }
@@ -482,12 +580,12 @@ export class Bot {
     }
     for (const p of sim.peds) {
       if (p.down > 0 || p.dive > 0) continue;
-      if (Math.abs(p.s - car.s) > range + 2) continue;
+      if (Math.abs(deltaS(c, car.s, p.s)) > range + 2) continue;
       consider(p.s, p.d, 0.5, true);
     }
     for (const q of sim.poos) {
       if (!q.alive) continue;
-      if (Math.abs(q.s - car.s) > range + 2) continue;
+      if (Math.abs(deltaS(c, car.s, q.s)) > range + 2) continue;
       const loc = locate(c, q.x, q.z, q.s, 3);
       consider(loc.s, loc.d, 0.6, false);
     }
@@ -496,7 +594,7 @@ export class Bot {
 }
 
 /** Race one car on an empty course with the autopilot (the balance check and `predict()`). */
-export function driveToEnd(sim: RaceSim, bots: Bot[], maxSteps = 120 * 200): void {
+export function driveToEnd(sim: RaceSim, bots: Bot[], maxSteps = 120 * Math.max(200, sim.maxTime + 30)): void {
   sim.start();
   const inputs: CarInput[] = sim.cars.map(() => ({ throttle: 0, brake: 0, steer: 0, item: false, boost: false, swap: false }));
   for (let i = 0; i < maxSteps && !sim.done; i++) {

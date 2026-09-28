@@ -4,20 +4,15 @@
 import { BUDGET, PARTS, SLOT_LABELS, computeStats, defaultConfig } from '../src/parts';
 import { Bot, driveToEnd } from '../src/sim/bot';
 import { RaceSim, type CarResult } from '../src/sim/race';
-import { COURSE } from '../src/track';
+import { SF_MARKS } from '../src/maps/russianHill';
 import { PERFORMANCE_SLOTS, type CarConfig, type CarStats, type SlotId } from '../src/types';
+import { enumerateBuilds, label, pad, type Build } from './builds';
 
 declare const process: { exitCode: number | undefined; argv: string[] };
 
 const WINDS = [-8, 0, 8] as const;
 const TOP_N = 15;
 const TOP_FRACTION = 0.1;
-
-interface Build {
-  config: CarConfig;
-  price: number;
-  key: string;
-}
 
 interface Scored {
   build: Build;
@@ -31,7 +26,7 @@ function simulate(stats: CarStats, wind: number): { result: CarResult; lombard: 
   const bot = new Bot(sim, 0, { dodge: false, items: false });
   let t0 = 0;
   let t1 = 0;
-  const m = COURSE.marks;
+  const m = SF_MARKS;
   sim.start();
   const car = sim.cars[0];
   for (let i = 0; i < 120 * 200 && !sim.done; i++) {
@@ -46,36 +41,6 @@ export function simulateToEnd(stats: CarStats, wind: number): CarResult {
   const sim = new RaceSim([stats], wind, { obstacles: false, items: false, hype: false });
   driveToEnd(sim, [new Bot(sim, 0, { dodge: false, items: false })]);
   return sim.results()[0];
-}
-
-function enumerateBuilds(): Build[] {
-  const builds: Build[] = [];
-  const base = defaultConfig(0);
-  const walk = (i: number, cfg: CarConfig, price: number): void => {
-    if (i === PERFORMANCE_SLOTS.length) {
-      const key = PERFORMANCE_SLOTS.map((s) => cfg[s]).join('/');
-      builds.push({ config: { ...cfg }, price, key });
-      return;
-    }
-    const slot = PERFORMANCE_SLOTS[i];
-    for (const opt of PARTS[slot]) {
-      if (price + opt.price > BUDGET) continue;
-      cfg[slot] = opt.id;
-      walk(i + 1, cfg, price + opt.price);
-    }
-    cfg[slot] = base[slot];
-  };
-  walk(0, { ...base }, 0);
-  return builds;
-}
-
-function label(cfg: CarConfig): string {
-  return PERFORMANCE_SLOTS.map((slot) => PARTS[slot].find((o) => o.id === cfg[slot])!.name).join(' · ');
-}
-
-function pad(s: string | number, n: number, right = false): string {
-  const str = String(s);
-  return right ? str.padStart(n) : str.padEnd(n);
 }
 
 function windLabel(w: number): string {

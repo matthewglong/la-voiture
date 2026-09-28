@@ -1,10 +1,11 @@
 // Lombard St's crooked block: a red-brick road snaking down through terraced gardens, hedges along
 // every switchback (low enough to jump), hydrangeas in the beds, and stairs down both sides.
 import * as THREE from 'three';
-import { COURSE, LOMBARD, heightAt, terrainY, type CoursePoint } from '../track';
+import { LOMBARD, RUSSIAN_HILL, terrainY } from '../maps/russianHill';
+import { heightAt, type CoursePoint } from '../track';
 import { GeoBuilder, box, cyl, strip, type V3 } from './geo';
 
-const C = COURSE;
+const C = RUSSIAN_HILL;
 const SEC = C.sections.find((s) => s.kind === 'lombard')!;
 export const LOMBARD_X0 = SEC.xMin;
 export const LOMBARD_X1 = SEC.xMax;

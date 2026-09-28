@@ -8,10 +8,138 @@ players building at once, see "Garage"); and now **the race**, where players dri
 much longer course with items, traffic, collisions and a split screen. "The race" records every
 decision behind that change. The race then got arcade handling with a drift, a boost bottle in place
 of fuel, two item slots with more items, and a solo training mode: "Drift, boost and solo" comes
-first because it overrides parts of "The race" (those passages now point back to it). Most recently
-the keys were laid out afresh for one player or two, and the kicker started dropping once the first
-car is off it: "Keys, and a kicker worth racing to" comes first of all. The older sections that
-still hold are kept after them.
+first because it overrides parts of "The race" (those passages now point back to it). Then the keys
+were laid out afresh for one player or two, and the kicker started dropping once the first car is
+off it ("Keys, and a kicker worth racing to"). Most recently the game got a second event, a lap race
+on a new map, and the code was restructured so events and maps can be added: "Two events, and maps"
+comes first of all. The older sections that still hold are kept after them.
+
+## Two events, and maps
+
+The request: split the game into two modes, the long jump (what there was) and a race round a loop
+with laps, with room to extend the map or add new ones, and elevation that matters: the race goes
+uphill and downhill.
+
+### What changed in the structure
+
+- **`src/track.ts` is generic.** It holds the course types, the builders and the queries, and no
+  longer any San Francisco. A `Course` is self-contained: its spatial index lives on it (it was a
+  module-level global that the next course built would have overwritten), and the old SF-only fields
+  (`embX`, `kickerX`, `deckY`, `marks.*`) are gone. What the sim needs of the long jump's ending is
+  an optional `lip` (the ramp's start, its base height, the pier where "first to the pier" pays, and
+  where the CPU starts saving its boost); Lombard's walled gardens are an optional `garden`; the
+  camera's Lombard framing is `wideViews`.
+- **Loops.** `Course.loop` makes the arc length wrap: `pointAt`, `heightAt`, `indexAt` and `locate`
+  wrap round the seam, and three helpers (`wrapS`, `deltaS`, `crossedS`) replace every raw `s`
+  comparison in the sim and the CPU that could straddle it (bumps, shortcuts, gulls, traffic, the
+  stuck check, rescues, threats ahead). On a point-to-point course they reduce to the old arithmetic
+  exactly.
+- **Two ways to build a course.** The long jump's is still straights and arcs laid end to end
+  (`src/maps/russianHill.ts`, moved verbatim from the old `track.ts`, heights from its x-only hill).
+  A loop is `buildLoop`: nodes with a height each, a closed centripetal Catmull-Rom spline through
+  them for the plan, and straight grades from node to node for the height, each change of grade
+  rounded over the node's `round` length, or left sharp (a crest that launches fast cars, like the
+  city's crossings). Node heights are snapped to the 0.25 m sample grid so a sharp crest lands in one
+  sample: straddling two, it split into two smaller breaks and the cars that should have flown didn't.
+- **Maps (`src/maps/index.ts`).** A `MapDef` is a course plus what's raced on it (`mode`: `'jump'` or
+  `'race'`, and `laps`), its item-box rows, a `populate(sim, rng)` that puts out the traffic and
+  tourists, the HUD strip's landmarks, the solo split points and starts, and the tips' ranges. SF's
+  traffic placement moved out of the sim into the map, in the same RNG order, so a seed still gives
+  the same world. The sim gained small `addTraffic` / `addStalled` / `addCrossing` / `addCone` /
+  `addCable` / `addPed` methods for maps to call.
+- **Scenery per map (`src/scene/maps.ts`).** A `MapScene` is the static world plus the few things the
+  shell drives: the start gantry (faded when the camera looks through it), and, optionally, the kicker,
+  the water a splashed car floats in, the record buoy and a per-view hook (the Bay's labels). SF's
+  city, landmarks and Bay are wrapped as one; each map's scenery is built the first time it's picked
+  and kept. Shared props and textures (asphalt, chequers, banner, trees, tyre stacks, barriers) moved
+  out of `city.ts` into `scene/props.ts`.
+- **The shell (`main.ts`)** follows `map` instead of importing one course: the garage's event picker
+  swaps the scenery, the camera's course, the strip, the splits and the solo starts. Picking an event
+  un-READYs both players (a car built for one may not suit the other). `?map=twin-peaks` starts on it;
+  Player 1's pad Y cycles events in the garage (outside solo, where Y picks the start).
+
+### The race mode (`src/sim/race.ts`)
+
+- Every car has a `prog` (progress since the start line: the arc length itself point to point; on a
+  loop, laps × length + the way round this one) and a `lap`. Race order, gaps, overtakes, the item
+  odds and the straggler logic use `prog`. Laps count on crossing the start line; backing over it
+  undoes one (drive it again). Lap times are interpolated to the moment of crossing inside the step.
+- After the last lap a car takes the flag (`finished`, a new phase) and cruises on at about 11 m/s
+  along the middle of the road, still solid, until everyone's done; the sim keeps stepping behind the
+  results card so the cool-down lap carries on. The straggler rule is the long jump's: 25 s after the
+  first car is home, anyone still racing is out. The time limit scales with the laps (a crawl at
+  6 m/s, plus a minute) instead of the jump's 150 s.
+- HYPE still builds (the awards use the tallies) but only pays off at a kicker, so the race HUD hides
+  its meter. Race awards swap "First to the lip", "Every drop of boost" and "Maxed-out HYPE" for
+  "Fastest lap". The session best on a race map is the fastest lap; solo keeps the quickest full run
+  and its ghost, with splits at the map's points on every lap and at each lap's end.
+- **Wind on a loop:** the drag always took the wind's direction into account, but the engine's
+  top-speed shift (`WIND_TOP`) didn't, which is right for a course that runs one way. On a loop it now
+  uses the wind's component along the car's heading (a tailwind on the straight is a headwind on the
+  way back). The long jump is unchanged. The forecast chip says "on the straight" in race mode.
+- **The CPU:** the racing line is solved all the way round a loop (no pinned ends), the speed plan
+  brakes back round the seam (two passes), and it spends boost wherever its speed plan shows no
+  braking for a good while (the long jump's "save it for the pier" logic only runs with a lip). Item
+  choices use progress rather than the pier and kicker marks when there's no lip.
+
+### Twin Peaks (`src/maps/twinPeaks.ts`, `src/scene/twinPeaks.ts`)
+
+- **Layout** (1,056 m, 22 nodes): Portola Straight (the start/finish), a fast right into the climb,
+  the switchbacks up at 7-11%, a sharp crest at the top (+11% to flat: fast cars take off at
+  15 m/s), the summit hairpin under Sutro Tower, then The Drop: a crest into −12%, a short shelf and a
+  second crest into −16%, the long sweeper at the bottom, a chicane and the straight. 26 m of climb.
+  Tightest centreline radius 8.7 m (the hairpin; more than the 6.5 m half-width, so the inside edge
+  never folds), 49 m between legs at the closest.
+- **Grades** were kept inside what the weakest engine can climb: the lawnmower on a light kart holds
+  about 16 m/s up 11%; on a pickup it crawls up at about 4 m/s, which is the point.
+- **Elevation has to show.** The first version sat the loop on a gentle, road-following surface and
+  looked flat: from the chase camera the 10% climb read as level road, and from the air the peaks
+  were mounds. The ground now contours the course round a hillside: outside the loop a regional slope
+  rising north and east (so the road runs through cuttings and along embankments), the two peaks
+  rising up to 96 m beyond the roadside, the valley falling away south of the straight to the houses
+  and the city; inside the loop a bowl with a reservoir at the bottom. The bank from the verge widens
+  with the height difference, so it's never a cliff, and steep banks show bare earth.
+- **The chase camera tilts with the road** on this map (`Course.followGrade` 0.8): it looks up the
+  climbs and down the drops, and aims at the road's height where the look-ahead lands. Russian Hill's
+  camera was tuned as it is, so its `followGrade` is 0 and it's untouched.
+- **Traffic:** two Waymos potter round the loop for ever (backmarkers to lap; they never park), a
+  stalled one with a cone on the switchbacks, and tourists at the summit viewpoint. Over 30 CPU-vs-CPU
+  races that's 0.3-0.4 Waymo hits a race, against about 1 on Russian Hill.
+- **Walls** are all hard to the physics; the scenery chooses the look: tyre walls on the outside of
+  the tight bends (instanced, three low-poly tyres a stack: thousands of them as merged tori were a
+  million triangles), armco elsewhere, a kerbstone where the road runs onto grass. The scene is about
+  225k triangles in 27 meshes (Russian Hill's city alone is about 380k).
+- Three laps by default: about 2:15-2:30 for two decent builds.
+
+### What stayed the same
+
+The long jump plays exactly as before: `npm run balance` prints a byte-identical report after the
+restructure (every build, every wind), and a two-car jump in the browser still drops the kicker for
+the chaser, flies, splashes and puts the record buoy out.
+
+### Race-mode balance: measured, not yet designed
+
+The parts were balanced for the long jump, and `npm run balance` still enforces that. A lap race
+rewards different things, so `npm run balance:race` races every affordable build round each loop map
+(one lap from a standing start, three winds) and reports, without passing or failing on balance:
+
+- Monster wheels are in every one of the quickest 10% of builds (grip and traction on the hills);
+  standard wheels are in none.
+- The lawnmower laps in about 92 s against 47 s for a V8 or jet: a three-lap race on it takes about
+  4½ minutes. In the long jump the gap is 43 s to 32 s.
+- The glider wings, the bathtub and the blunt nose are never the quickest pick for their slot; the
+  kite and the launch rocket almost never.
+
+What "balanced" means for racing is a design decision (race-only parts, a separate budget, parts
+that do something on the road, or just a different lap count or course), so it's left as data.
+
+### Known limits
+
+- **The seagull trails its target on a fast straight.** It hunts to 7 m behind and only dives from
+  inside 7 m, but the target pulls back out of that each step at more than about 12 m/s; it strikes
+  when the car slows. This was already so on Russian Hill (checked against the old code); on Twin
+  Peaks' long straight it just shows more.
+- **The first switch to a map** builds its scenery (about a quarter of a second) in the garage.
 
 ## Keys, and a kicker worth racing to
 
@@ -323,7 +451,7 @@ The winner is still the furthest splash; the results also show each player's awa
 lip, rocket start, hedge hopper, poo sniper, bully, drift king, Waymo magnet, ...) and a running score of
 rounds won.
 
-### The course (`src/track.ts`)
+### The course (now `src/maps/russianHill.ts`; see "Two events, and maps")
 
 - A winding centreline in the horizontal plane, built from straights and arcs, sampled every 0.25 m,
   with a road height, a corridor half-width and a wall type on each edge. Every consumer (physics,
@@ -602,7 +730,8 @@ chassis, a rocket start (or a bogged-down sputter), HYPE blips and a near-miss w
 
 - `cars` (live race state per car: position, speed, boost, drift, HYPE, items and the selected one,
   tallies, ...), `world` (the traffic, tourists, boxes, poo, seagulls and the cable car), `split`
-  (0-1), `wins`, `course` (landmark arc lengths), `cpu`.
+  (0-1), `wins`, `course` (the course in play: length, loop, start line, sections, and on Russian
+  Hill its landmark arc lengths), `cpu`, and `map`, `maps`, `setMap(id)` (the event).
 - `input(p, {throttle, brake, steer, boost, item, swap})` drives a car from a script (`null` gives it
   back), `autodrive(p, on)`, `setCpu(on)`, `giveItem(p, 'jump' | 'grit' | 'poo' | 'topup' | 'refill'
   | 'gull')`, `place(p, s, d, speed)`.
@@ -611,7 +740,7 @@ chassis, a rocket start (or a bogged-down sputter), HYPE blips and a near-miss w
 - `ramp` (the kicker's angle in degrees, and the race time the first car went off it, or null) and
   `keyLayout` (`'single'` or `'duo'`).
 - `predict()` and `simulateToEnd(stats, wind)` now mean the autopilot's run on an empty course.
-- URL: `?autodrive=1|p1|p2`, `?cpu=1`, `?solo=1`, `?traffic=0`, `?items=0`.
+- URL: `?autodrive=1|p1|p2`, `?cpu=1`, `?solo=1`, `?traffic=0`, `?items=0`, `?map=russian-hill|twin-peaks`.
 
 ## Tooling and environment
 

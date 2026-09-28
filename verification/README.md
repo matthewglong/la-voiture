@@ -1,5 +1,53 @@
 # Verification
 
+## Two events and maps pass
+
+A second event (a lap race round a new loop, Twin Peaks) and the restructure that makes events and
+maps pluggable (see "Two events, and maps" in `DECISIONS.md`). Checked with Node simulations and
+Playwright against `npm run dev`:
+
+- **The long jump is unchanged.** `npm run balance` prints a report byte-identical to the one before
+  the restructure (diffed, every build in every wind), after every change in this pass. In the
+  browser, switching from Twin Peaks back to Russian Hill and racing two autopilot cars: both launch,
+  the kicker drops for the chaser (25° then 24°), both splash, the results and the record buoy show.
+- **Race mode, headless.** 30 CPU-vs-CPU races with random affordable builds, winds, traffic and
+  items: no NaNs, no rescues, no wrong-way episodes; laps 44 s (10th percentile) / 49 s (median) /
+  106 s (90th, the lawnmowers); 11-12 of 60 cars out on the straggler rule (all slow builds);
+  0.3-0.4 Waymo hits a race (Russian Hill: about 1). Every build gets round a lap in every wind
+  (`npm run balance:race`).
+- **The seam** (the arc length wrapping at the end of the lap): laps count crossing the line from
+  the end of a lap; backing off the grid stays on lap 0; backing over the line after crossing it
+  undoes the lap (and wraps past the seam); driving over it again restarts the lap's clock; a rescue
+  near the seam lands on the road; a seagull chases its target the short way round across the line;
+  the Waymos lap the loop without ever parking.
+- **Race mode, in the browser:** two autopilot cars, then P1 on the autopilot against the CPU: the
+  countdown, lap counter, position and gap, the course strip, split screen and healing, items
+  (poo spin-out, seagull, Determination), the stalled Waymo, tourists, the three crests (0.4-0.8 s
+  of air every lap), lap flashes, the flag, the cool-down lap behind the results card, results with
+  times, best laps and "Fastest lap", the session's best lap. Solo: a time trial of three laps with
+  per-lap splits, a ghost on the retry, "New best run".
+- **Terrain and camera:** the first version of the ground looked flat (the climb read as level road);
+  after the rework the course contours a hillside (cuttings, embankments, peaks, a reservoir in the
+  infield bowl) and the chase camera tilts with the grade. The scene is about 225k triangles in 27
+  meshes (the first version was a million, nearly all tyre walls).
+- 0 console errors or warnings; `npm run build` and `tsc` clean.
+
+`maps/` holds the walkthrough (JPEG, 1280×720; 02-04 are from the dev preview page with the game's
+lighting, `/preview/twinpeaks.html`):
+
+| File | Shows |
+|---|---|
+| `maps-01-garage-event-picker` | The garage's event picker on the race, and the wind "on the straight" |
+| `maps-02-twin-peaks-aerial` | The loop, the reservoir in the infield, the peaks and Sutro Tower |
+| `maps-03-the-switchbacks` | The climb: armco, tyre walls on the outside of the bends, the descent above |
+| `maps-04-over-the-crest-into-the-drop` | The road falling away over the first crest, the valley below |
+| `maps-05-race-split-screen-climb` | Split screen on the climb: a poo spin-out |
+| `maps-06-summit-hairpin` | The summit hairpin, a tourist in the road |
+| `maps-07-landing-off-the-crest` | Both cars landing off the crest (AIR 0.5 s / 0.6 s) |
+| `maps-08-race-results` | Race results: times, best laps, the session's best lap, the cool-down lap |
+| `maps-09-solo-time-trial` | Solo: a three-lap time trial and a new best run |
+| `maps-10-long-jump-after-switching-back` | The long jump after switching back: two arcs, the record buoy |
+
 ## Keys and the dropping kicker pass
 
 New keys for one player and for two, and a kicker that drops once the first car is off it (see

@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "balance": "tsx scripts/balance.ts",
+    "balance:race": "tsx scripts/balanceRace.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

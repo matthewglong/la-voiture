@@ -1,5 +1,7 @@
 // La Voiture: game state machine.
 // BUILD -> COUNTDOWN -> RACE (driving; FLIGHT once someone launches) -> RESULTS -> (Rematch -> BUILD) | (New players -> BUILD, reset)
+// The event is picked in the garage: the long jump (a point-to-point map with a kicker) or a lap
+// race (a loop). The map in play decides the course, its scenery, the strip, the splits and starts.
 import './style.css';
 import * as THREE from 'three';
 import { Sound, type BoostVoice, type EngineKind, type EngineVoice, type HornKind, type SkidVoice, type WindVoice } from './audio';
@@ -19,23 +21,24 @@ import {
   type Garage,
 } from './garage';
 import { DriveInput, type PadPress } from './input';
+import { MAPS, mapById, type MapDef } from './maps';
+import { SF_MARKS } from './maps/russianHill';
 import { PARTS, computeStats, getOption } from './parts';
 import { Actors } from './scene/actors';
-import { buildBay } from './scene/bay';
 import { buildCarMesh, type CarMesh } from './scene/carMesh';
-import { buildCity } from './scene/city';
 import { Splashes, Trail } from './scene/effects';
 import { Aura, DizzyStars, Particles, SkidMarks } from './scene/fx';
-import { buildLandmarks } from './scene/landmarks';
+import { mapScene, type MapScene } from './scene/maps';
 import { damp, makeRng } from './scene/util';
 import { Views, type ViewTarget } from './scene/views';
 import { createWorld } from './scene/world';
 import { Bot, driveToEnd } from './sim/bot';
 import { DT } from './sim/physics';
 import { HYPE_BOOST, HYPE_MAX, ITEM_KINDS, RAMP_MIN, RaceSim, type CarInput, type CarResult, type ItemKind, type RaceEvent } from './sim/race';
-import { COURSE, KICKER_ANGLE, pointAt } from './track';
+import { deltaS, pointAt, wrapS } from './track';
 import type { CarConfig, CarStats, PlayerIndex, SlotId } from './types';
-import { BuildUI, GARAGE_KEYS, TRAIN_STARTS, type GarageAction, type LastRun, type Training, type TrainStart } from './ui/build';
+import { BuildUI, GARAGE_KEYS, type GarageAction, type LastRun, type Training, type TrainStart } from './ui/build';
+import { fmtTime } from './ui/format';
 import { HUD, ITEM_LABELS, type HudKeys, type ResultsView } from './ui/hud';
 
 type GameState = 'BUILD' | 'COUNTDOWN' | 'RACE' | 'FLIGHT' | 'RESULTS';
@@ -96,27 +99,47 @@ const windRng = makeRng(seed);
 const buildRng = makeRng(seed ^ 0x5bd1e995);
 const worldRng = makeRng(seed ^ 0x2c1b3c6d);
 
+/** The event in play (?map=twin-peaks picks one from the start). */
+let map: MapDef = mapById(params.get('map')) ?? MAPS[0];
+
 /** Solo training: where the run starts, whether to race the best run's ghost, and what's on the road. */
 const training: Training = { start: 'top', ghost: true, traffic: trafficOn, items: itemsOn };
 
-/** Solo: the best run from each start (the furthest splash): its car, time and splits, and its
- *  ghost (a pose per frame: race time, x, y, z, yaw, pitch, roll, course progress). */
+/** Solo: the best run from each start of each map (the furthest splash, or a race's quickest time):
+ *  its car, time and splits, and its ghost (a pose per frame: race time, x, y, z, yaw, pitch, roll,
+ *  race progress). */
 interface SoloBest {
-  distance: number;
+  /** Distance (the long jump) or time (a race). */
+  score: number;
   runTime: number;
   config: CarConfig;
   splits: (number | null)[];
   ghost: Float32Array;
 }
-const soloBests = new Map<TrainStart, SoloBest>();
+const soloBests = new Map<string, SoloBest>();
+const soloKey = (start: TrainStart): string => `${map.id}:${start}`;
 const GHOST_STRIDE = 8;
-/** The split points on the way down (course arc length), for solo runs. */
-const SPLITS: { label: string; s: number }[] = [
-  { label: 'HYDE', s: COURSE.marks.hydeS0 },
-  { label: 'LOMBARD', s: COURSE.marks.lombardS0 },
-  { label: 'LEAVENWORTH', s: COURSE.marks.lombardS1 },
-  { label: 'PIER', s: COURSE.marks.pierS0 },
-];
+/** Is a score better than another: further in the long jump, quicker in a race. */
+const better = (a: number, b: number): boolean => (map.mode === 'race' ? a < b - 0.005 : a > b + 0.005);
+
+/** The split points (race progress) for a solo run: the map's, and on a loop every lap's end too. */
+function splitsFor(m: MapDef, laps: number): { label: string; s: number }[] {
+  const c = m.course;
+  if (!c.loop) return m.splits;
+  const out: { label: string; s: number }[] = [];
+  for (let lap = 1; lap <= laps; lap++) {
+    for (const sp of m.splits) out.push({ label: laps > 1 ? `L${lap} ${sp.label}` : sp.label, s: (lap - 1) * c.length + wrapS(c, sp.s - c.startS) });
+    if (lap < laps) out.push({ label: `LAP ${lap}`, s: lap * c.length });
+  }
+  return out;
+}
+let splits = splitsFor(map, map.laps);
+
+/** Where a point on the course sits on the HUD's strip (0..1): along the course, or round a lap. */
+function stripAt(s: number): number {
+  const c = map.course;
+  return c.loop ? wrapS(c, s - c.startS) / c.length : s / c.length;
+}
 
 const graphemes = new Intl.Segmenter();
 
@@ -141,27 +164,29 @@ sceneHost.className = 'scene-host';
 app.appendChild(sceneHost);
 const world = createWorld(sceneHost);
 const { scene, camera } = world;
-const city = buildCity();
-scene.add(city.group);
+/** The map's scenery (swapped when the event changes). */
+let scenery: MapScene = mapScene(map, world);
+scene.add(scenery.group);
 // The start gantry fades out while the chase camera looks through its banner and crossbar.
-const gantry = city.group.getObjectByName('startGantry') ?? null;
+let gantry: THREE.Object3D | null = null;
 const gantryMats: THREE.Material[] = [];
-gantry?.traverse((o) => {
-  const m = (o as THREE.Mesh).material;
-  if (!m) return;
-  for (const mat of Array.isArray(m) ? m : [m]) {
-    if (gantryMats.includes(mat)) continue;
-    mat.transparent = true;
-    gantryMats.push(mat);
-  }
-});
+function findGantry(): void {
+  gantry = scenery.gantry;
+  gantryMats.length = 0;
+  gantry?.traverse((o) => {
+    const m = (o as THREE.Mesh).material;
+    if (!m) return;
+    for (const mat of Array.isArray(m) ? m : [m]) {
+      if (gantryMats.includes(mat)) continue;
+      mat.transparent = true;
+      gantryMats.push(mat);
+    }
+  });
+}
+findGantry();
 /** Start-gantry fade, per half of the screen (index 0 is also the single screen). */
 const gantryOpacity: [number, number] = [1, 1];
 const gantryHidden: [boolean, boolean] = [false, false];
-const landmarks = buildLandmarks();
-scene.add(landmarks.group);
-const bay = buildBay({ envMap: world.skyEnv, anisotropy: world.renderer.capabilities.getMaxAnisotropy() });
-scene.add(bay.group);
 const splashes = new Splashes();
 scene.add(splashes.group);
 const actors = new Actors();
@@ -175,7 +200,7 @@ scene.add(skids.mesh);
 const overlay = document.createElement('div');
 overlay.className = 'overlay';
 app.appendChild(overlay);
-const views = new Views(camera, overlay);
+const views = new Views(camera, overlay, map.course);
 
 // ---------- Cars ----------
 function configKey(c: CarConfig): string {
@@ -244,8 +269,8 @@ class CarView {
   }
 
   placeAtStart(): void {
-    const slot = COURSE.grid[this.p];
-    const p = pointAt(COURSE, slot.s);
+    const slot = map.course.grid[this.p];
+    const p = pointAt(map.course, slot.s);
     this.root.position.set(p.x - p.tz * slot.d, p.y, p.z + p.tx * slot.d);
     this.root.rotation.set(0, -p.heading, 0);
     this.tilt.rotation.set(0, 0, 0);
@@ -400,7 +425,10 @@ let countIndex = -1;
 let gameClock = 0;
 let firstLaunchSeen = false;
 let results: Record<string, unknown> | null = null;
-let sessionBest: { distance: number; name: string; player: PlayerIndex; round: number } | null = null;
+/** Behind a race's results, the camera follows this car's cool-down lap (the winner's). */
+let resultsFocus: PlayerIndex | null = null;
+/** Each map's session best: the furthest jump, or a race's fastest lap (in `distance`). */
+const sessionBests = new Map<string, { distance: number; name: string; player: PlayerIndex; round: number }>();
 const eventLog: { t: number; player: PlayerIndex; event: RaceEvent }[] = [];
 /** Scripted inputs from the test hooks (override the keys for that player). */
 const scripted: [CarInput | null, CarInput | null] = [null, null];
@@ -443,14 +471,14 @@ const buildUI = new BuildUI(overlay, {
     Object.assign(training, change);
     renderBuild();
   },
+  onMap: (id) => {
+    if (state !== 'BUILD' || id === map.id) return;
+    sound.click();
+    setMap(id);
+  },
 });
-const L = COURSE.length;
-const hud = new HUD(overlay, [
-  { label: 'START', at: 0 },
-  { label: 'HYDE', at: COURSE.marks.hydeS0 / L },
-  { label: 'LOMBARD', at: COURSE.marks.lombardS0 / L },
-  { label: 'PIER', at: COURSE.marks.pierS0 / L },
-]);
+const hud = new HUD(overlay);
+hud.setStrip(map.strip.map((m) => ({ label: m.label, at: stripAt(m.s) })));
 const fade = document.createElement('div');
 fade.className = 'fade';
 overlay.appendChild(fade);
@@ -480,7 +508,10 @@ renderMute();
 
 function renderBuild(): void {
   const bests: Partial<Record<TrainStart, number>> = {};
-  for (const [k, b] of soloBests) bests[k] = b.distance;
+  for (const st of map.starts) {
+    const b = soloBests.get(soloKey(st.id));
+    if (b) bests[st.id] = b.score;
+  }
   buildUI.render({
     garage,
     names,
@@ -493,7 +524,38 @@ function renderBuild(): void {
     training,
     soloBests: bests,
     pads: [input.usingPad[0], input.usingPad[1]],
+    map,
+    maps: MAPS,
   });
+}
+
+/**
+ * Switch the event (in the garage): the new map's scenery, course, strip and starts, and nobody
+ * is READY any more (a car built for one event may not suit the other).
+ */
+function setMap(id: string): boolean {
+  const next = mapById(id);
+  if (!next || state !== 'BUILD') return false;
+  if (next.id === map.id) return true;
+  scene.remove(scenery.group);
+  map = next;
+  scenery = mapScene(map, world);
+  scene.add(scenery.group);
+  findGantry();
+  gantryOpacity[0] = gantryOpacity[1] = 1;
+  gantryHidden[0] = gantryHidden[1] = false;
+  views.setCourse(map.course);
+  hud.setStrip(map.strip.map((m) => ({ label: m.label, at: stripAt(m.s) })));
+  splits = splitsFor(map, map.laps);
+  if (!map.starts.some((q) => q.id === training.start)) training.start = map.starts[0].id;
+  for (const p of PLAYERS) if (!(p === 1 && cpuOn)) setReady(garage, p, false);
+  showBestInWater();
+  clearScene();
+  refreshCars();
+  renderBuild();
+  views.snap(camTargets, 0);
+  cutCamera();
+  return true;
 }
 
 /** The CPU picks one of its builds (and a paint and topper) for Player 2's car. */
@@ -590,6 +652,7 @@ function enterBuild(tabs?: [SlotId, SlotId]): void {
   raceConfigs = null;
   raceStats = null;
   results = null;
+  resultsFocus = null;
   firstLaunchSeen = false;
   garage = newGarage(lastConfigs, tabs);
   garageAt = performance.now();
@@ -684,14 +747,16 @@ function toGarage(): boolean {
 /** Put the cars on the grid (or, solo, at the chosen start) and count down. */
 function beginRun(): void {
   const configs = raceConfigs!;
+  resultsFocus = null;
   raceStats = [computeStats(configs[0]), computeStats(configs[1])];
   previews[0] = previews[1] = null;
   for (const p of PLAYERS) cars[p].setConfig(configs[p]);
   const obstacles = solo ? training.traffic : trafficOn;
   const items = solo ? training.items : itemsOn;
-  sim = new RaceSim(solo ? [raceStats[0]] : raceStats, wind, { seed: runSeed, obstacles, items });
+  sim = new RaceSim(solo ? [raceStats[0]] : raceStats, wind, { seed: runSeed, obstacles, items }, map);
+  splits = splitsFor(map, sim.laps);
   if (solo) {
-    const start = TRAIN_STARTS.find((q) => q.id === training.start)?.s ?? null;
+    const start = map.starts.find((q) => q.id === training.start)?.s ?? null;
     if (start !== null) sim.placeStart(0, start);
   }
   // The car views stand where the sim put the cars (racing solo, one car in the middle of the road).
@@ -707,10 +772,10 @@ function beginRun(): void {
   ];
   // Solo: record this run for its ghost, time it at the splits, and race the best run's ghost.
   ghostRec = [];
-  splitTimes = SPLITS.map(() => null);
+  splitTimes = splits.map(() => null);
   nextSplit = 0;
-  while (nextSplit < SPLITS.length && SPLITS[nextSplit].s <= sim.cars[0].s + 1) nextSplit++;
-  ghost.load(solo && training.ghost ? (soloBests.get(training.start) ?? null) : null);
+  while (nextSplit < splits.length && splits[nextSplit].s <= sim.cars[0].prog + 1) nextSplit++;
+  ghost.load(solo && training.ghost ? (soloBests.get(soloKey(training.start)) ?? null) : null);
   // Alone at the keyboard (against the CPU, or solo), Player 1 drives on the arrows.
   input.single = solo || cpuOn;
   input.clear();
@@ -724,7 +789,7 @@ function beginRun(): void {
   stateTime = 0;
   countIndex = -1;
   buildUI.show(false);
-  hud.setup(names, PLAYER_COLORS, wind, [bots[0] ? null : hudKeys(0), bots[1] ? null : hudKeys(1)], solo);
+  hud.setup(names, PLAYER_COLORS, wind, [bots[0] ? null : hudKeys(0), bots[1] ? null : hudKeys(1)], solo, map.mode, sim.laps);
   hud.showCars(true);
   hud.show(true);
   const soloItems: ItemKind[] = ITEM_KINDS.filter((k) => k !== 'poo' && k !== 'gull');
@@ -740,7 +805,8 @@ function beginRun(): void {
   // Starting further down the course: the camera jumps there (behind a quick fade).
   for (const p of PLAYERS) {
     camTargets[p].pos.copy(cars[p].root.position);
-    camTargets[p].s = sim.cars[p]?.s ?? COURSE.grid[p].s;
+    camTargets[p].s = sim.cars[p]?.s ?? map.course.grid[p].s;
+    camTargets[p].prog = sim.cars[p]?.prog ?? 0;
     camTargets[p].speed = 0;
     camTargets[p].phase = 'grid';
   }
@@ -881,7 +947,7 @@ function handleEvent(e: RaceEvent): void {
       if (e.impact > 5) views.shake(e.p, Math.min(0.9, e.impact / 12));
       if (e.impact > 3 && gameClock - c.lastScrape > 0.18) rumble(e.p, Math.min(1, e.impact / 10), 0.5, 140);
       // Straight into the tyres at a corner: show how to get round it.
-      if (e.impact > 7 && !bots[e.p] && !c.hinted.has('drift') && sim && sim.cars[e.p].s < COURSE.marks.lombardS1) {
+      if (e.impact > 7 && !bots[e.p] && !c.hinted.has('drift') && sim && sim.cars[e.p].s < (map.hints.driftUntil ?? Infinity)) {
         c.hinted.add('drift');
         hud.flash(e.p, 'hint', `TAP ${input.labels(e.p).brake} WHILE TURNING TO DRIFT!`, 'boost', now, 3.2);
       }
@@ -985,7 +1051,8 @@ function handleEvent(e: RaceEvent): void {
       break;
     }
     case 'shortcut': {
-      const lomb = e.s > COURSE.marks.lombardS0 && e.s < COURSE.marks.lombardS1 + 6;
+      const hop = map.hints.hedgeHop;
+      const lomb = !!hop && e.s > hop[0] && e.s < hop[1];
       const word = lomb ? 'HEDGE HOP!' : 'SHORTCUT!';
       hud.flash(e.p, 'shortcut', `${word} +${Math.round(e.gained)} m`, 'hype', now, 2.2);
       shoutAt(e.p, word);
@@ -1013,7 +1080,7 @@ function handleEvent(e: RaceEvent): void {
       if (e.boost > 0.004) hud.flash(e.p, 'boost', `HYPE BOOST +${Math.round(e.boost * 100)}%`, 'hype', now, 3.5);
       // Off the kicker after it started to drop: how far down it was (by a whole degree or more).
       const rampDeg = Math.round(e.ramp * DEG);
-      if (rampDeg < Math.round(KICKER_ANGLE * DEG)) hud.flash(e.p, 'ramp', `RAMP DOWN TO ${rampDeg}°`, 'ramp', now, 3.5);
+      if (rampDeg < Math.round((map.course.lip?.angle ?? 0) * DEG)) hud.flash(e.p, 'ramp', `RAMP DOWN TO ${rampDeg}°`, 'ramp', now, 3.5);
       c.engine?.stop();
       c.engine = null;
       c.skid?.stop();
@@ -1058,6 +1125,28 @@ function handleEvent(e: RaceEvent): void {
       c.wind = null;
       break;
     }
+    case 'lap': {
+      // A lap done: its time (gold for a personal best), and the bell for the last one.
+      const laps = sim?.laps ?? 1;
+      const final = e.lap === laps - 1;
+      hud.flash(e.p, 'lap', `LAP ${e.lap} · ${fmtTime(e.time)}${e.best && e.lap > 1 ? ' · BEST' : ''}`, e.best && e.lap > 1 ? 'hype' : 'item', now, 2.6);
+      if (final) {
+        sound.bell(e.p === 0 ? -0.45 : 0.45);
+        shoutAt(e.p, 'FINAL LAP!');
+      } else if (e.lap < laps) sound.beep(false);
+      break;
+    }
+    case 'finish': {
+      const c = cars[e.p];
+      const win = e.place === 1 && !solo;
+      hud.flash(e.p, 'finish', `🏁 ${solo ? 'FINISHED' : e.place === 1 ? 'WINNER' : '2ND'} · ${fmtTime(e.time)}`, win ? 'good' : 'item', now, 0);
+      shoutAt(e.p, win ? 'WINNER!' : 'FINISHED!');
+      sound.beep(true);
+      if (win || solo) sound.cheer();
+      rumble(e.p, 0.6, 1, 500);
+      particles.confetti(tmpV.copy(c.root.position).setY(c.root.position.y + 1.5), 30);
+      break;
+    }
     case 'dnf':
       hud.flash(e.p, 'dnf', e.reason === 'straggler' ? "TIME'S UP · DNF" : 'DNF', 'dnf', now, 0);
       cars[e.p].stopAudio();
@@ -1070,10 +1159,12 @@ function handleEvent(e: RaceEvent): void {
 function awardsFor(p: PlayerIndex, res: CarResult[]): string[] {
   const t = res[p].tally;
   const o = res[1 - p] as CarResult | undefined;
+  const race = map.mode === 'race';
   const out: [number, string][] = [];
-  if (o && !res[p].dnf && (o.dnf || res[p].runTime < o.runTime - 0.05)) out.push([6, '🏁 First to the lip']);
+  if (!race && o && !res[p].dnf && (o.dnf || res[p].runTime < o.runTime - 0.05)) out.push([6, '🏁 First to the lip']);
+  if (race && o && res[p].bestLap !== null && (o.bestLap === null || res[p].bestLap! < o.bestLap - 0.005)) out.push([7, '⏱ Fastest lap']);
   if (t.rocket) out.push([5, '🚀 Rocket start']);
-  if (t.shortcuts > 0) out.push([9, '🌸 Hedge hopper']);
+  if (t.shortcuts > 0) out.push([9, map.hints.hedgeHop ? '🌸 Hedge hopper' : '✂️ Corner cutter']);
   if (t.pooLanded > 0) out.push([8, `💩 Poo sniper${t.pooLanded > 1 ? ` ×${t.pooLanded}` : ''}`]);
   if (t.plowed > 0) out.push([7, '😤 Unstoppable']);
   if (t.shoves >= 3) out.push([6, `🥊 Bully ×${t.shoves}`]);
@@ -1082,9 +1173,9 @@ function awardsFor(p: PlayerIndex, res: CarResult[]): string[] {
   if (t.driftBoost >= 2) out.push([5, `⚡ ${t.driftBoost.toFixed(1)} s of boost from drifts`]);
   if (t.gulls > 0) out.push([8, `🐦 Seagull sniper${t.gulls > 1 ? ` ×${t.gulls}` : ''}`]);
   if (t.shooed > 0) out.push([7, '🧹 Shooed a seagull']);
-  if (res[p].wastedBoostFrac < 0.01 && t.boostUsed > 1 && !res[p].dnf) out.push([3, '💨 Every drop of boost']);
+  if (!race && res[p].wastedBoostFrac < 0.01 && t.boostUsed > 1 && !res[p].dnf) out.push([3, '💨 Every drop of boost']);
   if (t.nearMiss >= 3) out.push([4, `😬 ${t.nearMiss} near misses`]);
-  if (res[p].hype >= 90) out.push([6, '🔥 Maxed-out HYPE']);
+  if (!race && res[p].hype >= 90) out.push([6, '🔥 Maxed-out HYPE']);
   if (t.waymo >= 2) out.push([7, `🤖 Waymo magnet ×${t.waymo}`]);
   else if (t.waymo === 1) out.push([3, "🤖 Waymo'd"]);
   if (t.ped >= 2) out.push([6, `🧍 Tourist trouble ×${t.ped}`]);
@@ -1094,6 +1185,27 @@ function awardsFor(p: PlayerIndex, res: CarResult[]): string[] {
   return out.slice(0, 3).map((x) => x[1]);
 }
 
+/** Record a session best for this map if it beats the last (a jump's distance, a race's lap). */
+function noteSessionBest(score: number, p: PlayerIndex): boolean {
+  const prev = sessionBests.get(map.id);
+  if (prev && !better(score, prev.distance)) return false;
+  sessionBests.set(map.id, { distance: score, name: names[p], player: p, round });
+  return true;
+}
+
+/** Show the session's best jump in the Bay, or no marker (the long jump only). */
+function showBestInWater(): void {
+  if (map.mode !== 'jump') return;
+  const best = sessionBests.get(map.id);
+  if (best) scenery.setBest?.(best.distance, best.name, PLAYER_COLORS[best.player]);
+  else scenery.setBest?.(null);
+}
+
+/** A race's row on the results card. */
+function raceRow(r: CarResult): NonNullable<ResultsView['rows'][number]['race']> {
+  return { time: r.runTime, laps: r.laps, bestLap: r.bestLap, place: r.place, finished: r.finished };
+}
+
 function finishRace(): void {
   if (!sim || !raceConfigs) return;
   const res = sim.results();
@@ -1101,26 +1213,34 @@ function finishRace(): void {
     finishSolo(res);
     return;
   }
+  const race = map.mode === 'race';
   const d = res.map((r) => (r.dnf ? 0 : r.distance));
   let winner: PlayerIndex | null = null;
-  if (Math.abs(d[0] - d[1]) > 0.005) winner = d[0] > d[1] ? 0 : 1;
-  if (d[0] <= 0 && d[1] <= 0) winner = null;
+  if (race) {
+    // First home wins; if nobody made it, nobody does.
+    const home = PLAYERS.filter((p) => res[p].finished);
+    if (home.length) winner = home.reduce((a, b) => (res[a].place <= res[b].place ? a : b));
+  } else {
+    if (Math.abs(d[0] - d[1]) > 0.005) winner = d[0] > d[1] ? 0 : 1;
+    if (d[0] <= 0 && d[1] <= 0) winner = null;
+  }
   if (winner !== null) wins[winner]++;
+  if (race) resultsFocus = winner ?? sim.order()[0];
   let newRecord = false;
   for (const p of PLAYERS) {
-    if (!res[p].dnf && d[p] > (sessionBest?.distance ?? 0)) {
-      sessionBest = { distance: d[p], name: names[p], player: p, round };
-      newRecord = true;
-    }
+    if (race) {
+      const lap = res[p].bestLap;
+      if (lap !== null && noteSessionBest(lap, p)) newRecord = true;
+    } else if (!res[p].dnf && d[p] > 0 && noteSessionBest(d[p], p)) newRecord = true;
   }
-  if (sessionBest) bay.setBest(sessionBest.distance, sessionBest.name, PLAYER_COLORS[sessionBest.player]);
+  showBestInWater();
+  const sessionBest = sessionBests.get(map.id) ?? null;
   lastConfigs = [raceConfigs[0], raceConfigs[1]];
-  lastRuns = [
-    { distance: d[0], dnf: res[0].dnf },
-    { distance: d[1], dnf: res[1].dnf },
-  ];
+  lastRuns = PLAYERS.map((p) => (race ? { distance: 0, dnf: res[p].dnf, time: res[p].runTime, place: res[p].place } : { distance: d[p], dnf: res[p].dnf })) as [LastRun, LastRun];
   const awards = PLAYERS.map((p) => awardsFor(p, res));
   results = {
+    mode: map.mode,
+    map: map.id,
     round,
     wind,
     winner,
@@ -1130,6 +1250,10 @@ function finishRace(): void {
       config: { ...raceConfigs![p] },
       distance: d[p],
       dnf: res[p].dnf,
+      finished: res[p].finished,
+      place: res[p].place,
+      lapTimes: [...res[p].lapTimes],
+      bestLap: res[p].bestLap,
       launchSpeed: res[p].launchSpeed,
       launchBoost: res[p].launchBoost,
       launchRampDeg: res[p].launchRamp * DEG,
@@ -1146,9 +1270,13 @@ function finishRace(): void {
     sessionBest: sessionBest ? { ...sessionBest } : null,
   };
   const view: ResultsView = {
+    mode: map.mode,
+    map: map.name,
+    laps: sim.laps,
     rows: [0, 1].map((p) => ({
       name: names[p],
       color: PLAYER_COLORS[p],
+      race: race ? raceRow(res[p]) : undefined,
       distance: d[p],
       dnf: res[p].dnf,
       launchKmh: res[p].launchSpeed * 3.6,
@@ -1176,7 +1304,9 @@ function showResults(view: ResultsView, actions: { label: string; primary?: bool
   state = 'RESULTS';
   stateTime = 0;
   resultsAt = performance.now();
-  views.setMode(firstLaunchSeen ? 'results' : 'stalled');
+  // The long jump looks side-on over the Bay; a race follows the winner's cool-down lap, framed
+  // high (as for a stalled jump) so the car shows above the card.
+  views.setMode(map.mode === 'race' || !firstLaunchSeen ? 'stalled' : 'results');
   hud.showCars(false);
   hud.hideTags();
   for (const c of cars) c.stopAudio();
@@ -1197,40 +1327,55 @@ function showResults(view: ResultsView, actions: { label: string; primary?: bool
 /** A solo run is over: keep it (and its ghost) if it's the best from this start. */
 function finishSolo(res: CarResult[]): void {
   const r = res[0];
+  const race = map.mode === 'race';
+  if (race) resultsFocus = 0;
   const cfg = { ...raceConfigs![0] };
   const d = r.dnf ? 0 : r.distance;
-  const start = TRAIN_STARTS.find((q) => q.id === training.start)!;
-  const prev = soloBests.get(training.start) ?? null;
-  const record = !r.dnf && d > (prev?.distance ?? 0) + 0.005;
+  // A race is scored on its time (only if it made the flag), the long jump on its distance.
+  const score = race ? r.runTime : d;
+  const counts = race ? r.finished : !r.dnf;
+  const start = map.starts.find((q) => q.id === training.start)!;
+  const key = soloKey(training.start);
+  const prev = soloBests.get(key) ?? null;
+  const record = counts && (prev === null || better(score, prev.score));
   if (record) {
-    soloBests.set(training.start, { distance: d, runTime: r.runTime, config: cfg, splits: [...splitTimes], ghost: Float32Array.from(ghostRec) });
+    soloBests.set(key, { score, runTime: r.runTime, config: cfg, splits: [...splitTimes], ghost: Float32Array.from(ghostRec) });
   }
-  if (!r.dnf && d > (sessionBest?.distance ?? 0)) sessionBest = { distance: d, name: names[0], player: 0, round };
-  if (sessionBest) bay.setBest(sessionBest.distance, sessionBest.name, PLAYER_COLORS[sessionBest.player]);
+  if (race) {
+    if (r.bestLap !== null) noteSessionBest(r.bestLap, 0);
+  } else if (!r.dnf && d > 0) noteSessionBest(d, 0);
+  showBestInWater();
+  const sessionBest = sessionBests.get(map.id) ?? null;
   lastConfigs = [cfg, lastConfigs[1]];
-  lastRuns = [{ distance: d, dnf: r.dnf }, lastRuns[1]];
+  lastRuns = [race ? { distance: 0, dnf: r.dnf, time: r.runTime, place: 1 } : { distance: d, dnf: r.dnf }, lastRuns[1]];
   const awards = awardsFor(0, res);
-  const splits = SPLITS.map((sp, i) => ({
+  const splitRows = splits.map((sp, i) => ({
     label: sp.label,
     delta: prev && prev.splits[i] !== null && splitTimes[i] !== null ? splitTimes[i]! - prev.splits[i]! : null,
   }));
-  if (prev && !r.dnf) splits.push({ label: 'LIP', delta: r.runTime - prev.runTime });
+  if (prev && counts) splitRows.push({ label: race ? 'FLAG' : 'LIP', delta: r.runTime - prev.runTime });
   results = {
     mode: 'solo',
+    event: map.mode,
+    map: map.id,
     start: training.start,
     round,
     wind,
     distance: d,
+    time: race ? r.runTime : null,
     dnf: r.dnf,
     record,
-    previousBest: prev?.distance ?? null,
-    splits: splitTimes.map((t, i) => ({ label: SPLITS[i].label, t })),
+    previousBest: prev?.score ?? null,
+    splits: splitTimes.map((t, i) => ({ label: splits[i].label, t })),
     players: [
       {
         name: names[0],
         config: cfg,
         distance: d,
         dnf: r.dnf,
+        finished: r.finished,
+        lapTimes: [...r.lapTimes],
+        bestLap: r.bestLap,
         launchSpeed: r.launchSpeed,
         launchBoost: r.launchBoost,
         hype: r.hype,
@@ -1243,12 +1388,16 @@ function finishSolo(res: CarResult[]): void {
     ],
     sessionBest: sessionBest ? { ...sessionBest } : null,
   };
-  const best = soloBests.get(training.start) ?? null;
+  const best = soloBests.get(key) ?? null;
   const view: ResultsView = {
+    mode: map.mode,
+    map: map.name,
+    laps: sim?.laps ?? 1,
     rows: [
       {
         name: names[0],
         color: PLAYER_COLORS[0],
+        race: race ? raceRow(r) : undefined,
         distance: d,
         dnf: r.dnf,
         launchKmh: r.launchSpeed * 3.6,
@@ -1264,9 +1413,9 @@ function finishSolo(res: CarResult[]): void {
     winner: null,
     round,
     wind,
-    best: best ? { distance: best.distance, name: names[0], round } : null,
+    best: best ? { distance: best.score, name: names[0], round } : null,
     newRecord: record,
-    solo: { start: start.name, prevBest: prev?.distance ?? null, splits },
+    solo: { start: start.name, prevBest: prev?.score ?? null, splits: splitRows },
   };
   showResults(view, [
     { label: 'Retry', primary: true, id: 'retry-btn', padKey: 'A', onClick: retry },
@@ -1291,9 +1440,9 @@ function newPlayers(): boolean {
   wins = [0, 0];
   lastConfigs = [null, null];
   lastRuns = [null, null];
-  sessionBest = null;
+  sessionBests.clear();
   soloBests.clear();
-  bay.setBest(null);
+  scenery.setBest?.(null);
   wind = rollWind();
   enterBuild();
   cutCamera();
@@ -1448,10 +1597,17 @@ function padGarage(p: PlayerIndex, button: PadPress['button'], repeat: boolean):
   }
   // Solo: Y picks the next start.
   if (p === 0 && solo && button === 'y' && !repeat && !garage.builds[0].ready) {
-    const i = TRAIN_STARTS.findIndex((q) => q.id === training.start);
-    training.start = TRAIN_STARTS[(i + 1) % TRAIN_STARTS.length].id;
+    const i = map.starts.findIndex((q) => q.id === training.start);
+    training.start = map.starts[(i + 1) % map.starts.length].id;
     sound.click();
     renderBuild();
+    return;
+  }
+  // Otherwise Player 1's Y picks the next event.
+  if (p === 0 && button === 'y' && !repeat) {
+    const i = MAPS.indexOf(map);
+    sound.click();
+    setMap(MAPS[(i + 1) % MAPS.length].id);
     return;
   }
   // B takes the car back out of READY.
@@ -1495,12 +1651,15 @@ function readInputs(firstStep: boolean): CarInput[] {
 }
 
 // ---------- Frame loop ----------
+/** Nobody at the wheel (the cool-down behind a race's results: the sim drives cars past the flag). */
+const NO_DRIVE: CarInput = { throttle: 0, brake: 0, steer: 0, item: false, boost: false, swap: false };
 const timer = new THREE.Timer();
 timer.connect(document);
 const tagPos = new THREE.Vector3();
 const camTargets: [ViewTarget, ViewTarget] = [0, 1].map(() => ({
   pos: new THREE.Vector3(),
   s: 0,
+  prog: 0,
   speed: 0,
   phase: 'grid' as ViewTarget['phase'],
 })) as [ViewTarget, ViewTarget];
@@ -1512,14 +1671,25 @@ const tagUpper: [PlayerIndex, PlayerIndex] = [0, 0];
 
 function updateGantry(dt: number): void {
   if (!gantry) return;
+  const C = map.course;
   const racing = state === 'RACE' || state === 'FLIGHT';
-  const sx = pointAt(COURSE, COURSE.startS).x;
+  const sp = pointAt(C, C.startS);
+  // Only once a car has driven under the banner can it come between a camera and its car (on a
+  // loop, only just after it has: every lap passes under it).
+  const carPassed =
+    !!sim &&
+    sim.cars.some((c) => {
+      if (!C.loop) return c.s > C.startS + 1;
+      const past = deltaS(C, C.startS, c.s);
+      return (c.phase === 'race' || c.phase === 'finished') && past > 1 && past < 60;
+    });
   for (const pane of [0, 1] as const) {
     const cam = views.cameraFor(pane).position;
-    // Only once a car has driven under the banner can it come between this camera and its car.
-    const carPassed = !!sim && sim.cars.some((c) => c.s > COURSE.startS + 1);
-    if (!racing || cam.x >= sx + 1) gantryHidden[pane] = false;
-    else if (carPassed && cam.x > sx - 45 && cam.y - COURSE.startY > 4.9) gantryHidden[pane] = true;
+    // Where the camera is: along the course from the start line, and off to the side.
+    const along = (cam.x - sp.x) * sp.tx + (cam.z - sp.z) * sp.tz;
+    const side = Math.abs(-(cam.x - sp.x) * sp.tz + (cam.z - sp.z) * sp.tx);
+    if (!racing || along >= 1 || (C.loop && side > 25)) gantryHidden[pane] = false;
+    else if (carPassed && along > -45 && cam.y - sp.y > 4.9) gantryHidden[pane] = true;
     gantryOpacity[pane] += ((gantryHidden[pane] ? 0 : 1) - gantryOpacity[pane]) * damp(10, dt);
   }
 }
@@ -1561,10 +1731,12 @@ function updateCars(dt: number, gdt: number, t: number): void {
     let targetPitch = car.pitch;
     let targetRoll = 0;
     const speed = Math.hypot(sc.vx, sc.vz);
-    if (sc.phase === 'race' || sc.phase === 'dnf') {
+    // On the road: racing, or cruising on past the flag.
+    const onRoad = sc.phase === 'race' || sc.phase === 'finished';
+    if (onRoad || sc.phase === 'dnf') {
       car.root.position.set(sc.x, sc.y, sc.z);
       car.root.rotation.y = -sc.heading;
-      const pt = pointAt(COURSE, sc.s);
+      const pt = pointAt(map.course, sc.s);
       if (sc.grounded) {
         // Nose follows the slope along the car's heading; the body leans out of turns.
         const grade = sim!.gradeAt(pt);
@@ -1583,7 +1755,7 @@ function updateCars(dt: number, gdt: number, t: number): void {
       car.trail.add(tagPos.set(sc.x, sc.y + 0.7, sc.z));
     } else if (sc.phase === 'splashed') {
       car.splashT += gdt;
-      const bob = bay.waveHeight(sc.x, sc.z, t) * 2.2;
+      const bob = (scenery.waterHeight?.(sc.x, sc.z, t) ?? 0) * 2.2;
       const sink = Math.max(0, car.splashT - 1.8) * 0.32;
       car.root.position.set(sc.x, bob - 0.35 - Math.min(sink, 5), sc.z);
       targetPitch = -0.12 + Math.sin(t * 1.7 + p) * 0.06;
@@ -1595,7 +1767,7 @@ function updateCars(dt: number, gdt: number, t: number): void {
     // Wheels roll with speed on the road and wind down in the air.
     const r = mesh?.wheelRadius ?? 0.3;
     const fwd = Math.cos(sc.heading) * sc.vx + Math.sin(sc.heading) * sc.vz;
-    if (sc.phase === 'race' && sc.grounded) car.wheelAngle -= ((sc.wheelspin ? fwd * 1.6 + 6 : fwd) * gdt) / r;
+    if (onRoad && sc.grounded) car.wheelAngle -= ((sc.wheelspin ? fwd * 1.6 + 6 : fwd) * gdt) / r;
     else if (sc.phase === 'flight' || !sc.grounded) car.wheelAngle -= (speed * 0.5 * gdt) / r;
     mesh?.setWheelRotation(car.wheelAngle);
     // Bump hop.
@@ -1615,11 +1787,11 @@ function updateCars(dt: number, gdt: number, t: number): void {
     car.boostVoice?.set(car.boostFlame);
     mesh?.update(dt, t);
     car.engine?.set(speed, sc.engineOn, sc.wheelspin);
-    const slide = sc.phase === 'race' && sc.grounded ? Math.min(1, Math.abs(sc.slip) * 2.2 * Math.min(1, speed / 10)) : 0;
+    const slide = onRoad && sc.grounded ? Math.min(1, Math.abs(sc.slip) * 2.2 * Math.min(1, speed / 10)) : 0;
     car.skid?.set(sc.sliding || (sc.brake > 0 && speed > 8 && sc.grounded) ? Math.max(slide, sc.brake > 0 ? 0.35 : 0) : 0);
     if (sc.phase === 'flight') car.wind?.set(Math.hypot(sc.vx - wind, sc.vy, sc.vz));
     // Skid marks and tyre smoke.
-    if (sc.phase === 'race' && sc.grounded && (sc.sliding || sc.wheelspin || (sc.brake > 0 && speed > 9))) {
+    if (onRoad && sc.grounded && (sc.sliding || sc.wheelspin || (sc.brake > 0 && speed > 9))) {
       const halfTrack = k.width / 2 - 0.15;
       const back = -k.length * 0.3;
       skids.lay(String(p), sc.x + Math.cos(sc.heading) * back, sc.y, sc.z + Math.sin(sc.heading) * back, sc.heading, halfTrack, Math.max(slide, 0.5));
@@ -1644,12 +1816,13 @@ function updateCars(dt: number, gdt: number, t: number): void {
     car.aura.update(t, sc.grit, car.root.position, sc.heading, k.length, k.width);
     // Hints: jump Lombard's hedges; spend the boost on the pier; the slipstream.
     if (sc.phase === 'race' && !bots[p]) {
-      const m = COURSE.marks;
-      if (sc.boostFrac > 0.3 && sc.s > m.embS0 - 20 && sc.s < m.embS0 && !car.hinted.has('pier')) {
+      const dump = map.hints.boostDump;
+      const hedges = map.hints.hedges;
+      if (dump && sc.boostFrac > 0.3 && sc.s > dump[0] && sc.s < dump[1] && !car.hinted.has('pier')) {
         car.hinted.add('pier');
         hud.flash(p, 'hint', `🔥 EMPTY YOUR BOOST FOR THE JUMP! (${input.labels(p).boost})`, 'boost', gameClock, 2.6);
       }
-      if (sc.items.includes('jump') && sc.s > m.lombardS0 - 25 && sc.s < m.lombardS0 + 20 && !car.hinted.has('lombard')) {
+      if (hedges && sc.items.includes('jump') && sc.s > hedges[0] && sc.s < hedges[1] && !car.hinted.has('lombard')) {
         car.hinted.add('lombard');
         hud.flash(p, 'hint', '🦘 JUMP THE HEDGES!', 'hype', gameClock, 3);
       }
@@ -1709,7 +1882,14 @@ function frame(): void {
     if (sim.done) {
       if (doneTime < 0) doneTime = stateTime;
       // Nobody launched: skip straight to the results after a short pause.
-      if (stateTime - doneTime > (firstLaunchSeen ? RESULTS_DELAY : 1.2)) finishRace();
+      if (stateTime - doneTime > (firstLaunchSeen || map.mode === 'race' ? RESULTS_DELAY : 1.2)) finishRace();
+    }
+  } else if (state === 'RESULTS' && sim && map.mode === 'race') {
+    // Behind the results, the cars carry on their cool-down lap.
+    accumulator += gdt;
+    while (accumulator >= DT) {
+      accumulator -= DT;
+      sim.step([NO_DRIVE, NO_DRIVE]);
     }
   }
 
@@ -1731,6 +1911,8 @@ function frame(): void {
           wheelspin: c.wheelspin,
           phase: c.phase,
           distance: c.distance,
+          lap: c.lap,
+          raceTime: c.finishT ?? sim.raceT,
           hype: c.hype,
           hypeBonus: (HYPE_BOOST * c.hype) / HYPE_MAX,
           items: c.items,
@@ -1739,13 +1921,13 @@ function frame(): void {
           grit: c.grit > 0,
           gull: c.gullT > 0,
           position: order.indexOf(p) + 1,
-          gap: racing && o ? c.s - o.s : null,
+          gap: racing && o ? c.prog - o.prog : null,
           wrongWay: c.wrongWay > 1.2,
           clock,
           ramp: sim.rampDropAt !== null ? { deg: sim.rampAngle * DEG, moving: sim.rampAngle > RAMP_MIN + 1e-6 } : null,
         },
         gameClock,
-        c.phase === 'race' || c.phase === 'grid' ? c.s / L : 1,
+        c.phase === 'race' || c.phase === 'grid' ? stripAt(c.s) : 1,
       );
     }
   }
@@ -1757,20 +1939,24 @@ function frame(): void {
     const sc = sim.cars[0];
     const c = cars[0];
     if ((state === 'RACE' || state === 'FLIGHT') && (sc.phase === 'race' || sc.phase === 'flight')) {
-      ghostRec.push(sim.raceT, c.root.position.x, c.root.position.y, c.root.position.z, c.root.rotation.y, c.pitch, c.roll, sc.phase === 'race' ? sc.s : L);
+      ghostRec.push(sim.raceT, c.root.position.x, c.root.position.y, c.root.position.z, c.root.rotation.y, c.pitch, c.roll, sc.phase === 'race' ? sc.prog : Infinity);
     }
     const racingNow = state === 'RACE' || state === 'FLIGHT' || state === 'COUNTDOWN';
     const g = racingNow ? ghost.update(state === 'COUNTDOWN' ? 0 : sim.raceT) : null;
     if (!racingNow) ghost.hide();
-    hud.setGhost(g === null ? null : g / L);
+    // The ghost's progress on the strip (point to point, progress is the arc length itself).
+    const C = map.course;
+    hud.setGhost(g === null ? null : Number.isFinite(g) ? stripAt(C.loop ? C.startS + g : g) : 1);
   }
 
-  // Camera targets.
+  // Camera targets (behind a race's results, both on the winner's cool-down lap).
   for (const p of PLAYERS) {
     const ct = camTargets[p];
-    ct.pos.copy(cars[p].root.position);
-    const sc = sim?.cars[p] as (NonNullable<typeof sim>['cars'][number] | undefined);
-    ct.s = sc ? sc.s : COURSE.grid[p].s;
+    const q = state === 'RESULTS' && resultsFocus !== null ? resultsFocus : p;
+    ct.pos.copy(cars[q].root.position);
+    const sc = sim?.cars[q] as (NonNullable<typeof sim>['cars'][number] | undefined);
+    ct.s = sc ? sc.s : map.course.grid[p].s;
+    ct.prog = sc ? (sc.finishT !== null ? sc.prog + 1e6 : sc.prog) : 0;
     ct.speed = sc ? Math.hypot(sc.vx, sc.vz) : 0;
     ct.phase = sc ? sc.phase : 'grid';
   }
@@ -1780,18 +1966,19 @@ function frame(): void {
 
   splashes.update(gdt);
   particles.update(gdt);
-  city.update(dt, t, sim ? sim.cars.filter((c) => c.phase === 'race').map((c) => ({ x: c.x, z: c.z })) : []);
+  scenery.update(dt, t, sim ? sim.cars.filter((c) => c.phase === 'race' || c.phase === 'finished').map((c) => ({ x: c.x, z: c.z })) : []);
   // The kicker stands at full height in the garage and until the first car is off it; its lamps
   // flash while it comes down in front of someone still racing.
-  const ramping = !!sim && state !== 'BUILD' && sim.rampDropAt !== null;
-  city.kicker.set(
-    ramping ? sim!.rampAngle : KICKER_ANGLE,
-    ramping && sim!.rampAngle > RAMP_MIN + 1e-6 && sim!.cars.some((c) => c.phase === 'race'),
-    t,
-  );
-  landmarks.update(dt, t);
+  const lip = map.course.lip;
+  if (lip) {
+    const ramping = !!sim && state !== 'BUILD' && sim.rampDropAt !== null;
+    scenery.setRamp?.(
+      ramping ? sim!.rampAngle : lip.angle,
+      ramping && sim!.rampAngle > RAMP_MIN + 1e-6 && sim!.cars.some((c) => c.phase === 'race'),
+      t,
+    );
+  }
   actors.update(gdt, t, sim);
-  bay.update(t);
   fadeCars[0][0] = fadeCars[2][0] = carPos(0);
   fadeCars[1][0] = carPos(1);
   if (solo) fadeCars[2].length = 1;
@@ -1800,7 +1987,7 @@ function frame(): void {
     applyGantry(pane === -1 ? 0 : pane);
     // See through Waymos (and the cable car) that are in this view's way.
     actors.fadeFor(cam.position, fadeCars[pane === -1 ? 2 : pane]);
-    bay.labelsFor(cam);
+    scenery.beforeRender?.(cam);
     const focus = pane === -1 ? views.shared.cur.focus : views.focusFor(pane);
     world.setShadowFocus(focus, state === 'BUILD' ? 40 : 60);
     for (const c of cars) c.trail.update(cam);
@@ -1849,18 +2036,18 @@ function frame(): void {
 function soloTiming(): void {
   if (!sim) return;
   const car = sim.cars[0];
-  const best = soloBests.get(training.start);
-  while (nextSplit < SPLITS.length && car.phase === 'race' && car.s >= SPLITS[nextSplit].s) {
+  const best = soloBests.get(soloKey(training.start));
+  while (nextSplit < splits.length && car.phase === 'race' && car.prog >= splits[nextSplit].s) {
     const i = nextSplit++;
     splitTimes[i] = sim.raceT;
     const ref = best?.splits[i];
-    hud.split(0, SPLITS[i].label, ref === undefined || ref === null ? null : sim.raceT - ref, gameClock);
+    hud.split(0, splits[i].label, ref === undefined || ref === null ? null : sim.raceT - ref, gameClock);
   }
 }
 
 // ---------- Test hooks ----------
 function botRun(cfg: CarConfig): CarResult {
-  const s = new RaceSim([computeStats(cfg)], wind, { obstacles: false, items: false });
+  const s = new RaceSim([computeStats(cfg)], wind, { obstacles: false, items: false }, map);
   driveToEnd(s, [new Bot(s, 0, { dodge: false, items: false })]);
   return s.results()[0];
 }
@@ -1976,14 +2163,28 @@ const api = {
   /** The kicker: its angle now (degrees), and the race time the first car went off it (or null). */
   get ramp() {
     const live = !!sim && state !== 'BUILD';
-    return { deg: (live ? sim!.rampAngle : KICKER_ANGLE) * DEG, dropAt: live ? sim!.rampDropAt : null };
+    const full = map.course.lip?.angle ?? 0;
+    return { deg: (live ? sim!.rampAngle : full) * DEG, dropAt: live ? sim!.rampDropAt : null };
   },
   /** The driving keys' layout: one player alone on the arrows, or two sharing the keyboard. */
   get keyLayout(): 'single' | 'duo' {
     return input.single ? 'single' : 'duo';
   },
+  /** The session best on the map in play: the furthest jump, or a race's fastest lap (in `distance`). */
   get sessionBest() {
-    return sessionBest ? { ...sessionBest } : null;
+    const best = sessionBests.get(map.id);
+    return best ? { ...best } : null;
+  },
+  /** The event in play, and the ones to pick from. */
+  get map(): { id: string; name: string; mode: MapDef['mode']; laps: number } {
+    return { id: map.id, name: map.name, mode: map.mode, laps: map.laps };
+  },
+  get maps(): string[] {
+    return MAPS.map((m) => m.id);
+  },
+  /** Pick the event (in the garage): a map id. */
+  setMap(id: string): boolean {
+    return setMap(id);
   },
   get wins(): [number, number] {
     return [...wins] as [number, number];
@@ -2059,11 +2260,14 @@ const api = {
   toGarage(): boolean {
     return toGarage();
   },
-  /** Solo: the best run from each start (distance, time, splits, ghost frames). */
+  /** Solo: the best run from each start of the map in play (distance or time, splits, ghost frames). */
   get soloBests() {
-    return Object.fromEntries(
-      [...soloBests].map(([k, b]) => [k, { distance: b.distance, runTime: b.runTime, splits: [...b.splits], ghostFrames: b.ghost.length / GHOST_STRIDE }]),
-    );
+    const out: Record<string, { distance: number; runTime: number; splits: (number | null)[]; ghostFrames: number }> = {};
+    for (const st of map.starts) {
+      const b = soloBests.get(soloKey(st.id));
+      if (b) out[st.id] = { distance: map.mode === 'race' ? 0 : b.score, runTime: b.runTime, splits: [...b.splits], ghostFrames: b.ghost.length / GHOST_STRIDE };
+    }
+    return out;
   },
   /** Solo: whether the ghost is on screen. */
   get ghostVisible(): boolean {
@@ -2072,18 +2276,30 @@ const api = {
   /** Put a car somewhere on the course (arc length s, offset d, speed m/s): test hook. */
   place(p: PlayerIndex, s: number, d = 0, speed = 0): boolean {
     if (!sim || !isPlayer(p) || ![s, d, speed].every(Number.isFinite)) return false;
-    sim.place(p, Math.min(Math.max(s, 0.6), COURSE.length - 0.5), d, speed);
+    const C = map.course;
+    sim.place(p, C.loop ? wrapS(C, s) : Math.min(Math.max(s, 0.6), C.length - 0.5), d, speed);
     return true;
   },
-  /** The course's landmarks along the route (arc lengths). */
-  course: { length: COURSE.length, ...COURSE.marks, sections: COURSE.sections.map((s) => ({ kind: s.kind, name: s.name, s0: s.s0, s1: s.s1 })) },
+  /** The course in play: its length, whether it's a loop, the start line, its landmarks along the
+   *  route (the long jump's named marks; arc lengths) and its sections. */
+  get course() {
+    const C = map.course;
+    return {
+      id: C.id,
+      length: C.length,
+      loop: C.loop,
+      startS: C.startS,
+      ...(map.id === 'russian-hill' ? SF_MARKS : {}),
+      sections: C.sections.map((s) => ({ kind: s.kind, name: s.name, s0: s.s0, s1: s.s1 })),
+    };
+  },
   /** The autopilot's result for each current car on an empty course, in this wind. */
   predict(): CarResult[] {
     return api.configs.map((c) => botRun(c));
   },
   /** Autopilot on an empty course (the balance check's measure of a build). */
   simulateToEnd(stats: CarStats, w = wind): CarResult {
-    const s = new RaceSim([stats], w, { obstacles: false, items: false });
+    const s = new RaceSim([stats], w, { obstacles: false, items: false }, map);
     driveToEnd(s, [new Bot(s, 0, { dodge: false, items: false })]);
     return s.results()[0];
   },

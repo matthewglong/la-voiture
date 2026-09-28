@@ -11,18 +11,19 @@
 // the other half widens back into the shared view. No moment shows two overlapping blends of the
 // same scene, so a car is never drawn twice side by side.
 import * as THREE from 'three';
-import { COURSE, pointAt, sectionAt } from '../track';
+import { deltaS, heightAt, pointAt, type Course } from '../track';
 import { damp } from './util';
 
 export type RigMode = 'build' | 'chase' | 'side' | 'results' | 'stalled';
 
 export interface ViewTarget {
   pos: THREE.Vector3;
-  /** Progress along the course. */
+  /** Where the car is along the course (arc length), and its progress in the race (laps and all). */
   s: number;
+  prog: number;
   speed: number;
-  /** On the road (racing), in the air after the lip, or finished. */
-  phase: 'grid' | 'race' | 'flight' | 'splashed' | 'dnf';
+  /** On the road (racing, or cruising past the flag), in the air after the lip, or finished. */
+  phase: 'grid' | 'race' | 'flight' | 'splashed' | 'finished' | 'dnf';
 }
 
 interface Pose {
@@ -33,7 +34,8 @@ interface Pose {
 }
 
 const DEG = Math.PI / 180;
-const C = COURSE;
+/** The course the cameras follow (the map in play). */
+let C: Course;
 const SIDE_YAW = Math.PI / 2;
 const MAX_SHARED_DIST = 30;
 /** How close (m) the racers still on the road must be to the lip for one shared side-on view. */
@@ -52,14 +54,19 @@ function lerpAngle(a: number, b: number, t: number): number {
   return a + d * t;
 }
 
+/** Inside one of the course's wide views (Lombard's switchbacks), or just before one. */
+function inWideView(s: number): boolean {
+  return C.wideViews.some((v) => s + 14 >= v.s0 && s < v.s1);
+}
+
 /** Heading the course is going at s, averaged over the stretch ahead (and much longer on Lombard). */
 export function courseDirection(s: number): number {
-  const lomb = sectionAt(C, s).kind === 'lombard' || sectionAt(C, s + 14).kind === 'lombard';
+  const lomb = inWideView(s);
   const [a, b] = lomb ? [-20, 40] : [-3, 16];
   let x = 0;
   let z = 0;
   for (let u = a; u <= b; u += 2) {
-    const p = pointAt(C, Math.min(Math.max(s + u, 0), C.length));
+    const p = pointAt(C, C.loop ? s + u : Math.min(Math.max(s + u, 0), C.length));
     const w = lomb ? 1 : 1 + (u > 0 ? 0.5 : 0);
     x += p.tx * w;
     z += p.tz * w;
@@ -68,11 +75,14 @@ export function courseDirection(s: number): number {
 }
 
 function inLombard(s: number): number {
-  // 0..1: how far into the Lombard framing (eases in and out around the block).
-  const m = C.marks;
-  const a = Math.min(1, Math.max(0, (s - (m.lombardS0 - 16)) / 14));
-  const b = Math.min(1, Math.max(0, (m.lombardS1 + 6 - s) / 12));
-  return Math.min(a, b);
+  // 0..1: how far into a wide view's framing (eases in and out around Lombard's block).
+  let f = 0;
+  for (const v of C.wideViews) {
+    const a = Math.min(1, Math.max(0, (s - (v.s0 - 16)) / 14));
+    const b = Math.min(1, Math.max(0, (v.s1 + 6 - s) / 12));
+    f = Math.max(f, Math.min(a, b));
+  }
+  return f;
 }
 
 function orbitPosition(p: Pose, out: THREE.Vector3): THREE.Vector3 {
@@ -90,18 +100,23 @@ class Rig {
   cur: Pose;
   goal: Pose;
   private modeTime = 0;
-  private sideFocusX = C.lip.x;
+  private sideFocusX = 0;
 
   constructor() {
     this.cur = this.buildPose(0);
     this.goal = this.buildPose(0);
   }
 
+  /** The long jump's lip, for the side-on framing (a lap race never flies). */
+  private get lip(): { x: number; y: number } {
+    return C.lip ?? { x: 0, y: 0 };
+  }
+
   setMode(mode: RigMode): void {
     if (mode === this.mode) return;
     this.mode = mode;
     this.modeTime = 0;
-    if (mode === 'side' || mode === 'results') this.sideFocusX = Math.max(this.cur.focus.x, C.lip.x - 10);
+    if (mode === 'side' || mode === 'results') this.sideFocusX = Math.max(this.cur.focus.x, this.lip.x - 10);
   }
 
   snap(targets: ViewTarget[], t: number, aspect: number, fov: number): void {
@@ -152,12 +167,12 @@ class Rig {
     const g = this.goal;
     const n = targets.length;
     // With two cars: sit behind the trailing one and look ahead towards the leader.
-    const sorted = [...targets].sort((a, b) => a.s - b.s);
+    const sorted = [...targets].sort((a, b) => a.prog - b.prog);
     const trail = sorted[0];
     const lead = sorted[n - 1];
     let speed = 0;
     for (const tg of targets) speed = Math.max(speed, tg.speed);
-    const sMid = n === 2 ? trail.s + (lead.s - trail.s) * 0.4 : trail.s;
+    const sMid = n === 2 ? trail.s + deltaS(C, trail.s, lead.s) * 0.4 : trail.s;
     const dir = courseDirection(sMid);
     const dx = Math.cos(dir);
     const dz = Math.sin(dir);
@@ -174,6 +189,16 @@ class Rig {
     const base = (grid ? 12.5 : 14.5 + Math.min(6, speed * 0.14)) * (1 - lomb) + 23 * lomb;
     let fit = base;
     let pitch = (grid ? 18 : 25 + Math.min(4, speed * 0.1)) * DEG * (1 - lomb) + 42 * DEG * lomb;
+    if (C.followGrade > 0 && !grid) {
+      // Tilt with the road: look up the climb ahead (the road rising into the frame), and down a
+      // drop, aiming at the road's height where the look-ahead lands.
+      const k = C.followGrade * (1 - lomb);
+      const reach = 8 + speed * 0.5;
+      const yAhead = heightAt(C, trail.s + ahead);
+      const grade = (heightAt(C, sMid + reach) - heightAt(C, sMid - 4)) / (reach + 4);
+      pitch -= Math.atan(grade) * k;
+      fx.y += (yAhead + 1 - fx.y) * 0.5 * k;
+    }
     if (n === 2) {
       const a = trail.pos;
       const b = lead.pos;
@@ -206,7 +231,7 @@ class Rig {
       return;
     }
     if (this.mode === 'chase' || this.mode === 'stalled') {
-      const live = targets.filter((c) => c.phase === 'race' || c.phase === 'grid');
+      const live = targets.filter((c) => c.phase === 'race' || c.phase === 'grid' || c.phase === 'finished');
       const pool = live.length ? live : targets;
       const grid = pool.every((c) => c.phase === 'grid');
       this.need = this.chase(pool, aspect, fov, grid);
@@ -218,7 +243,7 @@ class Rig {
     }
     // Side-on: pan with the leader; keep the lip and every car in the air (or close to the lip) in
     // frame while possible.
-    const lip = C.lip;
+    const lip = this.lip;
     const flown = targets.filter((c) => c.phase === 'flight' || c.phase === 'splashed');
     const near = targets.filter((c) => c.phase === 'race' && c.pos.x > lip.x - 65 && Math.abs(c.pos.z) < 20);
     const framed = [...new Set([...flown, ...near])];
@@ -265,8 +290,8 @@ export interface Pane {
 }
 
 export class Views {
-  readonly shared = new Rig();
-  readonly rigs: [Rig, Rig] = [new Rig(), new Rig()];
+  readonly shared: Rig;
+  readonly rigs: [Rig, Rig];
   /** The camera for the whole screen, and one per half. */
   readonly camera: THREE.PerspectiveCamera;
   readonly paneCams: [THREE.PerspectiveCamera, THREE.PerspectiveCamera];
@@ -288,7 +313,10 @@ export class Views {
   private readonly shakeAmt: [number, number] = [0, 0];
   private shakeT = 0;
 
-  constructor(camera: THREE.PerspectiveCamera, overlay: HTMLElement) {
+  constructor(camera: THREE.PerspectiveCamera, overlay: HTMLElement, course: Course) {
+    C = course;
+    this.shared = new Rig();
+    this.rigs = [new Rig(), new Rig()];
     this.camera = camera;
     this.paneCams = [camera.clone(), camera.clone()];
     this.divider = document.createElement('div');
@@ -310,6 +338,11 @@ export class Views {
 
   /** Racing alone: the shared view follows Player 1 and the screen never splits. */
   solo = false;
+
+  /** Follow a (new) course: the map in play. */
+  setCourse(course: Course): void {
+    C = course;
+  }
 
   /** Jump straight to the goal poses and to one screen (after a reset or a cut). */
   snap(targets: ViewTarget[], t = 0): void {
@@ -342,9 +375,8 @@ export class Views {
       }
       const flying = live.some((c) => c.phase === 'flight' || c.phase === 'splashed');
       const allDone = live.every((c) => c.phase === 'flight' || c.phase === 'splashed' || c.phase === 'dnf');
-      const nearLip = live.every(
-        (c) => c.phase !== 'race' || (c.pos.x > C.lip.x - NEAR_LIP && Math.abs(c.pos.z) < 20),
-      );
+      const lipX = C.lip ? C.lip.x : Infinity;
+      const nearLip = live.every((c) => c.phase !== 'race' || (c.pos.x > lipX - NEAR_LIP && Math.abs(c.pos.z) < 20));
       this.shared.setMode(flying && (nearLip || allDone) ? 'side' : 'chase');
     }
     this.shared.update(dt, t, live, aspect, fov);
@@ -363,7 +395,8 @@ export class Views {
         // Coming back together needs more room (hysteresis).
         if (this.splitting) fits = this.shared.need <= MAX_SHARED_DIST - 5 && this.bothVisible(targets, 0.62);
       } else if (this.shared.mode === 'side') {
-        fits = targets.every((c) => c.phase !== 'race' || (c.pos.x > C.lip.x - NEAR_LIP - 5 && Math.abs(c.pos.z) < 20));
+        const lipX = C.lip ? C.lip.x : Infinity;
+        fits = targets.every((c) => c.phase !== 'race' || (c.pos.x > lipX - NEAR_LIP - 5 && Math.abs(c.pos.z) < 20));
       }
       want = !sameMode || !fits;
     }
@@ -382,8 +415,8 @@ export class Views {
     // the shared chase camera that's whoever is still on the road, else whoever is behind (it looks
     // over their shoulder); for the shared side-on view, whoever is already flying.
     if (this.splitting !== was && (this.split < 0.001 || this.split > 0.999)) {
-      const onRoad = targets.map((c) => c.phase === 'race' || c.phase === 'grid');
-      const behind = targets[0].s <= targets[1].s ? 0 : 1;
+      const onRoad = targets.map((c) => c.phase === 'race' || c.phase === 'grid' || c.phase === 'finished');
+      const behind = targets[0].prog <= targets[1].prog ? 0 : 1;
       if (onRoad[0] === onRoad[1]) this.anchor = behind;
       else if (this.shared.mode === 'side') this.anchor = onRoad[0] ? 1 : 0;
       else this.anchor = onRoad[0] ? 0 : 1;
@@ -412,7 +445,7 @@ export class Views {
   private bothVisible(targets: ViewTarget[], limit: number): boolean {
     const cam = this.configure(this.camera, this.shared.cur, this.w, this.h, null);
     for (const tg of targets) {
-      if (tg.phase !== 'race' && tg.phase !== 'grid') continue;
+      if (tg.phase !== 'race' && tg.phase !== 'grid' && tg.phase !== 'finished') continue;
       this.tmp.copy(tg.pos);
       this.tmp.y += 0.8;
       this.tmp.project(cam);

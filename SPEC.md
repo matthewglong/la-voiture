@@ -2,6 +2,25 @@
 
 Two players build cars on one shared screen, then race each other down a San Francisco hill, through
 Lombard Street's switchbacks, along the pier and off a kicker into the Bay. The furthest splash wins.
+Or, the second event: a race of laps round a hilly loop at Twin Peaks. First across the line wins.
+
+## Events and maps
+- The garage picks the **event**: a map, and what's raced on it. **The long jump** (Russian Hill):
+  point to point, ending at a kicker; the furthest splash wins. **The race** (Twin Peaks): a loop,
+  three laps; first across the line wins.
+- Everything below holds for both unless it says otherwise (the kicker, HYPE's launch boost, the
+  flight and the Bay are the long jump's).
+- **Elevation matters on the loop:** climbs at up to 11% that the weakest engines crawl up, three
+  sharp crests that launch fast cars, and a drop at up to 16%. The ground contours the course
+  (cuttings, embankments, the peaks behind) and the chase camera tilts with the road, so the climbs
+  look like climbs.
+- **Laps:** a lap counts on crossing the start line; backing over it undoes one. After the last lap
+  a car takes the flag and cruises on. 25 s after the first car is home, anyone still racing is out
+  (as in the long jump).
+- A race's results show the times home, the best laps and the session's fastest lap; solo racing is a
+  time trial of the full race against a ghost of the best run, with splits every lap.
+- **Balance:** `npm run balance` enforces the long jump's rules (below). `npm run balance:race`
+  reports how every build does over a lap of each loop; race mode has no balance targets yet.
 
 ## Scope
 - **One screen, two players.** Build phase → countdown → race → flight → results → rematch. No
@@ -39,13 +58,15 @@ Lombard Street's switchbacks, along the pier and off a kicker into the Bay. The 
 - **Handling from the parts:** grip (wheels; tyres lose a little under load), how quickly the nose
   answers (chassis, slowed by weight), the tightest turn (chassis), brakes (wheels, limited by grip
   and weight), downforce (spoiler), top speed (engine × wheel gearing; the wind shifts it).
-- **Crests** at the intersections launch fast cars into the air.
+- **Crests** at the intersections (and on Twin Peaks, at the top of the climb and on the drop)
+  launch fast cars into the air.
 - **Collisions:** car against car (mass and the nose decide the shove), against walls, Waymos,
   tourists, the cable car, loose cones.
 - **Items** from boxes, two held at once with a key to swap which one fires: Jump, Determination,
   Poo, Boost +50%, Full boost (rare), Seagull (chases the rival and blinds them for a moment). The
   odds lean on the race order.
-- **HYPE** (0-100) from racing with flair, turned into up to +15% launch speed at the lip.
+- **HYPE** (0-100) from racing with flair, turned into up to +15% launch speed at the lip (the long
+  jump; a race doesn't show it).
 - **The kicker drops:** it stands at 25° for the first car off it, then comes down 2° a second to
   12°, so whoever is behind launches lower (about 5% less distance per second behind, at most about
   a third). Racing alone, it never moves.

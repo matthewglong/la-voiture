@@ -1,15 +1,17 @@
 // Build phase UI: the garage. Two player panels (P1 left, P2 right) that both players use at the
 // same time: stat bars, a tab per slot showing the fitted part, the parts for the open tab, and a
-// READY button. Plus the wind forecast and a status banner.
+// READY button. Plus the event (the long jump or a lap race, and where), the wind forecast and a
+// status banner.
 import { fittedPart, moneyAfter, moneyLeft, stockPart, swappedOut, type Garage } from '../garage';
 import { driveKeys, PAD_LABELS } from '../input';
 import { PARTS, SLOT_LABELS, computeStats } from '../parts';
+import type { MapDef } from '../maps';
 import { G, RHO } from '../sim/physics';
-import { COURSE } from '../track';
 import { SLOT_ORDER, type CarConfig, type CarStats, type PartOption, type PlayerIndex, type SlotId } from '../types';
+import { fmtTime } from './format';
 
-/** Where a solo run starts. */
-export type TrainStart = 'top' | 'hyde' | 'lombard' | 'final';
+/** Where a solo run starts (one of the map's starts, by id). */
+export type TrainStart = string;
 
 /** Solo training settings. */
 export interface Training {
@@ -19,15 +21,6 @@ export interface Training {
   traffic: boolean;
   items: boolean;
 }
-
-/** The solo starts: the grid, or further down (s: course arc length, null for the grid). */
-export const TRAIN_STARTS: { id: TrainStart; name: string; what: string; s: number | null }[] = [
-  { id: 'top', name: 'The top', what: 'the whole run', s: null },
-  { id: 'hyde', name: 'Larkin St', what: 'the fast Hyde St corners', s: COURSE.sections.find((q) => q.kind === 'intersection')!.s0 + 1 },
-  // Just round the Hyde St corner: the cable car waits at the far end (see RaceSim.placeStart).
-  { id: 'lombard', name: 'Hyde St', what: 'Lombard’s switchbacks', s: COURSE.marks.hydeS0 + 4 },
-  { id: 'final', name: 'Leavenworth', what: 'the last blocks and the jump', s: COURSE.marks.lombardS1 + 3 },
-];
 
 export interface BuildHandlers {
   /** A click on a part: fit it, or remove it when it is the paid part already fitted. */
@@ -46,11 +39,16 @@ export interface BuildHandlers {
   onSolo(): void;
   /** Change the solo training settings. */
   onTraining(change: Partial<Training>): void;
+  /** Pick the event (a map, and what's raced on it). */
+  onMap(id: string): void;
 }
 
 export interface LastRun {
   distance: number;
   dnf: boolean;
+  /** A race: the time home, and where the car finished. */
+  time?: number;
+  place?: number;
 }
 
 export interface BuildView {
@@ -66,8 +64,11 @@ export interface BuildView {
   /** Racing alone: Player 2's panel holds the training settings instead. */
   solo: boolean;
   training: Training;
-  /** Solo: the best distance from each start so far. */
+  /** Solo: the best from each start so far (a distance, or a race's time). */
   soloBests: Partial<Record<TrainStart, number>>;
+  /** The event in play, and the ones to pick from. */
+  map: MapDef;
+  maps: readonly MapDef[];
   /** Which players are on a gamepad (their hints show its buttons). */
   pads: [boolean, boolean];
 }
@@ -237,13 +238,15 @@ export function windText(wind: number): { value: string; arrow: string; kind: 'h
     : { value: `${kmh} km/h TAILWIND`, arrow: '→', kind: 'tail' };
 }
 
-export function renderWind(host: HTMLElement, wind: number, label = 'WIND FORECAST'): void {
+/** The wind chip. `where` says where it's a head- or tailwind (on a loop it's both, by turns). */
+export function renderWind(host: HTMLElement, wind: number, label = 'WIND FORECAST', where?: string): void {
   const w = windText(wind);
   host.className = `wind ${w.kind === 'calm' ? '' : w.kind}`;
   host.replaceChildren();
   el('span', 'tag', host, label);
   el('span', 'value', host, w.value);
   el('span', 'arrow', host, w.arrow);
+  if (where && w.kind !== 'calm') el('span', 'where', host, where);
   host.dataset.wind = wind.toFixed(2);
 }
 
@@ -292,6 +295,9 @@ interface PanelRefs {
 
 interface TrainRefs {
   root: HTMLElement;
+  /** The start buttons (rebuilt for each map). */
+  list: HTMLElement;
+  startsFor: string;
   starts: Map<TrainStart, { btn: HTMLButtonElement; best: HTMLElement }>;
   toggles: Map<'ghost' | 'traffic' | 'items', HTMLButtonElement>;
   /** How to retry or leave a run (keys or pad). */
@@ -304,6 +310,9 @@ export class BuildUI {
   private readonly wind: HTMLElement;
   private readonly banner: HTMLElement;
   private readonly roundChip: HTMLElement;
+  /** The event picker: one button per map. */
+  private readonly events: HTMLElement;
+  private readonly eventBtns = new Map<string, HTMLButtonElement>();
   /** The race's keys, for two players or one alone. */
   private readonly drive: HTMLElement;
   private driveKey: string | null = null;
@@ -319,6 +328,9 @@ export class BuildUI {
     this.root = el('div', 'build-ui overlay', parent);
     const top = el('div', 'topbar', this.root);
     this.roundChip = el('div', 'round-chip', top);
+    this.events = el('div', 'events', top);
+    this.events.setAttribute('role', 'radiogroup');
+    this.events.setAttribute('aria-label', 'Event');
     this.wind = el('div', 'wind', top);
     this.wind.id = 'wind-forecast';
     const bottom = el('div', 'bottombar', this.root);
@@ -463,20 +475,6 @@ export class BuildUI {
     el('div', 'section-title', root).append('Start from');
     const list = el('div', 'starts', root);
     const starts = new Map<TrainStart, { btn: HTMLButtonElement; best: HTMLElement }>();
-    for (const st of TRAIN_STARTS) {
-      const btn = el('button', 'card start', list);
-      btn.type = 'button';
-      btn.dataset.start = st.id;
-      el('span', 'radio', btn);
-      el('span', 'name', btn, st.name);
-      const best = el('span', 'price best', btn);
-      el('span', 'tagline', btn, st.what);
-      btn.addEventListener('click', (e) => {
-        if (e.detail > 1) return;
-        this.h.onTraining({ start: st.id });
-      });
-      starts.set(st.id, { btn, best });
-    }
     el('div', 'section-title', root).append('On the road');
     const row = el('div', 'toggles', root);
     const toggles = new Map<'ghost' | 'traffic' | 'items', HTMLButtonElement>();
@@ -495,7 +493,55 @@ export class BuildUI {
       toggles.set(key, b);
     }
     const keys = el('div', 'train-keys', root, 'In a run: R to retry, Esc for the garage');
-    return { root, starts, toggles, keys };
+    return { root, list, startsFor: '', starts, toggles, keys };
+  }
+
+  /** The map's solo starts. */
+  private buildStarts(t: TrainRefs, map: MapDef): void {
+    t.list.replaceChildren();
+    t.starts.clear();
+    t.startsFor = map.id;
+    for (const st of map.starts) {
+      const btn = el('button', 'card start', t.list);
+      btn.type = 'button';
+      btn.dataset.start = st.id;
+      el('span', 'radio', btn);
+      el('span', 'name', btn, st.name);
+      const best = el('span', 'price best', btn);
+      el('span', 'tagline', btn, st.what);
+      btn.addEventListener('click', (e) => {
+        if (e.detail > 1) return;
+        this.h.onTraining({ start: st.id });
+      });
+      t.starts.set(st.id, { btn, best });
+    }
+  }
+
+  /** The event picker: the long jump or a race, and where. */
+  private renderEvents(view: BuildView): void {
+    if (this.eventBtns.size !== view.maps.length) {
+      this.events.replaceChildren();
+      this.eventBtns.clear();
+      for (const m of view.maps) {
+        const b = el('button', 'event', this.events);
+        b.type = 'button';
+        b.dataset.map = m.id;
+        b.setAttribute('role', 'radio');
+        el('span', 'ev-mode', b, m.mode === 'race' ? `🏁 Race · ${m.laps} laps` : '🪂 Long jump');
+        el('span', 'ev-name', b, m.name);
+        b.title = m.blurb;
+        b.addEventListener('click', (e) => {
+          if (e.detail > 1) return;
+          this.h.onMap(m.id);
+        });
+        this.eventBtns.set(m.id, b);
+      }
+    }
+    for (const [id, b] of this.eventBtns) {
+      const on = id === view.map.id;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', String(on));
+    }
   }
 
   show(visible: boolean): void {
@@ -506,7 +552,8 @@ export class BuildUI {
   render(view: BuildView): void {
     this.view = view;
     this.roundChip.textContent = `ROUND ${view.round}`;
-    renderWind(this.wind, view.wind);
+    this.renderEvents(view);
+    renderWind(this.wind, view.wind, 'WIND FORECAST', view.map.mode === 'race' ? 'on the straight' : undefined);
 
     const ready = PLAYERS.filter((p) => view.garage.builds[p].ready);
     this.banner.replaceChildren();
@@ -581,7 +628,7 @@ export class BuildUI {
     if (document.activeElement !== refs.name) refs.name.value = view.names[p];
 
     const last = view.lastRuns[p];
-    refs.lastRun.textContent = last ? `last race ${last.dnf ? 'DNF' : `${last.distance.toFixed(1)} m`}` : '';
+    refs.lastRun.textContent = last ? `last race ${last.dnf ? 'DNF' : last.time !== undefined ? fmtTime(last.time) : `${last.distance.toFixed(1)} m`}` : '';
 
     let anyChanged = false;
     for (const slot of SLOT_ORDER) {
@@ -626,12 +673,13 @@ export class BuildUI {
     }
     if (refs.train) {
       refs.train.root.classList.toggle('hidden', !training);
+      if (refs.train.startsFor !== view.map.id) this.buildStarts(refs.train, view.map);
       for (const [id, t] of refs.train.starts) {
         const on = view.training.start === id;
         t.btn.classList.toggle('fitted', on);
         t.btn.setAttribute('aria-pressed', String(on));
         const best = view.soloBests[id];
-        t.best.textContent = best === undefined ? '' : `best ${best.toFixed(1)} m`;
+        t.best.textContent = best === undefined ? '' : view.map.mode === 'race' ? `best ${fmtTime(best)}` : `best ${best.toFixed(1)} m`;
         t.best.classList.toggle('hidden', best === undefined);
       }
       refs.train.keys.textContent = view.pads[0]

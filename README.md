@@ -15,6 +15,11 @@ behind launches lower. When the cars get too far apart for one camera, the scree
 heals back into one when they come together again. Playing alone? Race the CPU, or train solo
 against a ghost of your best run.
 
+Or pick the other event in the garage: a **race** of three laps round **Twin Peaks**, up the
+switchbacks, over the crest, round the summit hairpin under Sutro Tower and down the drop, where the
+crests throw the quick cars into the air. First across the line wins. The hills are the point: power
+pulls you up the climbs, grip gets you round the hairpin.
+
 Built with Vite, TypeScript and Three.js. Everything is procedural (geometry, textures, sound), and
 there is no backend.
 
@@ -25,10 +30,13 @@ npm install
 npm run dev        # http://localhost:5199 (also on your LAN, for a TV)
 npm run build      # type-check + production build into dist/
 npm run balance    # race every affordable build with the autopilot, in three winds, and check the balance
+npm run balance:race  # every build, one lap of each race loop: how the parts come out racing (a report)
 ```
 
 ## How to play
 
+0. **Pick the event** at the top of the garage: 🪂 the long jump down Russian Hill, or 🏁 a race
+   round Twin Peaks (or `?map=twin-peaks`; on a pad, Player 1's Y). Switching un-readies both cars.
 1. **Build.** Both players build at the same time, each on their own panel. Every slot (chassis,
    wheels, engine, boost bottle, wing, nose, booster, paint, topper) has a tab showing the part
    fitted there and what it cost. Click a part to fit it, and click it again to remove it and get
@@ -135,22 +143,48 @@ URL parameters:
 - `?autodrive=1` (or `p1` / `p2`): the autopilot drives both cars (or one). `?cpu=1`: Player 2 is
   the CPU. `?solo=1`: solo training.
 - `?traffic=0`, `?items=0`: an empty course.
+- `?map=russian-hill` (the long jump) or `?map=twin-peaks` (the race): the event to start on.
 
 `window.__game` exposes the state machine, the race and hooks to script it (`input`, `place`,
-`giveItem`, `autodrive`, `setCpu`, `setSolo`, `setTraining`, `retry`, ...). See `DECISIONS.md`.
+`giveItem`, `autodrive`, `setCpu`, `setSolo`, `setTraining`, `retry`, `setMap`, ...). See
+`DECISIONS.md`.
 
 ## Layout
 
-- `src/track.ts`: the course (a winding centreline with heights, widths and wall types) and fast
-  lookups, shared by the physics, the bots and the visuals.
+- `src/track.ts`: courses in general (a centreline with heights, widths and wall types; point to
+  point or a loop), the builders the maps use and the fast lookups, shared by the physics, the bots
+  and the visuals.
+- `src/maps/`: the maps. `index.ts` lists them (`MAPS`): each is a course, its event (`'jump'` or
+  `'race'` and the laps), its item boxes, its traffic, and the HUD strip, splits and solo starts.
+  `russianHill.ts` is the long jump's course (and its x-only hill); `twinPeaks.ts` the race loop.
 - `src/sim/`: the deterministic fixed-step race (`race.ts`: driving and drifting, boost, collisions,
   traffic, items and seagulls, HYPE, launch), the flight model (`physics.ts`) and the autopilot
   (`bot.ts`). No Three.js or DOM.
 - `src/parts.ts`: the parts catalog; `src/garage.ts`: the build rules.
-- `src/scene/`: the renderer, the SF city and Lombard (`city.ts`, `lombard.ts`), landmarks, the Bay,
-  cars, the race's cast (`actors.ts`), effects (`fx.ts`, `effects.ts`), the crowd and the split-screen
-  cameras (`views.ts`).
+- `src/scene/`: the renderer, each map's scenery behind one interface (`maps.ts`: the SF city and
+  Lombard in `city.ts` and `lombard.ts` with the landmarks and the Bay; Twin Peaks in
+  `twinPeaks.ts`), shared props (`props.ts`), cars, the race's cast (`actors.ts`), effects (`fx.ts`,
+  `effects.ts`), the crowd and the split-screen cameras (`views.ts`).
 - `src/ui/`, `src/input.ts`, `src/audio.ts`: the garage UI, HUD, keyboard/gamepad input and
   procedural Web Audio.
-- `scripts/balance.ts`: the balance check. `DECISIONS.md`: every choice beyond the brief, plus the
-  balance report.
+- `scripts/balance.ts`: the balance check; `scripts/balanceRace.ts`: the race-mode report.
+  `DECISIONS.md`: every choice beyond the brief, plus the balance report.
+- `preview/*.html`: dev-only showrooms for a scene module with the game's lighting (e.g.
+  `/preview/twinpeaks.html?view=climb`).
+
+## Adding a map
+
+1. **The course** (`src/maps/<name>.ts`, no Three.js). A loop is `buildLoop({ id, nodes, sections,
+   startS })`: nodes round the loop, each with a height (`round: 0` makes a sharp crest that launches
+   fast cars), and sections from a node on with a name, half-width and wall types. Check the layout
+   before building scenery: the tightest radius must stay above the half-width, and legs must stay
+   well apart. A long-jump course needs a `lip` (see `russianHill.ts`).
+2. **The map** in `src/maps/index.ts`: its event and laps, item-box rows, a `populate` for traffic
+   and tourists (the sim's `addTraffic`, `addStalled`, `addPed`, ...), the strip's landmarks, splits
+   and solo starts. Add it to `MAPS`: the garage picker, the CPU and `npm run balance:race` pick it
+   up.
+3. **The scenery** (`src/scene/<name>.ts`): a `MapScene` (a group, the start gantry named
+   `startGantry` so the camera can see through it, and `update`), registered in `src/scene/maps.ts`.
+   The road, walls and ground follow the course's points; `scene/props.ts` has the shared props.
+4. Check it: `npm run balance:race` (every build gets round), and the autopilot racing it in the
+   browser (`?map=<id>&autodrive=1`, then READY on both panels).

@@ -1,23 +1,14 @@
-// The course: a winding centreline in the horizontal plane (x runs down towards the Bay, z is to
-// the right when looking along +x) with a road height, a corridor half-width and a wall type on
-// each edge. Shared by the physics, the bots and the visuals. No Three.js or DOM imports.
+// Courses: a centreline in the horizontal plane (heading 0 is +x, π/2 is +z, so + curvature turns
+// right) with a road height, a corridor half-width and a wall type on each edge. Shared by the
+// physics, the bots and the visuals. No Three.js or DOM imports.
 //
-// Route: the top of Russian Hill, two steep blocks of Greenwich St, a right turn onto Hyde St (the
-// cable-car line), a left turn into the eight... well, five hairpins of Lombard St, two more steep
-// blocks, across the Embarcadero, along the pier and up the kicker. The waterfront (Embarcadero,
-// pier, kicker and lip) sits exactly where it always has, so the Bay, the buoys and the landmarks
-// line up as before.
+// A course is either point to point (it ends at a lip: the long jump) or a closed loop (laps). On a
+// loop the arc length s wraps: it runs over [0, length) and the last sample sits exactly on the
+// first. The maps build their courses (src/maps); this module holds the types, the builders they
+// share and the queries.
 
-export type SectionKind =
-  | 'start'
-  | 'block'
-  | 'intersection'
-  | 'corner'
-  | 'hyde'
-  | 'lombard'
-  | 'embarcadero'
-  | 'pier'
-  | 'kicker';
+/** What a stretch of road is (the map decides: Lombard's switchbacks, a hairpin, the pier...). */
+export type SectionKind = string;
 
 /**
  * What bounds the road at an edge. Everything is a wall to the physics; hedges are low enough to
@@ -44,7 +35,7 @@ export interface Section {
   /** x range covered (min, max), for the terrain and the city. */
   xMin: number;
   xMax: number;
-  /** Straight sections: the heading (radians, 0 = +x, π/2 = +z). */
+  /** Heading at the end of the section (radians, 0 = +x, π/2 = +z). */
   heading: number;
 }
 
@@ -56,7 +47,7 @@ export interface CoursePoint {
   /** Unit tangent in the horizontal plane. */
   tx: number;
   tz: number;
-  /** Heading (radians). */
+  /** Heading (radians), continuous along the course (a loop's last sample is a whole turn on). */
   heading: number;
   /** dy/ds over the interval that starts here. */
   grade: number;
@@ -76,18 +67,39 @@ export interface Located {
   i: number;
 }
 
-interface Piece {
-  sec: number;
-  s0: number;
-  len: number;
+/** The end of a long-jump course: the kicker's lip, and the run-up to it. */
+export interface Lip {
+  s: number;
+  x: number;
+  y: number;
+  z: number;
+  angle: number;
+  /** tan(angle), as the ramp is built (the ramp drops by scaling it). */
+  grade: number;
+  cos: number;
+  sin: number;
+  /** Where the ramp begins (it drops about here), and the flat deck height it rises from. */
+  rampS0: number;
+  baseY: number;
+  /** The flat run-up before the ramp (the pier): first onto it earns HYPE. */
+  runupS0: number;
+  /** The last run to the lip after the technical part of the course: the CPU saves its boost for it. */
+  finalS0: number;
+}
+
+/** A walled-in block the road winds through (Lombard's gardens): an x range and |z| limit. */
+export interface Garden {
   x0: number;
-  z0: number;
-  h0: number;
-  /** Curvature (1/m, signed); 0 for straights. */
-  k: number;
+  x1: number;
+  zWall: number;
+  /** Half-width of the gaps in the end walls where the road comes in and goes out. */
+  gate: number;
 }
 
 export interface Course {
+  id: string;
+  /** A closed loop (laps) rather than point to point. */
+  loop: boolean;
   points: CoursePoint[];
   sections: Section[];
   length: number;
@@ -95,355 +107,256 @@ export interface Course {
   bumps: { s: number; sec: number }[];
   /** Crosswalk bands (arc length ranges). */
   crosswalks: { s0: number; s1: number }[];
-  lip: { s: number; x: number; y: number; z: number; angle: number; cos: number; sin: number };
-  /** The start line and the grid slots (P1 left, P2 right). */
+  /** Long-jump courses end at a lip; loops have none. */
+  lip: Lip | null;
+  /** The start line and the grid slots (P1 left, P2 right). On a loop the start line is also the
+   *  finish line. */
   startS: number;
   grid: [{ s: number; d: number }, { s: number; d: number }];
   startY: number;
-  deckY: number;
-  /** x where the Embarcadero begins, the shoreline (pier start) and the kicker. */
-  embX: number;
-  shoreX: number;
-  kickerX: number;
-  /** Arc lengths of the key landmarks along the route. */
-  marks: {
-    hydeS0: number;
-    hydeS1: number;
-    lombardS0: number;
-    lombardS1: number;
-    embS0: number;
-    pierS0: number;
-    kickerS0: number;
-  };
-  /** Buoy rows in the Bay (z of the two rows, either side of the pier axis). */
-  laneZ: readonly [number, number];
+  /** Stretches the chase camera pulls up and back for (Lombard's switchbacks). */
+  wideViews: { s0: number; s1: number }[];
+  /** How far the chase camera tilts with the road: looking up a climb and down a drop (0: it
+   *  doesn't; 1: fully). */
+  followGrade: number;
+  garden: Garden | null;
+  /** Spatial hash of the samples (built by finishCourse). */
+  index: Map<number, number[]>;
 }
 
 // ---------------------------------------------------------------------------------------------
-// Layout
+// Building
 
 export const DS = 0.25;
-export const DECK_Y = 4;
-/** tan(25°) as a literal, so the kicker is identical in every JS engine. */
-export const KICKER_GRADE = 0.4663076581549986;
-export const KICKER_ANGLE = (25 * Math.PI) / 180;
-/** The kicker is 12 m of ramp at 25°. */
-export const KICKER_LEN = 12 / Math.sqrt(1 + KICKER_GRADE * KICKER_GRADE);
-/** Where the Embarcadero has always started (three 60 m blocks and three intersections down). */
-export const EMB_X = 10 + 3 * (60 / Math.sqrt(1 + 0.18 * 0.18) + 12 / Math.sqrt(1 + 0.03 * 0.03));
-export const EMB_LEN = 30;
-export const PIER_LEN = 40;
-export const ROAD_HW = 7;
-export const LOMBARD_HW = 4.8;
-export const CORNER_R = 7;
-export const LANE_Z = [-3, 3] as const;
 
-/** Lombard's switchbacks. */
-export const LOMBARD = {
-  turns: 4,
-  legAngle: (60 * Math.PI) / 180,
-  hairpinR: 7,
-  legLen: 14,
-  drop: 13,
-  /** Half-width of the garden band the switchbacks swing across. */
-  bandHalf: 15.5,
-} as const;
+/** Grades from the sampled heights (the last sample keeps `lastGrade`), and the spatial index. */
+export function finishCourse(c: Course, lastGrade: number): Course {
+  const P = c.points;
+  for (let i = 0; i < P.length - 1; i++) {
+    const a = P[i];
+    const b = P[i + 1];
+    a.grade = (b.y - a.y) / (b.s - a.s);
+  }
+  P[P.length - 1].grade = lastGrade;
+  c.index = buildIndex(c);
+  return c;
+}
 
-interface PlanSection {
+/** One node of a loop: where the centreline passes, and how high the road is there. */
+export interface LoopNode {
+  x: number;
+  z: number;
+  y: number;
+  /**
+   * Length (m) of the vertical curve that rounds the change of grade here. 0 is a sharp change:
+   * a crest like that throws fast cars into the air. Defaults to 14 m.
+   */
+  round?: number;
+}
+
+/** A stretch of a loop, from a node to the next section's first node. */
+export interface LoopSection {
+  from: number;
   kind: SectionKind;
   name: string;
   hw: number;
-  /** Rise over run along x for x-running sections. */
-  grade?: number;
-  pieces: { len: number; turn?: number }[];
+  edgeL: EdgeKind;
+  edgeR: EdgeKind;
 }
 
-const DEG = Math.PI / 180;
-
-function lombardPieces(): { len: number; turn?: number }[] {
-  const { turns, legAngle: th, hairpinR: r, legLen: L } = LOMBARD;
-  const half = L / 2 - r * Math.tan(th / 2);
-  const out: { len: number; turn?: number }[] = [];
-  out.push({ len: r * th, turn: th });
-  out.push({ len: half });
-  for (let i = 0; i < turns; i++) {
-    const sign = i % 2 === 0 ? -1 : 1;
-    out.push({ len: r * 2 * th, turn: sign * 2 * th });
-    out.push({ len: i === turns - 1 ? half : L });
-  }
-  // Straighten up again: after an odd number of hairpins the heading is -θ (turn right), after an
-  // even number it is +θ (turn left).
-  out.push({ len: r * th, turn: turns % 2 === 1 ? th : -th });
-  return out;
+export interface LoopDef {
+  id: string;
+  /** Nodes round the loop (the centreline is a closed centripetal Catmull-Rom spline through them). */
+  nodes: LoopNode[];
+  /** Sections in order; the first must start at node 0. */
+  sections: LoopSection[];
+  /** Arc length of the start/finish line (the grid sits just behind it). */
+  startS: number;
+  wideViews?: { s0: number; s1: number }[];
+  /** See Course.followGrade (default 0.8: on a loop the ups and downs are the point). */
+  followGrade?: number;
 }
 
-const PLAN: PlanSection[] = [
-  { kind: 'start', name: 'Greenwich St', hw: ROAD_HW, grade: 0, pieces: [{ len: 40 }] },
-  { kind: 'block', name: 'Greenwich St', hw: ROAD_HW, grade: -0.15, pieces: [{ len: 64 }] },
-  { kind: 'intersection', name: 'Larkin St', hw: ROAD_HW, grade: -0.02, pieces: [{ len: 14 }] },
-  { kind: 'block', name: 'Greenwich St', hw: ROAD_HW, grade: -0.17, pieces: [{ len: 64 }] },
-  { kind: 'corner', name: 'Hyde St', hw: ROAD_HW, pieces: [{ len: (CORNER_R * Math.PI) / 2, turn: 90 * DEG }] },
-  { kind: 'hyde', name: 'Hyde St', hw: ROAD_HW, pieces: [{ len: 52 }] },
-  { kind: 'corner', name: 'Lombard St', hw: ROAD_HW, pieces: [{ len: (CORNER_R * Math.PI) / 2, turn: -90 * DEG }] },
-  { kind: 'lombard', name: 'Lombard St', hw: LOMBARD_HW, pieces: lombardPieces() },
-  { kind: 'intersection', name: 'Leavenworth St', hw: ROAD_HW, grade: -0.02, pieces: [{ len: 14 }] },
-  { kind: 'block', name: 'Lombard St', hw: ROAD_HW, grade: -0.18, pieces: [{ len: 64 }] },
-  { kind: 'intersection', name: 'Mason St', hw: ROAD_HW, grade: -0.02, pieces: [{ len: 14 }] },
-  { kind: 'block', name: 'Lombard St', hw: ROAD_HW, grade: -0.16, pieces: [{ len: 64 }] },
-  { kind: 'embarcadero', name: 'The Embarcadero', hw: ROAD_HW, grade: 0, pieces: [{ len: EMB_LEN }] },
-  { kind: 'pier', name: 'Pier 23', hw: ROAD_HW, grade: 0, pieces: [{ len: PIER_LEN }] },
-  { kind: 'kicker', name: 'The kicker', hw: ROAD_HW, pieces: [{ len: KICKER_LEN }] },
-];
-
-// ---------------------------------------------------------------------------------------------
-// Construction
-
-function piecePos(p: Piece, u: number): { x: number; z: number; h: number } {
-  if (p.k === 0) return { x: p.x0 + Math.cos(p.h0) * u, z: p.z0 + Math.sin(p.h0) * u, h: p.h0 };
-  const h = p.h0 + p.k * u;
-  return {
-    x: p.x0 + (Math.sin(h) - Math.sin(p.h0)) / p.k,
-    z: p.z0 - (Math.cos(h) - Math.cos(p.h0)) / p.k,
-    h,
+/** Centripetal Catmull-Rom point between p1 and p2 (u in 0..1). */
+function catmull(p0: [number, number], p1: [number, number], p2: [number, number], p3: [number, number], u: number): [number, number] {
+  const tj = (a: [number, number], b: [number, number]): number => Math.sqrt(Math.hypot(b[0] - a[0], b[1] - a[1])) || 1e-6;
+  const t0 = 0;
+  const t1 = t0 + tj(p0, p1);
+  const t2 = t1 + tj(p1, p2);
+  const t3 = t2 + tj(p2, p3);
+  const t = t1 + (t2 - t1) * u;
+  const lerp = (a: [number, number], b: [number, number], ta: number, tb: number): [number, number] => {
+    const f = (t - ta) / (tb - ta);
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
   };
+  const a1 = lerp(p0, p1, t0, t1);
+  const a2 = lerp(p1, p2, t1, t2);
+  const a3 = lerp(p2, p3, t2, t3);
+  const b1 = lerp(a1, a2, t0, t2);
+  const b2 = lerp(a2, a3, t1, t3);
+  return lerp(b1, b2, t1, t2);
 }
 
-/** Piecewise-linear terrain profile along x: [x, y] breakpoints, ascending x. */
-let PROFILE: [number, number][] = [];
-
-/** City ground height at x (flat along z): the hill the whole city sits on. */
-export function terrainY(x: number): number {
-  const P = PROFILE;
-  if (x <= P[0][0]) return P[0][1];
-  for (let i = 1; i < P.length; i++) {
-    if (x <= P[i][0]) {
-      const [x0, y0] = P[i - 1];
-      const [x1, y1] = P[i];
-      return x1 === x0 ? y1 : y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
-    }
-  }
-  return P[P.length - 1][1];
-}
-
-/** The terrain's breakpoints strictly inside (x0, x1), for geometry that must follow the hill. */
-export function terrainBreaks(x0: number, x1: number): number[] {
-  return PROFILE.map((p) => p[0]).filter((x) => x > x0 + 1e-6 && x < x1 - 1e-6);
-}
-
-/** Slope of the terrain at x (dy/dx), looking ahead of any breakpoint. */
-export function terrainGrade(x: number): number {
-  const P = PROFILE;
-  for (let i = 1; i < P.length; i++) {
-    if (x < P[i][0]) {
-      const [x0, y0] = P[i - 1];
-      const [x1, y1] = P[i];
-      return x1 === x0 ? 0 : (y1 - y0) / (x1 - x0);
-    }
-  }
-  return 0;
-}
-
-function buildCourse(): Course {
-  // 1. Lay the pieces out from the origin heading +x.
-  const pieces: Piece[] = [];
-  const sections: Section[] = [];
-  let x = 0;
-  let z = 0;
-  let h = 0;
-  let s = 0;
-  PLAN.forEach((ps, si) => {
-    const s0 = s;
-    let xMin = x;
-    let xMax = x;
-    for (const pd of ps.pieces) {
-      const k = pd.turn ? pd.turn / pd.len : 0;
-      const p: Piece = { sec: si, s0: s, len: pd.len, x0: x, z0: z, h0: h, k };
-      pieces.push(p);
-      // Track the x range covered (arcs can bulge).
-      for (let u = 0; u <= pd.len; u += 0.5) {
-        const q = piecePos(p, u);
-        xMin = Math.min(xMin, q.x);
-        xMax = Math.max(xMax, q.x);
+/**
+ * A closed loop from its nodes: the plan is a smooth spline through them, sampled every DS metres
+ * of arc length; the height runs in straight grades from node to node, each change of grade rounded
+ * over its node's `round` length (or left sharp, for a crest to jump).
+ */
+export function buildLoop(def: LoopDef): Course {
+  const N = def.nodes.length;
+  const at = (k: number): LoopNode => def.nodes[((k % N) + N) % N];
+  const xz = (k: number): [number, number] => [at(k).x, at(k).z];
+  // 1. A dense polyline of the plan, with the arc length at each node.
+  const SUB = 400;
+  const dense: [number, number][] = [];
+  const nodeS: number[] = [];
+  let len = 0;
+  for (let k = 0; k < N; k++) {
+    for (let j = 0; j < SUB; j++) {
+      const q = catmull(xz(k - 1), xz(k), xz(k + 1), xz(k + 2), j / SUB);
+      if (dense.length) {
+        const [px, pz] = dense[dense.length - 1];
+        len += Math.hypot(q[0] - px, q[1] - pz);
       }
-      const e = piecePos(p, pd.len);
-      x = e.x;
-      z = e.z;
-      h = e.h;
-      s += pd.len;
+      if (j === 0) nodeS.push(len);
+      dense.push(q);
     }
-    sections.push({ kind: ps.kind, name: ps.name, s0, s1: s, hw: ps.hw, xMin, xMax: Math.max(xMax, x), heading: h });
-  });
-
-  // 2. Shift so the Embarcadero starts where it always has, on the pier axis (z = 0).
-  const emb = sections.find((q) => q.kind === 'embarcadero')!;
-  const embPiece = pieces.find((p) => p.s0 === emb.s0)!;
-  const dx = EMB_X - embPiece.x0;
-  const dz = -embPiece.z0;
-  for (const p of pieces) {
-    p.x0 += dx;
-    p.z0 += dz;
   }
-  for (const q of sections) {
-    q.xMin += dx;
-    q.xMax += dx;
-  }
-
-  // 3. Terrain profile, built backwards (uphill) from the Embarcadero at deck height.
-  const prof: [number, number][] = [];
-  let y = DECK_Y;
-  prof.push([EMB_X + EMB_LEN + PIER_LEN + 40, DECK_Y]);
-  prof.push([EMB_X, DECK_Y]);
-  for (let si = PLAN.indexOf(PLAN.find((q) => q.kind === 'embarcadero')!) - 1; si >= 0; si--) {
-    const ps = PLAN[si];
-    const sec = sections[si];
-    const w = sec.xMax - sec.xMin;
-    if (ps.kind === 'lombard') y += LOMBARD.drop;
-    else if (ps.kind === 'corner' || ps.kind === 'hyde') y += 0;
-    else y += -(ps.grade ?? 0) * w;
-    prof.push([sec.xMin, y]);
-  }
-  prof.push([sections[0].xMin - 600, y]);
-  prof.reverse();
-  // Merge duplicate x breakpoints (the flat Hyde band has zero-width sections in x).
-  PROFILE = prof.filter((p, i) => i === 0 || p[0] > prof[i - 1][0] + 1e-9 || p[1] !== prof[i - 1][1]);
-
-  // 4. Sample the centreline.
-  const total = s;
-  const n = Math.floor(total / DS) + 1;
-  const points: CoursePoint[] = [];
-  let pi = 0;
-  for (let i = 0; i < n; i++) {
-    const si = Math.min(i * DS, total);
-    while (pi < pieces.length - 1 && si >= pieces[pi].s0 + pieces[pi].len) pi++;
-    const p = pieces[pi];
-    const q = piecePos(p, si - p.s0);
-    const sec = sections[p.sec];
-    points.push({
-      s: si,
-      x: q.x,
-      y: 0,
-      z: q.z,
-      tx: Math.cos(q.h),
-      tz: Math.sin(q.h),
-      heading: q.h,
-      grade: 0,
-      curv: p.k,
-      hw: sec.hw,
-      edgeL: 'curb',
-      edgeR: 'curb',
-      sec: p.sec,
-    });
-  }
-  // The last sample sits exactly on the lip.
   {
-    const p = pieces[pieces.length - 1];
-    const q = piecePos(p, p.len);
-    const last = points[points.length - 1];
-    if (last.s < total - 1e-9) {
-      points.push({ ...last, s: total, x: q.x, z: q.z });
-    }
+    const [px, pz] = dense[dense.length - 1];
+    len += Math.hypot(dense[0][0] - px, dense[0][1] - pz);
+    dense.push(dense[0]);
   }
+  const total = len;
+  // Cumulative arc length of the dense polyline.
+  const cum = new Float64Array(dense.length);
+  for (let i = 1; i < dense.length; i++) cum[i] = cum[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
 
-  // 5. Heights: the terrain for the city streets, a steady descent along Lombard's switchbacks, and
-  // the ramp for the kicker.
-  const lomb = sections.find((q) => q.kind === 'lombard')!;
-  const kick = sections.find((q) => q.kind === 'kicker')!;
-  const lombY0 = terrainY(lomb.xMin);
-  const lombY1 = terrainY(lomb.xMax);
-  for (const pt of points) {
-    const sec = sections[pt.sec];
-    if (sec.kind === 'lombard') pt.y = lombY0 + ((lombY1 - lombY0) * (pt.s - sec.s0)) / (sec.s1 - sec.s0);
-    else if (sec.kind === 'kicker') pt.y = DECK_Y + (pt.s - kick.s0) * KICKER_GRADE;
-    else pt.y = terrainY(pt.x);
+  // 2. Height: straight grades between nodes, rounded at each node.
+  // The heights sit on the nodes snapped to the sample grid, so a sharp crest falls exactly on a
+  // sample: the whole change of grade then lands in one step (as it does at the city's crossings).
+  const nodeY = nodeS.map((s) => Math.round(s / DS) * DS);
+  /** Arc length where span k (node k to node k + 1) ends; the last span ends back at node 0. */
+  const spanEnd = (k: number): number => (k + 1 < N ? nodeY[k + 1] : total);
+  const segGrade = (k: number): number => {
+    k = ((k % N) + N) % N;
+    return (at(k + 1).y - at(k).y) / (spanEnd(k) - nodeY[k]);
+  };
+  const height = (s: number): number => {
+    // Which span, and the straight-grade height along it.
+    let k = N - 1;
+    for (let i = 0; i < N; i++) {
+      if (s < spanEnd(i)) {
+        k = i;
+        break;
+      }
+    }
+    let y = at(k).y + segGrade(k) * (s - nodeY[k]);
+    // The vertical curves round the span's two end nodes (node 0 sits at both 0 and the length).
+    for (const [kk, sk] of [
+      [k, nodeY[k]],
+      [k + 1, spanEnd(k)],
+    ] as [number, number][]) {
+      const R = at(kk).round ?? 14;
+      if (R <= 0) continue;
+      const x = s - (sk - R / 2);
+      if (x < 0 || x > R) continue;
+      const g1 = segGrade(kk - 1);
+      const g2 = segGrade(kk);
+      const yk = at(kk).y;
+      // Replace this span's straight grade with the parabola from g1 to g2 centred on the node.
+      const yLine = s < sk ? yk + g1 * (s - sk) : yk + g2 * (s - sk);
+      const yCurve = yk - g1 * (R / 2) + g1 * x + ((g2 - g1) * x * x) / (2 * R);
+      y += yCurve - yLine;
+    }
+    return y;
+  };
+
+  // 3. Sample every DS metres (the last sample sits exactly on the first).
+  const secAt = (s: number): number => {
+    let si = 0;
+    for (let i = 0; i < def.sections.length; i++) if (s >= nodeS[def.sections[i].from]) si = i;
+    return si;
+  };
+  const points: CoursePoint[] = [];
+  let j = 0;
+  let heading = 0;
+  let prevRaw = 0;
+  for (let i = 0; i * DS < total - 1e-6; i++) {
+    const s = i * DS;
+    while (j < dense.length - 2 && cum[j + 1] < s) j++;
+    const f = (s - cum[j]) / Math.max(1e-9, cum[j + 1] - cum[j]);
+    const x = dense[j][0] + (dense[j + 1][0] - dense[j][0]) * f;
+    const z = dense[j][1] + (dense[j + 1][1] - dense[j][1]) * f;
+    // Tangent from the dense polyline around this point.
+    const ja = Math.max(0, j - 2);
+    const jb = Math.min(dense.length - 1, j + 3);
+    const raw = Math.atan2(dense[jb][1] - dense[ja][1], dense[jb][0] - dense[ja][0]);
+    if (i === 0) heading = raw;
+    else {
+      let dh = raw - prevRaw;
+      while (dh > Math.PI) dh -= 2 * Math.PI;
+      while (dh < -Math.PI) dh += 2 * Math.PI;
+      heading += dh;
+    }
+    prevRaw = raw;
+    const si = secAt(s);
+    const sd = def.sections[si];
+    points.push({ s, x, y: height(s), z, tx: Math.cos(heading), tz: Math.sin(heading), heading, grade: 0, curv: 0, hw: sd.hw, edgeL: sd.edgeL, edgeR: sd.edgeR, sec: si });
+  }
+  {
+    // Close the loop: the last sample is the first one again, a whole turn on.
+    const p0 = points[0];
+    const turn = Math.round((points[points.length - 1].heading - p0.heading) / (2 * Math.PI)) * 2 * Math.PI;
+    points.push({ ...p0, s: total, heading: p0.heading + turn, sec: points[points.length - 1].sec });
   }
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
-    a.grade = (b.y - a.y) / (b.s - a.s);
+    a.curv = (b.heading - a.heading) / (b.s - a.s);
   }
-  points[points.length - 1].grade = KICKER_GRADE;
+  points[points.length - 1].curv = points[0].curv;
 
-  // 6. Edges. Lombard's flower beds are hedges; the Embarcadero lanes are open (invisible walls, the
-  // Waymos cross there); the pier and kicker have rails; corner outsides get tyre barriers.
-  for (const pt of points) {
-    const sec = sections[pt.sec];
-    let l: EdgeKind = 'curb';
-    let r: EdgeKind = 'curb';
-    if (sec.kind === 'lombard') {
-      const out = (side: number): EdgeKind => {
-        const ox = pt.x + -pt.tz * side * (pt.hw + 1.5);
-        const oz = pt.z + pt.tx * side * (pt.hw + 1.5);
-        const inBand = Math.abs(oz) < LOMBARD.bandHalf - 0.6 && ox > lomb.xMin + 1 && ox < lomb.xMax - 1;
-        return inBand ? 'hedge' : 'curb';
-      };
-      l = out(-1);
-      r = out(1);
-    } else if (sec.kind === 'corner') {
-      // The outside of the turn gets tyre barriers.
-      if (pt.curv > 0) l = 'barrier';
-      else r = 'barrier';
-    } else if (sec.kind === 'embarcadero') {
-      l = r = 'open';
-    } else if (sec.kind === 'pier' || sec.kind === 'kicker') {
-      l = r = 'rail';
+  // 4. Sections.
+  const sections: Section[] = def.sections.map((sd, si) => {
+    const s0 = nodeS[sd.from];
+    const s1 = si + 1 < def.sections.length ? nodeS[def.sections[si + 1].from] : total;
+    let xMin = Infinity;
+    let xMax = -Infinity;
+    let h = 0;
+    for (const p of points) {
+      if (p.sec !== si) continue;
+      xMin = Math.min(xMin, p.x);
+      xMax = Math.max(xMax, p.x);
+      h = p.heading;
     }
-    pt.edgeL = l;
-    pt.edgeR = r;
-  }
-
-  // 7. Features.
-  const bumps: { s: number; sec: number }[] = [];
-  const crosswalks: { s0: number; s1: number }[] = [];
-  sections.forEach((sec, si) => {
-    if (sec.kind === 'intersection') {
-      bumps.push({ s: (sec.s0 + sec.s1) / 2, sec: si });
-      crosswalks.push({ s0: sec.s0 - 3.4, s1: sec.s0 - 0.6 });
-      crosswalks.push({ s0: sec.s1 + 0.6, s1: sec.s1 + 3.4 });
-    }
-    if (sec.kind === 'embarcadero') crosswalks.push({ s0: sec.s0 + 1, s1: sec.s0 + 3.8 });
+    return { kind: sd.kind, name: sd.name, s0, s1, hw: sd.hw, xMin, xMax, heading: h };
   });
 
-  const lipPt = points[points.length - 1];
-  const startS = 33;
-  const pier = sections.find((q) => q.kind === 'pier')!;
-  const hyde = sections.find((q) => q.kind === 'hyde')!;
+  const startS = def.startS;
   const course: Course = {
+    id: def.id,
+    loop: true,
     points,
     sections,
     length: total,
-    bumps,
-    crosswalks,
-    lip: {
-      s: total,
-      x: lipPt.x,
-      y: lipPt.y,
-      z: lipPt.z,
-      angle: KICKER_ANGLE,
-      cos: 1 / Math.sqrt(1 + KICKER_GRADE * KICKER_GRADE),
-      sin: KICKER_GRADE / Math.sqrt(1 + KICKER_GRADE * KICKER_GRADE),
-    },
+    bumps: [],
+    crosswalks: [],
+    lip: null,
     startS,
     grid: [
       { s: startS - 3.2, d: -3 },
       { s: startS - 3.2, d: 3 },
     ],
-    startY: points[0].y,
-    deckY: DECK_Y,
-    embX: EMB_X,
-    shoreX: EMB_X + EMB_LEN,
-    kickerX: EMB_X + EMB_LEN + PIER_LEN,
-    marks: {
-      hydeS0: hyde.s0,
-      hydeS1: hyde.s1,
-      lombardS0: lomb.s0,
-      lombardS1: lomb.s1,
-      embS0: emb.s0,
-      pierS0: pier.s0,
-      kickerS0: kick.s0,
-    },
-    laneZ: LANE_Z,
+    startY: height(startS),
+    wideViews: def.wideViews ?? [],
+    followGrade: def.followGrade ?? 0.8,
+    garden: null,
+    index: new Map(),
   };
-  buildIndex(course);
+  // The loop's last sample closes onto the first, so its grade is the first one's.
+  finishCourse(course, 0);
+  points[points.length - 1].grade = points[0].grade;
   return course;
 }
 
@@ -452,31 +365,51 @@ function buildCourse(): Course {
 
 /** Spatial hash of the samples for global lookups (landing after a jump, placing things). */
 const CELL = 6;
-let GRID = new Map<number, number[]>();
 const key = (cx: number, cz: number): number => (cx + 4096) * 8192 + (cz + 4096);
 
-function buildIndex(c: Course): void {
-  GRID = new Map();
+function buildIndex(c: Course): Map<number, number[]> {
+  const grid = new Map<number, number[]>();
   c.points.forEach((p, i) => {
     const k = key(Math.floor(p.x / CELL), Math.floor(p.z / CELL));
-    let list = GRID.get(k);
-    if (!list) GRID.set(k, (list = []));
+    let list = grid.get(k);
+    if (!list) grid.set(k, (list = []));
     list.push(i);
   });
+  return grid;
 }
 
-export const COURSE: Course = buildCourse();
-/** The old name, kept for the modules that only need the lip and the waterfront. */
-export const TRACK = COURSE;
+/** An arc length on the course: wrapped onto [0, length) on a loop, as it is otherwise. */
+export function wrapS(c: Course, s: number): number {
+  if (!c.loop) return s;
+  const L = c.length;
+  return ((s % L) + L) % L;
+}
 
-/** Index of the sample at or before s (clamped). */
+/** How far `b` is ahead of `a` along the course (negative behind); on a loop the short way round. */
+export function deltaS(c: Course, a: number, b: number): number {
+  const d = b - a;
+  if (!c.loop) return d;
+  const L = c.length;
+  return d - Math.round(d / L) * L;
+}
+
+/** Did a car going from s0 to s1 (one step) cross arc length `at` forwards? */
+export function crossedS(c: Course, s0: number, s1: number, at: number): boolean {
+  if (!c.loop) return s0 < at && s1 >= at;
+  const d = deltaS(c, s0, s1);
+  if (d <= 0) return false;
+  const u = deltaS(c, s0, at);
+  return u > 0 && u <= d;
+}
+
 export function indexAt(c: Course, s: number): number {
-  const i = Math.floor(s / DS);
+  const i = Math.floor(wrapS(c, s) / DS);
   return Math.min(Math.max(i, 0), c.points.length - 2);
 }
 
-/** Interpolated centreline point at arc length s (clamped to the course). */
+/** Interpolated centreline point at arc length s (clamped to the course, or wrapped on a loop). */
 export function pointAt(c: Course, s: number, out?: CoursePoint): CoursePoint {
+  s = wrapS(c, s);
   const i = indexAt(c, s);
   const a = c.points[i];
   const b = c.points[i + 1];
@@ -502,6 +435,7 @@ export function pointAt(c: Course, s: number, out?: CoursePoint): CoursePoint {
 
 /** Road height at arc length s. */
 export function heightAt(c: Course, s: number): number {
+  s = wrapS(c, s);
   const i = indexAt(c, s);
   const a = c.points[i];
   const b = c.points[i + 1];
@@ -531,7 +465,7 @@ function project(c: Course, i: number, x: number, z: number): { s: number; d: nu
   const d = (x - px) * rx + (z - pz) * rz;
   const dx = x - px;
   const dz = z - pz;
-  return { s: a.s + (b.s - a.s) * f, d, dist2: dx * dx + dz * dz };
+  return { s: wrapS(c, a.s + (b.s - a.s) * f), d, dist2: dx * dx + dz * dz };
 }
 
 /**
@@ -540,9 +474,37 @@ function project(c: Course, i: number, x: number, z: number): { s: number; d: nu
  * it on the right leg).
  */
 export function locate(c: Course, x: number, z: number, sHint: number, window = 6, out?: Located): Located {
+  let best: number;
+  if (c.loop) {
+    // Walk the samples either side of the hint, round the seam if need be.
+    const segs = c.points.length - 1;
+    const k0 = Math.floor((sHint - window) / DS);
+    const k1 = Math.floor((sHint + window) / DS);
+    best = 0;
+    let bestD = Infinity;
+    for (let k = k0; k <= k1; k++) {
+      const i = ((k % segs) + segs) % segs;
+      const p = c.points[i];
+      const dx = x - p.x;
+      const dz = z - p.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD) {
+        bestD = d2;
+        best = i;
+      }
+    }
+    let r = project(c, best, x, z);
+    const r2 = project(c, (best - 1 + segs) % segs, x, z);
+    if (r2.dist2 < r.dist2) r = r2;
+    const o = out ?? { s: 0, d: 0, i: 0 };
+    o.s = r.s;
+    o.d = r.d;
+    o.i = indexAt(c, r.s);
+    return o;
+  }
   const i0 = Math.max(0, indexAt(c, sHint - window));
   const i1 = Math.min(c.points.length - 2, indexAt(c, sHint + window));
-  let best = i0;
+  best = i0;
   let bestD = Infinity;
   for (let i = i0; i <= i1; i++) {
     const p = c.points[i];
@@ -575,9 +537,11 @@ export function roadsAt(c: Course, x: number, z: number): Located[] {
   const cx = Math.floor(x / CELL);
   const cz = Math.floor(z / CELL);
   const cand = new Set<number>();
+  const last = c.points.length - 1;
   for (let ix = cx - 2; ix <= cx + 2; ix++) {
     for (let iz = cz - 2; iz <= cz + 2; iz++) {
-      for (const i of GRID.get(key(ix, iz)) ?? []) cand.add(i);
+      // (A loop's closing sample is its first one again.)
+      for (const i of c.index.get(key(ix, iz)) ?? []) if (!(c.loop && i === last)) cand.add(i);
     }
   }
   // Group candidate samples into contiguous runs (one per stretch of road passing by) and take the

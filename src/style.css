@@ -2033,3 +2033,88 @@ kbd {
   border-radius: 999px;
   white-space: nowrap;
 }
+
+/* ---------- Lap races ---------- */
+
+.hud-car .lapc {
+  align-self: center;
+  font-size: max(0.8rem, 11.5px);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 0.14rem 0.5rem;
+  border-radius: 0.5rem;
+  color: var(--paper);
+  background: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hud-car .lapc.final {
+  background: #c62f35;
+  animation: itempop 0.3s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+.hud-car .lapc.hidden {
+  display: none;
+}
+
+/* HYPE only pays off at the kicker, so a lap race doesn't show it. */
+.hud.race .meter.hype {
+  display: none;
+}
+
+/* ---------- The event picker (garage) ---------- */
+
+.events {
+  display: flex;
+  gap: 0.4rem;
+  pointer-events: auto;
+}
+
+.events .event {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.05rem;
+  padding: 0.35rem 0.9rem 0.4rem;
+  border-radius: 0.9rem;
+  border: 0.18rem solid var(--line);
+  background: rgba(255, 253, 247, 0.9);
+  box-shadow: var(--shadow);
+  line-height: 1.15;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.events .event:hover {
+  transform: translateY(-0.08rem);
+}
+
+.events .event .ev-mode {
+  font-size: max(0.68rem, 10px);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.events .event .ev-name {
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.events .event.on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.events .event.on .ev-mode {
+  color: #ffd23f;
+}
+
+.wind .where {
+  font-size: max(0.7rem, 10.5px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+}
