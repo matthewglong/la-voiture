@@ -527,7 +527,7 @@ export class BuildUI {
         b.type = 'button';
         b.dataset.map = m.id;
         b.setAttribute('role', 'radio');
-        el('span', 'ev-mode', b, m.mode === 'race' ? `🏁 Race · ${m.laps} laps` : '🪂 Long jump');
+        el('span', 'ev-mode', b, m.rules.chip(m.course, m.laps));
         el('span', 'ev-name', b, m.name);
         b.title = m.blurb;
         b.addEventListener('click', (e) => {
@@ -553,7 +553,7 @@ export class BuildUI {
     this.view = view;
     this.roundChip.textContent = `ROUND ${view.round}`;
     this.renderEvents(view);
-    renderWind(this.wind, view.wind, 'WIND FORECAST', view.map.mode === 'race' ? 'on the straight' : undefined);
+    renderWind(this.wind, view.wind, 'WIND FORECAST', view.map.windWhere);
 
     const ready = PLAYERS.filter((p) => view.garage.builds[p].ready);
     this.banner.replaceChildren();
@@ -679,7 +679,7 @@ export class BuildUI {
         t.btn.classList.toggle('fitted', on);
         t.btn.setAttribute('aria-pressed', String(on));
         const best = view.soloBests[id];
-        t.best.textContent = best === undefined ? '' : view.map.mode === 'race' ? `best ${fmtTime(best)}` : `best ${best.toFixed(1)} m`;
+        t.best.textContent = best === undefined ? '' : `best ${view.map.rules.format(best)}`;
         t.best.classList.toggle('hidden', best === undefined);
       }
       refs.train.keys.textContent = view.pads[0]

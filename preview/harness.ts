@@ -2,7 +2,7 @@
 // Open /preview/<name>.html?view=<view>. window.__previewReady turns true after the first frames.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { createWorld } from '../src/scene/world';
+import { createWorld, type World } from '../src/scene/world';
 
 export interface PreviewView {
   pos: [number, number, number];
@@ -21,7 +21,7 @@ declare global {
 }
 
 export function startPreview(opts: {
-  build: (scene: THREE.Scene) => PreviewModule | void;
+  build: (scene: THREE.Scene, world: World) => PreviewModule | void;
   views: Record<string, PreviewView>;
   defaultView: string;
   /** Adds a flat placeholder bay at y=0 (the real animated water lives in the game). */
@@ -46,7 +46,7 @@ export function startPreview(opts: {
     scene.add(water);
   }
 
-  const mod = opts.build(scene) || {};
+  const mod = opts.build(scene, world) || {};
   const params = new URLSearchParams(location.search);
   const view = opts.views[params.get('view') ?? opts.defaultView] ?? opts.views[opts.defaultView];
   camera.position.set(...view.pos);

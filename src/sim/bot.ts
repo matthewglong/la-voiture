@@ -4,8 +4,8 @@
 // and the automated tests. Deterministic; no Three.js or DOM imports.
 import { DS, deltaS, indexAt, locate, pointAt, toWorld, type Course, type CoursePoint } from '../track';
 import type { PlayerIndex } from '../types';
-import { G, RHO } from './physics';
-import { CORNER_GRIP, DRIFT_GRIP, DRIFT_MIN, MAX_YAW, OVERSTEER, TOPUP, type CarInput, type ItemKind, type RaceCar, type RaceSim } from './race';
+import { G, brakeDecel, cornerGrip, cornerSpeed, driftGrip, flatLoad, maxYawRate, topSpeedIn, windAlong } from './physics';
+import { DRIFT_MIN, TOPUP, type CarInput, type ItemKind, type RaceCar, type RaceSim } from './race';
 
 interface Line {
   /** Lateral offset of the line at each course sample. */
@@ -296,23 +296,22 @@ export class Bot {
     const P = c.points;
     const n = P.length;
     const v = new Float64Array(n);
-    const aDown = (0.5 * RHO * k.downforce) / k.mass;
     const safety = 0.92 * this.opt.skill;
-    const muC = k.mu * CORNER_GRIP;
+    const slide = driftGrip(k, flatLoad(k)) * BOT_BITE;
     for (let i = 0; i < n; i++) {
       const kap = Math.max(this.line.k[i], 1e-4);
-      // mu (g + aDown v^2) = kap v^2  ->  v^2 = mu g / (kap - mu aDown)
-      const den = kap - muC * aDown;
-      let lim = den > 1e-6 ? Math.sqrt((muC * G) / den) : 60;
+      // The sim's grip with the wing's downforce (see cornerSpeed); no limit on the line: 60.
+      const corner = cornerSpeed(k, kap);
+      let lim = Number.isFinite(corner) ? corner : 60;
       // Drifting through a big corner: the slide's grip, with a margin to correct in, round the
       // corner's average bend (a drift sweeps wide round the line's tightest kink).
       const dc = this.cornerAt(P[i].s, 0);
-      if (dc) lim = Math.max(lim, Math.sqrt(k.mu * DRIFT_GRIP * BOT_BITE * G * dc.rAvg));
+      if (dc) lim = Math.max(lim, Math.sqrt(slide * dc.rAvg));
       // Can't turn tighter than the steering allows at any speed.
       if (kap > 1 / k.turnRadius) lim = Math.min(lim, 3);
       v[i] = Math.min(60, lim * safety);
     }
-    const brake = Math.min(k.mu * G, k.brakeForce / k.mass) * 0.85 * this.opt.skill;
+    const brake = brakeDecel(k) * 0.85 * this.opt.skill;
     // Braking back from what's ahead (on a loop twice round, so the end of the lap brakes for the
     // first corner of the next).
     const passes = c.loop ? 2 : 1;
@@ -393,8 +392,7 @@ export class Bot {
     let ang = wrap(Math.atan2(dz, dx) - car.heading);
     if (fwd < -0.5) ang = wrap(ang + Math.PI);
     const kappa = (2 * Math.sin(ang)) / dist;
-    const gripAcc = k.mu * CORNER_GRIP * G;
-    const wMax = Math.min(Math.max(Math.abs(fwd), 0.5) / k.turnRadius, (gripAcc / Math.max(Math.abs(fwd), 2)) * OVERSTEER, MAX_YAW);
+    const wMax = maxYawRate(k, Math.max(Math.abs(fwd), 0.5), cornerGrip(k, flatLoad(k)));
     out.steer = clamp((kappa * Math.max(Math.abs(fwd), 1)) / Math.max(wMax, 0.05), -1, 1);
     // Facing backwards (after a knock, or a landing the wrong way round): turn round. The first
     // swing takes the nose away from the nearer wall (the short way round can be straight into it).
@@ -539,7 +537,7 @@ export class Bot {
       const dist = Math.max(1, Math.hypot(dx, dz));
       const e = wrap(Math.atan2(dz, dx) - Math.atan2(car.vz, car.vx));
       const want = ((2 * Math.sin(e)) / dist) * v * car.drift;
-      const bite = (want * Math.max(v, 4)) / (k.mu * DRIFT_GRIP * G);
+      const bite = (want * Math.max(v, 4)) / driftGrip(k, flatLoad(k));
       out.steer = car.drift * clamp((bite - 0.55) / 0.45, -1, 1);
       if (out.brake > 0) out.brake = Math.min(out.brake, 0.6);
     }
@@ -550,7 +548,7 @@ export class Bot {
     if (!lip) return;
     const toLip = this.sim.course.length - car.s;
     const straight = !this.cornerAt(car.s, 25 + v) && car.drift === 0 && car.grounded;
-    const reach = (k.topSpeed + 0.3 * this.sim.wind) * 0.95;
+    const reach = topSpeedIn(k, windAlong(this.sim.wind, car.heading, this.sim.course.loop)) * 0.95;
     if (car.boostFrac > 0.5 && straight && v < reach && car.s < lip.finalS0 && toLip > 150) out.boost = true;
   }
 
@@ -573,8 +571,8 @@ export class Bot {
         consider(loc.s, loc.d, 1.6, true);
       }
     }
-    if (sim.cable) {
-      const loc = locate(c, sim.cable.x, sim.cable.z, car.s + 10, 30);
+    for (const cb of sim.cables) {
+      const loc = locate(c, cb.x, cb.z, car.s + 10, 30);
       if (Math.abs(loc.d) < 8) consider(loc.s - 3, loc.d, 1.6, true);
       if (Math.abs(loc.d) < 8) consider(loc.s + 3, loc.d, 1.6, true);
     }

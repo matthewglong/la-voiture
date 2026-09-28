@@ -1,11 +1,13 @@
-// Dev preview of the SF street, pier and kicker.
-// /preview/city.html?view=start|startLow|midhill|chase2|intersection|pier|kicker|embarcadero|aerial[&stats=1]
+// Dev preview of the SF street, pier and kicker (as the game builds it: the venue, the course's
+// shared start line and gantry, the kicker and the Bay). ?map=russian-hill-race dresses it for the
+// race (the finish band on the kicker).
+// /preview/city.html?view=start|startLow|midhill|chase2|intersection|pier|kicker|kickerTop|embarcadero|aerial[&stats=1]
 import * as THREE from 'three';
-import { buildCity } from '../src/scene/city';
+import { RUSSIAN_HILL_MAP, mapById } from '../src/maps';
+import { mapScene } from '../src/scene/maps';
 import { startPreview } from './harness';
 
 startPreview({
-  water: true,
   defaultView: 'start',
   views: {
     start: { pos: [-12, 44, 0], target: [40, 30, 0] },
@@ -21,12 +23,13 @@ startPreview({
     housesL: { pos: [100, 26, 4], target: [112, 24, -14] },
     pier: { pos: [280, 14, 70], target: [285, 5, 0] },
     kicker: { pos: [305, 11, 26], target: [297, 6, 0] },
+    kickerTop: { pos: [268, 17, 7], target: [296, 7, 0] },
     embarcadero: { pos: [205, 16, 40], target: [240, 6, 0] },
     aerial: { pos: [-120, 170, 230], target: [120, 10, 0] },
   },
-  build: (scene: THREE.Scene) => {
+  build: (scene, world) => {
     const t0 = performance.now();
-    const city = buildCity();
+    const city = mapScene(mapById(new URLSearchParams(location.search).get('map')) ?? RUSSIAN_HILL_MAP, world);
     const buildMs = performance.now() - t0;
     scene.add(city.group);
     if (new URLSearchParams(location.search).has('stats')) {
@@ -44,6 +47,6 @@ startPreview({
       div.textContent = `city meshes (draw calls/pass): ${calls}  triangles: ${Math.round(tris).toLocaleString()}  build: ${buildMs.toFixed(0)} ms`;
       document.body.appendChild(div);
     }
-    return { update: (dt: number, t: number) => city.update(dt, t) };
+    return { update: (dt: number, t: number) => city.update(dt, t, []) };
   },
 });

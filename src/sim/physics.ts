@@ -1,11 +1,95 @@
-// Shared physics: constants, a seeded RNG and the flight model from the lip to the splash.
-// No Three.js or DOM imports: the game, the bots and scripts/balance.ts share it exactly.
+// Shared physics: constants, a seeded RNG, the road-handling model and the flight model from the
+// lip to the splash. No Three.js or DOM imports: the race sim (every map, every mode), the CPU and
+// the balance scripts share it exactly. The sim drives with these formulas and the CPU plans with
+// the same ones, so a change here reaches every map, every mode and the CPU's judgement at once.
 import type { CarStats } from '../types';
 
 export const RHO = 1.225;
 export const G = 9.81;
 export const DT = 1 / 120;
 export const MAX_FLIGHT_TIME = 30;
+
+// ---------------------------------------------------------------------------------------------
+// Road handling
+
+/** Arcade tyres: cornering grip is this multiple of the tyres' friction (braking and traction are not). */
+export const CORNER_GRIP = 1.6;
+/** Full lock turns the nose this much faster than the tyres can follow: a touch of oversteer. */
+export const OVERSTEER = 1.15;
+/** The fastest the nose can swing round (rad/s). */
+export const MAX_YAW = 3.3;
+/** Sideways grip while sliding with the wheel turned into it (× the tyres' friction): tighter than
+ *  plain cornering (CORNER_GRIP), which is what makes a drift the fast way round. */
+export const DRIFT_GRIP = 2.4;
+/** How much the wind shifts an engine's top speed (m/s per m/s of tailwind along the car). */
+export const WIND_TOP = 0.3;
+
+/** The tyres' load (N): the car's weight into a slope whose cos is `cosT`, plus the wing's downforce
+ *  at this speed² (m²/s²). */
+export function normalLoad(k: CarStats, cosT: number, speed2: number): number {
+  return k.mass * G * cosT + 0.5 * RHO * k.downforce * speed2;
+}
+
+/** The load on the flat at a standstill (what the CPU plans with). */
+export function flatLoad(k: CarStats): number {
+  return normalLoad(k, 1, 0);
+}
+
+/** Sideways force the tyres can hold while gripping (N), under load N. */
+export function cornerForce(k: CarStats, N: number): number {
+  return k.mu * CORNER_GRIP * N;
+}
+
+/** Sideways acceleration the tyres can hold while gripping (m/s²), under load N. */
+export function cornerGrip(k: CarStats, N: number): number {
+  return cornerForce(k, N) / k.mass;
+}
+
+/** Sideways acceleration of a full-bite drift (m/s²), under load N. */
+export function driftGrip(k: CarStats, N: number): number {
+  return (k.mu * DRIFT_GRIP * N) / k.mass;
+}
+
+/** How fast the nose can turn at speed v (rad/s): the steering's tightest circle, what the grip
+ *  (`gripAcc`, from cornerGrip) allows with a touch of oversteer, and never past MAX_YAW. */
+export function maxYawRate(k: CarStats, v: number, gripAcc: number): number {
+  return Math.min(v / k.turnRadius, (gripAcc / Math.max(v, 2)) * OVERSTEER, MAX_YAW);
+}
+
+/**
+ * The fastest a car can hold a bend of curvature kappa (1/m) on the flat while gripping, with the
+ * wing's downforce growing with speed: mu·CORNER_GRIP·(g + aDown v²) = kappa v². Infinity when the
+ * downforce keeps up with any speed.
+ */
+export function cornerSpeed(k: CarStats, kappa: number): number {
+  const aDown = (0.5 * RHO * k.downforce) / k.mass;
+  const muC = k.mu * CORNER_GRIP;
+  const den = kappa - muC * aDown;
+  return den > 1e-6 ? Math.sqrt((muC * G) / den) : Infinity;
+}
+
+/** The hardest a car can brake on the flat (m/s²): the brakes, or the tyres' grip if that's less. */
+export function brakeDecel(k: CarStats): number {
+  return Math.min(k.mu * G, k.brakeForce / k.mass);
+}
+
+/**
+ * The wind blows along +x, the way every map points its course's main run (Russian Hill's, down to
+ * the Bay; Twin Peaks' start straight). Drag and flight feel it as a vector; this is how much of it
+ * shifts the engine's top speed for a car heading `heading` (negative: in its face). Round a loop
+ * that's the part along the car. Point to point it's the whole wind wherever the car points: the
+ * long jump was balanced that way, and the part along the car tips one glider build over the
+ * balance check's headwind rule (see "Wind along the car" in DECISIONS.md). This is the one place
+ * the rule differs by course, and the sim and the CPU both read it from here.
+ */
+export function windAlong(wind: number, heading: number, loop: boolean): number {
+  return loop ? wind * Math.cos(heading) : wind;
+}
+
+/** The speed the engine stops pushing at (m/s), with `windAlong` m/s of tailwind along the car. */
+export function topSpeedIn(k: CarStats, windAlong: number): number {
+  return k.topSpeed + WIND_TOP * windAlong;
+}
 
 /** Deterministic PRNG (mulberry32). */
 export function makeRng(seed: number): () => number {

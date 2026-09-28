@@ -1,6 +1,8 @@
-// The Bay: animated water, distance buoys with labels, and the session-record flag buoy.
+// The water beyond a kicker (the Bay, on Russian Hill): animated water, distance buoys in both lanes
+// with labels, and the session-record flag buoy. Laid out from any course's lip: the buoys run out
+// the way the kicker points, every BUOY_SPACING metres, in line with the grid's two lanes.
 import * as THREE from 'three';
-import { LANE_Z, RUSSIAN_HILL } from '../maps/russianHill';
+import type { Lip } from '../track';
 import { canvasTexture } from './util';
 
 export interface Bay {
@@ -101,10 +103,11 @@ function makeLabel(text: string, big: boolean, height: number): THREE.Sprite {
   return sprite;
 }
 
-export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } = {}): Bay {
+export function buildBay(lip: Lip, lanes: readonly number[], opts: { envMap?: THREE.Texture; anisotropy?: number } = {}): Bay {
   const group = new THREE.Group();
   group.name = 'bay';
-  const lip = RUSSIAN_HILL.lip!;
+  // A point d metres out from the lip along the jump, `side` metres to the right of its line.
+  const out = (d: number, side = 0): { x: number; z: number } => ({ x: lip.x + lip.tx * d - lip.tz * side, z: lip.z + lip.tz * d + lip.tx * side });
 
   // Water: one big plane, two scrolling ripple layers (normal map + clearcoat normal map).
   const normals = makeWaterNormals(256, 7);
@@ -132,7 +135,8 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
   });
   const water = new THREE.Mesh(new THREE.PlaneGeometry(size, size), waterMat);
   water.rotation.x = -Math.PI / 2;
-  water.position.set(lip.x + 1500, 0, 0);
+  const far = out(1500);
+  water.position.set(far.x, lip.waterY, far.z);
   water.receiveShadow = true;
   water.name = 'water';
   group.add(water);
@@ -157,7 +161,8 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
   const labels: THREE.Sprite[] = [];
   for (let d = BUOY_SPACING; d <= BUOY_MAX; d += BUOY_SPACING) {
     const big = d % 50 === 0;
-    for (const z of LANE_Z) {
+    for (const lane of lanes) {
+      const at = out(d, lane);
       const b = new THREE.Group();
       const body = new THREE.Mesh(buoyGeo, big ? yellow : orange);
       body.scale.y = 0.8;
@@ -171,17 +176,18 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
         p.position.y = 1.7;
         b.add(p);
       }
-      b.position.set(lip.x + d, 0, z);
+      b.position.set(at.x, lip.waterY, at.z);
       b.traverse((o) => {
         o.castShadow = true;
       });
       group.add(b);
-      floaters.push({ obj: b, x: lip.x + d, z, phase: d * 0.37 + z });
+      floaters.push({ obj: b, x: at.x, z: at.z, phase: d * 0.37 + lane });
     }
     // Labels float between the lanes so the two rows never overlap on screen.
     const label = makeLabel(big ? `${d} m` : `${d}`, big, big ? 4.2 : 2.1);
     labels.push(label);
-    label.position.set(lip.x + d, big ? 6.2 : 2.6, 0);
+    const mid = out(d);
+    label.position.set(mid.x, lip.waterY + (big ? 6.2 : 2.6), mid.z);
     // Drawn after the (transparent) flight trails so trails never scribble over the numbers.
     label.renderOrder = 5;
     group.add(label);
@@ -229,7 +235,9 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
       return;
     }
     best.visible = true;
-    best.position.set(lip.x + distance, 0, 0);
+    const at = out(distance);
+    best.position.set(at.x, lip.waterY, at.z);
+    best.rotation.y = -lip.heading;
     bestLabel = makeLabel(`BEST ${distance.toFixed(1)} m${holder ? ` · ${holder}` : ''}`, true, 2.6);
     bestLabel.position.set(0, 12.2, 0);
     bestLabel.renderOrder = 5;
@@ -246,7 +254,7 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
   const viewDir = new THREE.Vector3();
   const labelsFor = (camera: THREE.Camera): void => {
     camera.getWorldDirection(viewDir);
-    const opacity = THREE.MathUtils.clamp((0.88 - Math.abs(viewDir.x)) / 0.3, 0, 1);
+    const opacity = THREE.MathUtils.clamp((0.88 - Math.abs(viewDir.x * lip.tx + viewDir.z * lip.tz)) / 0.3, 0, 1);
     for (const l of labels) {
       l.material.opacity = opacity;
       l.visible = opacity > 0.02;
@@ -256,12 +264,12 @@ export function buildBay(opts: { envMap?: THREE.Texture; anisotropy?: number } =
     normals.offset.set(t * 0.012, t * 0.007);
     normals2.offset.set(-t * 0.009, t * 0.011);
     for (const f of floaters) {
-      f.obj.position.y = waveHeight(f.x, f.z, t) * 1.4;
+      f.obj.position.y = lip.waterY + waveHeight(f.x, f.z, t) * 1.4;
       f.obj.rotation.z = Math.sin(t * 1.1 + f.phase) * 0.12;
       f.obj.rotation.x = Math.cos(t * 0.9 + f.phase) * 0.1;
     }
     if (best.visible) {
-      best.position.y = waveHeight(best.position.x, 0, t);
+      best.position.y = lip.waterY + waveHeight(best.position.x, best.position.z, t);
       best.rotation.z = Math.sin(t * 0.8) * 0.05;
       const pos = flagGeo.getAttribute('position') as THREE.BufferAttribute;
       for (let i = 0; i < pos.count; i++) {

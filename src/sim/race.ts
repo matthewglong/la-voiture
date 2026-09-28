@@ -1,12 +1,18 @@
 // The race: two driven cars on the course, the traffic and tourists they dodge, the item boxes,
-// the HYPE they earn, and how it ends: the launch off the kicker into the flight model (the long
-// jump), or the chequered flag after the last lap (a race). Deterministic with a fixed step and a
-// seeded RNG; no Three.js or DOM imports (the bots and the balance check use it).
-import { RUSSIAN_HILL_MAP, type MapDef, type Mode } from '../maps';
+// the HYPE they earn, and how it ends. Every map and every mode runs through this one sim; the
+// map's course and the mode's rules (src/modes.ts) decide the ending: off the kicker into the flight
+// model (a course with a lip: the long jump scores the distance, a race the time to the lip), the
+// chequered flag after the last lap (a loop), or a finish line (point to point, no lip).
+// Deterministic with a fixed step and a seeded RNG; no Three.js or DOM imports (the bots and the
+// balance check use it).
+import { RUSSIAN_HILL_MAP, type MapDef } from '../maps';
+import type { ModeRules } from '../modes';
 import {
   WALL_HEIGHT,
   crossedS,
   deltaS,
+  gardenFrame,
+  gardenWorld,
   heightAt,
   indexAt,
   locate,
@@ -16,10 +22,25 @@ import {
   wrapS,
   type Course,
   type CoursePoint,
+  type Garden,
   type Located,
 } from '../track';
 import type { CarStats, PlayerIndex } from '../types';
-import { DT, G, MAX_FLIGHT_TIME, RHO, makeRng, stepFlightBody } from './physics';
+import {
+  DT,
+  G,
+  MAX_FLIGHT_TIME,
+  RHO,
+  cornerForce,
+  cornerGrip,
+  driftGrip,
+  makeRng,
+  maxYawRate,
+  normalLoad,
+  stepFlightBody,
+  topSpeedIn,
+  windAlong,
+} from './physics';
 
 // ---------------------------------------------------------------------------------------------
 // Tuning
@@ -29,11 +50,6 @@ export const HYPE_BOOST = 0.15;
 export const HYPE_MAX = 100;
 const REVERSE_FORCE = 2600;
 const REVERSE_MAX = 5;
-export const MAX_YAW = 3.3;
-/** Arcade tyres: cornering grip is this multiple of the tyres' friction (braking and traction are not). */
-export const CORNER_GRIP = 1.6;
-/** Full lock turns the nose this much faster than the tyres can follow: a touch of oversteer. */
-export const OVERSTEER = 1.15;
 const AIR_YAW = 0.9;
 // Drifting: tap the brake while turning at speed and the tail steps out. The slide's arc is set by
 // the wheel (Mario Kart style), not by a fragile slip angle, so it's easy to steer on keys.
@@ -52,9 +68,6 @@ const DRIFT_SLIP_MAX = 0.62;
 /** How hard the nose chases that angle (1/s), and the fastest it may yaw (rad/s). */
 const DRIFT_HOLD = 8;
 const DRIFT_YAW = 4.2;
-/** Sideways grip while sliding with the wheel turned into it (× the tyres' friction): tighter than
- *  plain cornering (CORNER_GRIP), which is what makes a drift the fast way round. */
-export const DRIFT_GRIP = 2.4;
 /** Share of that the slide keeps with the wheel let go (a wider arc) and counter-steered. */
 const DRIFT_BITE = 0.55;
 const DRIFT_BITE_OUT = 0.1;
@@ -73,8 +86,6 @@ export const BOOST_ACC = 6;
 export const BOOST_TOP = 1.1;
 /** Item top-up: share of the bottle it refills. */
 export const TOPUP = 0.5;
-/** How much the wind shifts an engine's top speed (m/s per m/s of tailwind). */
-const WIND_TOP = 0.3;
 /** How fast the nose eases back along the road when nobody is steering (rad/s). */
 const ASSIST = 0.35;
 /** How fast the smoothed wheel follows the stick or keys (full lock per second). */
@@ -87,11 +98,10 @@ const WALL_HARD = 8;
 const CAR_E = 0.35;
 /** After the first car finishes, the other has this long to reach the lip (or the flag). */
 export const STRAGGLER_TIME = 25;
-/** The long jump's time limit (s). A race allows its laps at a crawl (RACE_CRAWL m/s) plus a minute. */
-export const MAX_RACE_TIME = 150;
-const RACE_CRAWL = 6;
 /** A car that has taken the flag cruises on at about this speed (m/s), off the racing line. */
 const CRUISE_SPEED = 11;
+/** Past a point-to-point finish line, a car eases to a stop this far (m) short of the road's end. */
+const RUNOFF_STOP = 6;
 const ROULETTE_TIME = 0.9;
 /** Items a car can hold at once. */
 export const ITEM_SLOTS = 2;
@@ -103,8 +113,8 @@ const GULL_LIFE = 8;
 const SPIN_TIME = 1.05;
 const WAYMO_MASS = 2300;
 const PED_R = 0.42;
-/** Half-width of the road where the course crosses the Embarcadero. */
-const RH_CROSS = 7;
+/** Cross traffic drives this far (m) either side of the course, then comes round again out of sight. */
+const CROSS_REACH = 140;
 const POO_R = 0.55;
 const BOX_R = 1.25;
 /** Seconds without progress before a wedged car is put back on the road. */
@@ -314,10 +324,18 @@ export interface Waymo {
   vTarget: number;
   /** Where course traffic pulls over and parks. */
   sEnd: number;
-  /** Cross traffic: the lane's x and direction (+1 = +z), and roughly where on the course it crosses. */
+  /** Cross traffic: where its lane crosses the course's centreline, the way it drives (a unit
+   *  vector; `s` is how far along the lane it is from that point), where on the course it crosses
+   *  and how wide the road is there, and the way the course runs there (a unit vector). */
   laneX: number;
+  laneZ: number;
+  lux: number;
+  luz: number;
   dir: 1 | -1;
   crossS: number;
+  crossHw: number;
+  ctx: number;
+  ctz: number;
   /** Displacement from its path after a knock, and its velocity; both decay. */
   px: number;
   pz: number;
@@ -399,17 +417,29 @@ export interface Gull {
   stateT: number;
 }
 
+/** A cable car (or any tram): it shuttles along straight rails, stopping for anything on them. */
 export interface CableCar {
+  /** Collision id (negative: not a sim object id). */
+  id: number;
   x: number;
   y: number;
   z: number;
   heading: number;
   v: number;
-  /** Position along the Hyde St rails (z), shuttling between z0 and z1. */
+  /** The rails: a point on them and their direction (a unit vector). */
+  ox: number;
+  oz: number;
+  ux: number;
+  uz: number;
+  /** Position along the rails from that point, shuttling between a0 and a1, heading `dir`. */
   along: number;
-  z0: number;
-  z1: number;
+  a0: number;
+  a1: number;
   dir: 1 | -1;
+  /** The stretch of course the rails run along (a solo start there sends it to the far end). */
+  span: [number, number] | null;
+  /** Its destination sign ("POWELL & HYDE"). */
+  sign: string;
   /** Seconds left waiting at the end of the line. */
   dwell: number;
   bell: number;
@@ -458,7 +488,7 @@ export type RaceEvent =
   | { type: 'hype'; t: number; p: PlayerIndex; amount: number; why: string }
   | { type: 'rescue'; t: number; p: PlayerIndex }
   | { type: 'bell'; t: number }
-  | { type: 'pierFirst'; t: number; p: PlayerIndex }
+  | { type: 'runupFirst'; t: number; p: PlayerIndex }
   | { type: 'launch'; t: number; p: PlayerIndex; speed: number; speedBeforeNitro: number; wastedBoostFrac: number; boost: number; ramp: number }
   | { type: 'rampDrop'; t: number; p: PlayerIndex }
   | { type: 'wingsOpen'; t: number; p: PlayerIndex; x: number; y: number }
@@ -621,7 +651,8 @@ function contact(
 export class RaceSim {
   readonly map: MapDef;
   readonly course: Course;
-  readonly mode: Mode;
+  /** What the event is raced for (the map's mode). */
+  readonly rules: ModeRules;
   /** Laps to race (1 for the long jump). */
   readonly laps: number;
   /** The time limit (s): past it, anyone still on the road is out. */
@@ -634,7 +665,7 @@ export class RaceSim {
   readonly boxes: ItemBox[] = [];
   readonly cones: LooseCone[] = [];
   readonly gulls: Gull[] = [];
-  cable: CableCar | null = null;
+  readonly cables: CableCar[] = [];
   readonly opts: Required<RaceOptions>;
   /** Sim time since construction (the countdown runs on the grid). */
   t = 0;
@@ -652,8 +683,8 @@ export class RaceSim {
   private readonly tmpW: CoursePoint;
   private readonly loc: Located = { s: 0, d: 0, i: 0 };
   private leader: PlayerIndex = 0;
-  /** Who reached the pier first (a HYPE bonus for winning the race to it). */
-  pierFirst: PlayerIndex | null = null;
+  /** Who reached the lip's run-up (the pier) first (a HYPE bonus for winning the race to it). */
+  runupFirst: PlayerIndex | null = null;
   /** The kicker's angle now (radians): full until the first car goes off it, then dropping. */
   rampAngle: number;
   /** Race time the first car went off the kicker (the ramp has been dropping since), or null. */
@@ -661,19 +692,18 @@ export class RaceSim {
   /** The kicker's rise as a share of its full height, and where the (flat) pier hands over to it. */
   private rampScale = 1;
   private readonly rampFrom: number;
-  /** Lombard's block (gardens between the switchbacks): its x extent and where its side walls are. */
-  private readonly garden: { x0: number; x1: number; zWall: number; gate: number };
+  /** Where a point-to-point race without a lip finishes (Infinity otherwise). */
+  private readonly finishS: number;
 
   constructor(stats: CarStats[], wind: number, opts: RaceOptions = {}, map: MapDef = RUSSIAN_HILL_MAP) {
     const course = map.course;
     this.map = map;
     this.course = course;
-    this.mode = map.mode;
-    if (this.mode === 'jump' && !course.lip) throw new Error(`${map.id}: the long jump needs a course with a lip`);
-    if (this.mode === 'race' && !course.loop) throw new Error(`${map.id}: a race needs a loop`);
-    this.laps = this.mode === 'race' ? Math.max(1, Math.floor(opts.laps ?? map.laps)) : 1;
-    this.maxTime = this.mode === 'race' ? 60 + (this.laps * course.length) / RACE_CRAWL : MAX_RACE_TIME;
-    this.garden = course.garden ?? { x0: Infinity, x1: -Infinity, zWall: Infinity, gate: 0 };
+    this.rules = map.rules;
+    this.rules.check(course, map.id);
+    this.laps = this.rules.laps(course, map.laps, opts.laps);
+    this.maxTime = this.rules.maxTime(course, this.laps);
+    this.finishS = !course.loop && !course.lip && course.finishS !== null ? course.finishS : Infinity;
     this.wind = wind;
     this.rampFrom = course.lip ? course.lip.rampS0 - 1 : Infinity;
     this.rampAngle = course.lip?.angle ?? 0;
@@ -812,13 +842,24 @@ export class RaceSim {
     return wm;
   }
 
-  /** Cross traffic in a lane along z at x = laneX (dir +1 drives towards +z), starting at z, on a
-   *  road at height y that crosses the course at about crossS. */
-  addCrossing(laneX: number, dir: 1 | -1, z: number, y: number, v: number, crossS: number): Waymo {
-    const wm = this.makeWaymo('cross', laneX, z, y, dir > 0 ? Math.PI / 2 : -Math.PI / 2, z * dir, 0, v, 0);
-    wm.laneX = laneX;
-    wm.dir = dir;
+  /**
+   * Cross traffic on a road that crosses the course at about crossS: its lane passes through
+   * (x, z) on the course's centreline, running along the unit vector (ux, uz) (the way it drives);
+   * it starts `along` metres down the lane from there (negative: still coming), at height y.
+   */
+  addCrossing(lane: { x: number; z: number; ux: number; uz: number }, along: number, y: number, v: number, crossS: number): Waymo {
+    const heading = Math.atan2(lane.uz, lane.ux);
+    const wm = this.makeWaymo('cross', lane.x + lane.ux * along, lane.z + lane.uz * along, y, heading, along, 0, v, 0);
+    const pt = pointAt(this.course, crossS);
+    wm.laneX = lane.x;
+    wm.laneZ = lane.z;
+    wm.lux = lane.ux;
+    wm.luz = lane.uz;
+    wm.baseHeading = heading;
     wm.crossS = crossS;
+    wm.crossHw = pt.hw;
+    wm.ctx = pt.tx;
+    wm.ctz = pt.tz;
     this.waymos.push(wm);
     return wm;
   }
@@ -829,9 +870,59 @@ export class RaceSim {
     this.cones.push({ id: this.nextId++, x: cw.x, y: cw.y, z: cw.z, vx: 0, vy: 0, vz: 0, rx: 0, rz: 0, spin: 0, hit: false, ground: cw.y });
   }
 
-  /** The cable car, shuttling along z between z0 and z1 on rails at x, from `along` heading `dir`. */
-  addCable(x: number, y: number, z0: number, z1: number, along: number, dir: 1 | -1, bell: number): void {
-    this.cable = { x, y, z: along, heading: dir > 0 ? Math.PI / 2 : -Math.PI / 2, v: 0, along, z0, z1, dir, dwell: 0, bell };
+  /**
+   * A cable car on straight rails through (x, z) along the unit vector (ux, uz), at height y,
+   * shuttling between a0 and a1 metres along them, starting at `along` heading `dir`. `span` is the
+   * stretch of course the rails run along, if they do.
+   */
+  addCable(
+    rail: { x: number; z: number; ux: number; uz: number },
+    y: number,
+    a0: number,
+    a1: number,
+    along: number,
+    dir: 1 | -1,
+    bell: number,
+    span: [number, number] | null = null,
+    sign = 'CABLE CAR',
+  ): CableCar {
+    const cb: CableCar = {
+      id: -1 - this.cables.length,
+      x: 0,
+      y,
+      z: 0,
+      heading: 0,
+      v: 0,
+      ox: rail.x,
+      oz: rail.z,
+      ux: rail.ux,
+      uz: rail.uz,
+      along,
+      a0,
+      a1,
+      dir,
+      span,
+      sign,
+      dwell: 0,
+      bell,
+    };
+    this.placeCable(cb);
+    this.cables.push(cb);
+    return cb;
+  }
+
+  /** Put a cable car where its position along the rails says, facing the way it's going. */
+  private placeCable(cb: CableCar): void {
+    cb.x = cb.ox + cb.ux * cb.along;
+    cb.z = cb.oz + cb.uz * cb.along;
+    cb.heading = cb.dir > 0 ? Math.atan2(cb.uz, cb.ux) : Math.atan2(-cb.uz, -cb.ux);
+  }
+
+  /** A point relative to a cable car: along its rails, and across them. */
+  private cableRel(cb: CableCar, x: number, z: number): { along: number; across: number } {
+    const dx = x - cb.x;
+    const dz = z - cb.z;
+    return { along: dx * cb.ux + dz * cb.uz, across: dx * cb.uz - dz * cb.ux };
   }
 
   /** A pedestrian: a crosser walks between d0 and d1 and back; a tourist stands about in the road. */
@@ -866,8 +957,14 @@ export class RaceSim {
       vTarget: v,
       sEnd,
       laneX: 0,
+      laneZ: 0,
+      lux: 0,
+      luz: 0,
       dir: 1,
       crossS: 0,
+      crossHw: 0,
+      ctx: 1,
+      ctz: 0,
       px: 0,
       pz: 0,
       pvx: 0,
@@ -1006,8 +1103,9 @@ export class RaceSim {
       if (car.phase !== 'race') continue;
       this.pickups(car, dt, ev);
       this.useItem(car, inputs[car.p] ?? NO_INPUT, ev);
-      if (this.mode === 'jump') this.checkLip(car, ev);
-      else this.checkLaps(car, sPrev[car.p], ev);
+      // The ending: off the kicker (a course with a lip), or over the line.
+      if (this.course.lip) this.checkLip(car, ev);
+      else this.checkLine(car, sPrev[car.p], ev);
       car.prog = this.progressOf(car);
     }
     for (const car of this.cars) if (car.phase === 'flight') this.fly(car, dt, ev);
@@ -1042,11 +1140,12 @@ export class RaceSim {
   }
 
   /**
-   * Race order (index 0 leads). The long jump: by progress, and launched cars are ahead of any still
-   * on the road. A race: whoever took the flag first, then by progress (laps and all); out last.
+   * Race order (index 0 leads). Scored on distance (the long jump): by progress, and launched cars
+   * are ahead of any still on the road. Scored on time (a race): whoever finished first, then by
+   * progress (laps and all); out last.
    */
   order(): PlayerIndex[] {
-    if (this.mode === 'race') {
+    if (this.rules.score === 'time') {
       const key = (c: RaceCar): number => {
         if (c.finishT !== null) return 1e9 - this.flagged.indexOf(c.p);
         return c.phase === 'dnf' ? -1e9 + c.prog : c.prog;
@@ -1065,9 +1164,19 @@ export class RaceSim {
     return (car.lap - 1) * c.length + wrapS(c, car.s - c.startS);
   }
 
-  /** A race: count the laps as the car crosses the line, and wave the flag after the last one. */
-  private checkLaps(car: RaceCar, sPrev: number, ev: RaceEvent[]): void {
+  /** Over the line: on a loop, count the laps as the car crosses the start line and wave the flag
+   *  after the last one; point to point, the finish line is the flag. */
+  private checkLine(car: RaceCar, sPrev: number, ev: RaceEvent[]): void {
     const c = this.course;
+    if (!c.loop) {
+      if (!crossedS(c, sPrev, car.s, this.finishS)) return;
+      const along = Math.max(1e-6, car.s - sPrev);
+      const at = this.raceT - DT * ((car.s - this.finishS) / along);
+      car.lapTimes.push(at);
+      ev.push({ type: 'lap', t: this.t, p: car.p, lap: 1, time: at, best: true });
+      this.flag(car, at, ev);
+      return;
+    }
     if (crossedS(c, car.s, sPrev, c.startS)) {
       // Back over the line the wrong way: that lap has to be driven again.
       car.lap--;
@@ -1088,7 +1197,12 @@ export class RaceSim {
     car.lapStart = at;
     ev.push({ type: 'lap', t: this.t, p: car.p, lap: car.lapTimes.length, time, best });
     if (car.lapTimes.length < this.laps) return;
-    car.phase = 'finished';
+    this.flag(car, at, ev);
+  }
+
+  /** Home at race time `at`: the chequered flag (a car off a kicker flies on into the water). */
+  private flag(car: RaceCar, at: number, ev: RaceEvent[]): void {
+    if (car.phase === 'race') car.phase = 'finished';
     car.finishT = at;
     car.runTime = at;
     car.boosting = false;
@@ -1097,15 +1211,21 @@ export class RaceSim {
     ev.push({ type: 'finish', t: this.t, p: car.p, time: at, place: this.flagged.length });
   }
 
-  /** Past the flag: ease along the middle of the road at a gentle speed, out of everyone's way. */
+  /** Past the flag: ease along the middle of the road at a gentle speed, out of everyone's way (and,
+   *  point to point, to a stop before the road runs out). */
   private cruise(car: RaceCar): CarInput {
     const c = this.course;
     const tgt = toWorld(c, car.s + 10, clamp(car.d, -2, 2) * 0.5);
     const ang = wrapAngle(Math.atan2(tgt.z - car.z, tgt.x - car.x) - car.heading);
     const v = Math.hypot(car.vx, car.vz);
+    const room = c.loop ? Infinity : c.length - RUNOFF_STOP - car.s;
+    const stopBy = Math.sqrt(2 * 3 * Math.max(0, room));
+    const target = Math.min(CRUISE_SPEED, stopBy);
+    // Running out of road: brake as hard as it takes to stop in time.
+    const stopping = stopBy < v + 2;
     return {
-      throttle: v < CRUISE_SPEED - 1 ? 0.6 : 0,
-      brake: v > CRUISE_SPEED + 2 ? 0.35 : 0,
+      throttle: v < target - 1 ? 0.6 : 0,
+      brake: stopping ? (v > target + 0.5 ? clamp((v - target) / 3, 0.35, 1) : room < 1 && v > 0.3 ? 1 : 0) : v > target + 2 ? 0.35 : 0,
       steer: clamp(ang * 2.2, -1, 1),
       item: false,
     };
@@ -1158,8 +1278,7 @@ export class RaceSim {
     const grade = car.grounded ? this.gradeAt(pt) : 0;
     const cosT = 1 / Math.sqrt(1 + grade * grade);
     const speed2 = car.vx * car.vx + car.vz * car.vz;
-    const down = car.grounded ? 0.5 * RHO * k.downforce * speed2 : 0;
-    const N = car.grounded ? m * G * cosT + down : 0;
+    const N = car.grounded ? normalLoad(k, cosT, speed2) : 0;
     const mu = k.mu;
 
     let fx = Math.cos(car.heading);
@@ -1211,11 +1330,7 @@ export class RaceSim {
       car.yawRate += (wTarget - car.yawRate) * (1 - Math.exp(-k.yawResponse * dt));
       car.heading += car.yawRate * dt;
     } else if (car.grounded) {
-      const v = Math.abs(vf);
-      const gripAcc = (mu * CORNER_GRIP * N) / m;
-      const wKin = v / k.turnRadius;
-      const wGrip = (gripAcc / Math.max(v, 2)) * OVERSTEER;
-      const wMax = Math.min(wKin, wGrip, MAX_YAW);
+      const wMax = maxYawRate(k, Math.abs(vf), cornerGrip(k, N));
       const wTarget = S * wMax * (vf >= 0 ? 1 : -1);
       car.yawRate += (wTarget - car.yawRate) * (1 - Math.exp(-k.yawResponse * dt));
       car.heading += car.yawRate * dt;
@@ -1242,10 +1357,8 @@ export class RaceSim {
     let engineF = 0;
     let spinning = false;
     const onPower = car.grounded || k.isJet;
-    // (On a loop the wind is behind you on one straight and in your face on the other; the long
-    // jump's course runs with it or into it all the way down.)
-    const windAlong = C.loop ? this.wind * Math.cos(car.heading) : this.wind;
-    const top = k.topSpeed + WIND_TOP * windAlong;
+    // (See windAlong: on a loop, behind you on one straight and in your face on the way back.)
+    const top = topSpeedIn(k, windAlong(this.wind, car.heading, C.loop));
     if (T > 0 && onPower && k.power > 0) {
       // Near its top speed the engine runs out of revs (or the jet out of thrust). A headwind loads
       // the engine and lowers the speed it can reach; a tailwind raises it.
@@ -1344,7 +1457,7 @@ export class RaceSim {
         // straight), scrubbing a little speed as it goes.
         const into = clamp(S * car.drift, -1, 1);
         const bite = into >= 0 ? DRIFT_BITE + (1 - DRIFT_BITE) * into : DRIFT_BITE + (DRIFT_BITE - DRIFT_BITE_OUT) * into;
-        const turnAcc = ((mu * DRIFT_GRIP * N) / m) * bite;
+        const turnAcc = driftGrip(k, N) * bite;
         const w = Math.min(turnAcc / Math.max(v, 4), v / k.turnRadius, DRIFT_YAW);
         const a2 = Math.atan2(vz0, vx0) + car.drift * w * dt;
         const v2 = Math.max(0, v - ((DRIFT_SCRUB * N) / m) * bite * dt);
@@ -1358,7 +1471,7 @@ export class RaceSim {
         const vl = vx0 * rx + vz0 * rz;
         const vfw = vx0 * fx + vz0 * fz;
         const used = Math.min(1, Math.abs(engineF + brakeF) / (mu * N + 1e-6));
-        let latMax = mu * CORNER_GRIP * N * (1 - 0.35 * used * used);
+        let latMax = cornerForce(k, N) * (1 - 0.35 * used * used);
         if (spinning) latMax *= 0.75;
         if (car.spin > 0) latMax *= 0.22;
         const dvLat = (latMax / m) * dt;
@@ -1386,23 +1499,9 @@ export class RaceSim {
     // --- Move.
     car.x += car.vx * dt;
     car.z += car.vz * dt;
-    // Lombard's block is walled in: retaining walls and stairs along its sides, houses at its ends
-    // except where the road comes in and goes out. A hop across the gardens stays inside it.
-    const g = this.garden;
-    const px = car.x - car.vx * dt;
-    const pz = car.z - car.vz * dt;
-    if (px > g.x0 && px < g.x1 && Math.abs(pz) <= g.zWall) {
-      if (Math.abs(car.z) > g.zWall) {
-        const side = Math.sign(car.z);
-        car.z = side * g.zWall;
-        this.blockWall(car, 0, side, ev);
-      }
-      if ((car.x < g.x0 || car.x > g.x1) && Math.abs(car.z) > g.gate) {
-        const side = car.x < g.x0 ? -1 : 1;
-        car.x = side < 0 ? g.x0 : g.x1;
-        this.blockWall(car, side, 0, ev);
-      }
-    }
+    // Walled-in blocks (Lombard's): retaining walls and stairs along their sides, houses at their
+    // ends except where the road comes in and goes out. A hop across the gardens stays inside.
+    for (const g of C.gardens) this.gardenWalls(g, car, dt, ev);
     const sPrev = car.s;
 
     // --- Where are we now?
@@ -1557,7 +1656,8 @@ export class RaceSim {
 
     this.walls(car, ev);
 
-    // Can't back out past the start line area (point to point: a loop has no back fence).
+    // Can't back out past the start line area (point to point: a loop has no back fence), nor run
+    // off the far end of a course that doesn't end in a kicker.
     if (!C.loop && car.s < 0.6) {
       const w = toWorld(C, 0.6, car.d);
       car.x = w.x;
@@ -1565,6 +1665,16 @@ export class RaceSim {
       car.s = 0.6;
       const vfw = car.vx * p2.tx + car.vz * p2.tz;
       if (vfw < 0) {
+        car.vx -= vfw * p2.tx;
+        car.vz -= vfw * p2.tz;
+      }
+    } else if (!C.loop && !C.lip && car.s > C.length - 0.6) {
+      const w = toWorld(C, C.length - 0.6, car.d);
+      car.x = w.x;
+      car.z = w.z;
+      car.s = C.length - 0.6;
+      const vfw = car.vx * p2.tx + car.vz * p2.tz;
+      if (vfw > 0) {
         car.vx -= vfw * p2.tx;
         car.vz -= vfw * p2.tz;
       }
@@ -1623,12 +1733,40 @@ export class RaceSim {
   private clearAt(x: number, z: number, r: number): boolean {
     const r2 = r * r;
     for (const w of this.waymos) if ((w.x - x) ** 2 + (w.z - z) ** 2 < r2 + 9) return false;
-    if (this.cable && Math.abs(this.cable.x - x) < 2 + r * 0.5 && Math.abs(this.cable.z - z) < 5 + r) return false;
+    for (const cb of this.cables) {
+      const q = this.cableRel(cb, x, z);
+      if (Math.abs(q.across) < 2 + r * 0.5 && Math.abs(q.along) < 5 + r) return false;
+    }
     for (const p of this.peds) if ((p.x - x) ** 2 + (p.z - z) ** 2 < r2) return false;
     return true;
   }
 
-  /** Bounce off one of the walls round Lombard's block (outward normal nx, nz). */
+  /** Keep a car that was inside a walled-in block inside it (its side walls, and its end walls
+   *  outside the gates). */
+  private gardenWalls(g: Garden, car: RaceCar, dt: number, ev: RaceEvent[]): void {
+    const prev = gardenFrame(g, car.x - car.vx * dt, car.z - car.vz * dt);
+    if (!(prev.u > g.u0 && prev.u < g.u1 && Math.abs(prev.v) <= g.wall)) return;
+    const c = Math.cos(g.heading);
+    const sn = Math.sin(g.heading);
+    let q = gardenFrame(g, car.x, car.z);
+    if (Math.abs(q.v) > g.wall) {
+      const side = Math.sign(q.v);
+      const w = gardenWorld(g, q.u, side * g.wall);
+      car.x = w.x;
+      car.z = w.z;
+      this.blockWall(car, -sn * side, c * side, ev);
+      q = gardenFrame(g, car.x, car.z);
+    }
+    if ((q.u < g.u0 || q.u > g.u1) && Math.abs(q.v) > g.gate) {
+      const side = q.u < g.u0 ? -1 : 1;
+      const w = gardenWorld(g, side < 0 ? g.u0 : g.u1, q.v);
+      car.x = w.x;
+      car.z = w.z;
+      this.blockWall(car, c * side, sn * side, ev);
+    }
+  }
+
+  /** Bounce off one of the walls round a walled-in block (outward normal nx, nz). */
   private blockWall(car: RaceCar, nx: number, nz: number, ev: RaceEvent[]): void {
     const vn = car.vx * nx + car.vz * nz;
     if (vn <= 0) return;
@@ -1639,10 +1777,13 @@ export class RaceSim {
     car.vz *= 0.85;
   }
 
-  /** Inside Lombard's block (on the road or in its gardens). */
+  /** Inside a walled-in block (on the road or in its gardens). */
   private inGarden(x: number, z: number): boolean {
-    const g = this.garden;
-    return x >= g.x0 - 0.01 && x <= g.x1 + 0.01 && Math.abs(z) <= g.zWall + 0.5;
+    for (const g of this.course.gardens) {
+      const q = gardenFrame(g, x, z);
+      if (q.u >= g.u0 - 0.01 && q.u <= g.u1 + 0.01 && Math.abs(q.v) <= g.wall + 0.5) return true;
+    }
+    return false;
   }
 
   private rescue(car: RaceCar, ev: RaceEvent[]): void {
@@ -1886,14 +2027,13 @@ export class RaceSim {
       this.noNearMiss(car, w.id);
       this.hitHeavy(car, h, w, WAYMO_MASS, ev);
     }
-    if (this.cable && clearance < CABLE_DIMS.height) {
-      const cb = this.cable;
+    for (const cb of this.cables) {
+      if (clearance >= CABLE_DIMS.height) break;
       const h = contact(car.x, car.z, car.heading, cc, cb.x, cb.z, cb.heading, CABLE_CIRCLES);
       if (h) {
-        this.noNearMiss(car, -1);
-        this.hitHeavy(car, h, null, 60000, ev);
-      }
-      else this.nearMiss(car, -1, 'cable', car.x, car.z, cc, cb.x, cb.z, cb.heading, CABLE_NEAR, speed, ev);
+        this.noNearMiss(car, cb.id);
+        this.hitHeavy(car, h, null, 60000, ev, cb);
+      } else this.nearMiss(car, cb.id, 'cable', car.x, car.z, cc, cb.x, cb.z, cb.heading, CABLE_NEAR, speed, ev);
     }
     for (const p of this.peds) {
       if (p.down > 0 || p.dive > 0) continue;
@@ -1969,22 +2109,23 @@ export class RaceSim {
     }
   }
 
-  /** Bounce off something heavy (a Waymo or the cable car). */
-  private hitHeavy(car: RaceCar, h: Contact, w: Waymo | null, mass: number, ev: RaceEvent[]): void {
+  /** Bounce off something heavy (a Waymo or a cable car). */
+  private hitHeavy(car: RaceCar, h: Contact, w: Waymo | null, mass: number, ev: RaceEvent[], cb: CableCar | null = null): void {
     const m = car.stats.mass;
     const I = (m * (car.stats.length ** 2 + car.stats.width ** 2)) / 12;
     car.x += h.nx * h.depth;
     car.z += h.nz * h.depth;
     const rax = h.cx - car.x;
     const raz = h.cz - car.z;
-    const wvx = w ? this.waymoVel(w).x : 0;
-    const wvz = w ? this.waymoVel(w).z : this.cable ? this.cable.dir * this.cable.v : 0;
+    const cbv = cb ? cb.dir * cb.v : 0;
+    const wvx = w ? this.waymoVel(w).x : cb ? cb.ux * cbv : 0;
+    const wvz = w ? this.waymoVel(w).z : cb ? cb.uz * cbv : 0;
     const rvx = car.vx - car.yawRate * raz - wvx;
     const rvz = car.vz + car.yawRate * rax - wvz;
     const vn = rvx * h.nx + rvz * h.nz;
     if (vn >= 0) return;
     const what: Obstacle = w ? 'waymo' : 'cable';
-    const id = w ? w.id : -1;
+    const id = w ? w.id : cb ? cb.id : -1;
     if (car.grit > 0 && w) {
       // Determination: the Waymo gets shoved out of your path (sideways, off your line) and you
       // keep going; you won't hit that one again for a moment.
@@ -2364,7 +2505,7 @@ export class RaceSim {
     let v = Math.sqrt(car.vx * car.vx + car.vy * car.vy + car.vz * car.vz);
     const before = v;
     if (k.nitroJ > 0) v = Math.sqrt(v * v + (2 * k.nitroJ) / k.mass);
-    const boost = this.opts.hype ? 1 + (HYPE_BOOST * car.hype) / HYPE_MAX : 1;
+    const boost = this.opts.hype && this.rules.hype ? 1 + (HYPE_BOOST * car.hype) / HYPE_MAX : 1;
     v *= boost;
     const scale = before > 1e-9 ? v / before : 1;
     car.vx *= scale;
@@ -2390,8 +2531,13 @@ export class RaceSim {
       boost: boost - 1,
       ramp: car.launchRamp,
     });
+    // A race to the lip: the lip is the finish line (the whole run is its one lap).
+    if (this.rules.score === 'time') {
+      car.lapTimes.push(car.runTime);
+      this.flag(car, car.runTime, ev);
+    }
     // The first car off the kicker had it at full angle; from now on it drops for the rest.
-    if (this.rampDropAt === null && this.cars.some((c) => c.phase === 'race')) {
+    if (this.rules.kickerDrops && this.rampDropAt === null && this.cars.some((c) => c.phase === 'race')) {
       this.rampDropAt = this.raceT - rewind;
       ev.push({ type: 'rampDrop', t: this.t, p: car.p });
     }
@@ -2407,16 +2553,18 @@ export class RaceSim {
     car.flightTime += dt;
     car.heading = Math.atan2(car.vz, car.vx);
     if (car.y > car.maxHeight) car.maxHeight = car.y;
-    const lipX = this.course.lip!.x;
-    if (car.y <= 0) {
-      const f = py / (py - car.y);
+    // Distance is measured from the lip along the way the kicker points.
+    const lip = this.course.lip!;
+    const water = lip.waterY;
+    if (car.y <= water) {
+      const f = (py - water) / (py - car.y);
       const x = px + (car.x - px) * f;
       const z = pz + (car.z - pz) * f;
       car.flightTime -= dt * (1 - f);
       car.x = x;
       car.z = z;
-      car.y = 0;
-      car.distance = Math.max(0, x - lipX);
+      car.y = water;
+      car.distance = Math.max(0, (x - lip.x) * lip.tx + (z - lip.z) * lip.tz);
       car.phase = 'splashed';
       car.splashT = this.raceT;
       car.entryDeg = (Math.atan2(-car.vy, Math.sqrt(car.vx * car.vx + car.vz * car.vz)) * 180) / Math.PI;
@@ -2424,7 +2572,7 @@ export class RaceSim {
       ev.push({ type: 'splash', t: this.t, p: car.p, distance: car.distance, x, z, speed });
       return;
     }
-    car.distance = Math.max(0, car.x - lipX);
+    car.distance = Math.max(0, (car.x - lip.x) * lip.tx + (car.z - lip.z) * lip.tz);
     if (car.flightTime >= MAX_FLIGHT_TIME) {
       car.phase = 'splashed';
       car.splashT = this.raceT;
@@ -2479,14 +2627,15 @@ export class RaceSim {
       if (car.draft > 0) add += 1.5 * dt * car.draft;
       if (add > 0) car.hype = Math.min(HYPE_MAX, car.hype + add);
     }
-    // First onto the pier: the race to the kicker is worth something.
+    // First onto the run-up (the pier): when HYPE pays at the lip, the race to the kicker is worth
+    // something.
     const lip = this.course.lip;
-    if (lip && this.pierFirst === null && this.cars.length === 2) {
+    if (lip && this.rules.hype && this.runupFirst === null && this.cars.length === 2) {
       const first = racing.find((c) => c.s >= lip.runupS0);
       if (first) {
-        this.pierFirst = first.p;
-        this.addHype(first, 10, 'first to the pier', ev);
-        ev.push({ type: 'pierFirst', t: this.t, p: first.p });
+        this.runupFirst = first.p;
+        this.addHype(first, 10, `first to ${lip.runupName}`, ev);
+        ev.push({ type: 'runupFirst', t: this.t, p: first.p });
       }
     }
     // Overtakes and the lead.
@@ -2582,36 +2731,36 @@ export class RaceSim {
       } else {
         w.s += w.v * dt;
         // Off the far end: loop back round, out of sight.
-        if (w.s > 140) w.s -= 280;
-        w.x = w.laneX + w.px;
-        w.z = w.dir * w.s + w.pz;
-        w.heading = (w.dir > 0 ? Math.PI / 2 : -Math.PI / 2) + w.spinA;
+        if (w.s > CROSS_REACH) w.s -= 2 * CROSS_REACH;
+        w.x = w.laneX + w.lux * w.s + w.px;
+        w.z = w.laneZ + w.luz * w.s + w.pz;
+        w.heading = w.baseHeading + w.spinA;
       }
     }
 
-    if (this.cable) {
-      const cb = this.cable;
+    for (const cb of this.cables) {
       if (cb.dwell > 0) {
         cb.dwell -= dt;
         cb.v = 0;
       } else {
         // Stop for anything on the rails just ahead.
-        const blocked = this.cars.some(
-          (c) => c.phase === 'race' && Math.abs(c.x - cb.x) < 2.2 && cb.dir * (c.z - cb.z) > 3 && cb.dir * (c.z - cb.z) < 7.5,
-        );
+        const blocked = this.cars.some((c) => {
+          if (c.phase !== 'race') return false;
+          const q = this.cableRel(cb, c.x, c.z);
+          return Math.abs(q.across) < 2.2 && cb.dir * q.along > 3 && cb.dir * q.along < 7.5;
+        });
         const target = blocked ? 0 : 3.2;
         cb.v += clamp(target - cb.v, -5 * dt, 1.2 * dt);
         cb.along += cb.dir * cb.v * dt;
-        if ((cb.dir > 0 && cb.along >= cb.z1) || (cb.dir < 0 && cb.along <= cb.z0)) {
+        if ((cb.dir > 0 && cb.along >= cb.a1) || (cb.dir < 0 && cb.along <= cb.a0)) {
           // End of the line: wait, ring the bell, head back.
-          cb.along = cb.dir > 0 ? cb.z1 : cb.z0;
+          cb.along = cb.dir > 0 ? cb.a1 : cb.a0;
           cb.dir = cb.dir > 0 ? -1 : 1;
           cb.dwell = 2.5;
           cb.bell = 0.4;
         }
       }
-      cb.z = cb.along;
-      cb.heading = cb.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      this.placeCable(cb);
       cb.bell -= dt;
       if (cb.bell <= 0) {
         cb.bell = 4 + this.rng() * 5;
@@ -2738,18 +2887,20 @@ export class RaceSim {
     for (const p of this.peds) if (p.down <= 0 && check(p.x, p.z, PED_R)) return true;
     for (const c of this.cars) if ((c.phase === 'race' || c.phase === 'finished') && check(c.x, c.z, c.stats.width / 2)) return true;
     if (w.kind === 'cross') {
-      // Lidar sees racers coming down the hill: stop short of the crossing and let them through.
+      // Lidar sees racers coming down the course: stop short of the crossing and let them through.
       // Distance from its nose to the kerb, less what it needs to stop: once it can't stop short of
       // the road it's committed and carries on across.
-      const before = w.dir * -w.z;
-      const room = before - WAYMO_LEN / 2 - (w.v * w.v) / 14 - RH_CROSS;
+      const before = -((w.x - w.laneX) * w.lux + (w.z - w.laneZ) * w.luz);
+      const room = before - WAYMO_LEN / 2 - (w.v * w.v) / 14 - w.crossHw;
       const approaching = room > 0 && before < 26;
       if (approaching) {
         for (const c of this.cars) {
           if (c.phase !== 'race') continue;
-          const toLane = w.laneX - c.x;
-          const vx = c.vx;
-          if (toLane > -3 && toLane < 34 && Math.abs(c.z) < 9 && (toLane < 6 || vx > 1)) return true;
+          // How far the car is from the lane (along the course), and off to the side of it.
+          const toLane = (w.laneX - c.x) * w.ctx + (w.laneZ - c.z) * w.ctz;
+          const side = (c.x - w.laneX) * w.lux + (c.z - w.laneZ) * w.luz;
+          const vAlong = c.vx * w.ctx + c.vz * w.ctz;
+          if (toLane > -3 && toLane < 34 && Math.abs(side) < 9 && (toLane < 6 || vAlong > 1)) return true;
         }
       }
     }
@@ -2831,8 +2982,9 @@ export class RaceSim {
 
   /**
    * Start a car further down the course (solo training): at rest in the middle of the road, with the
-   * start clear. Traffic sitting on it moves on down the road, and on Hyde St the cable car waits at
-   * the far end of its line for a while: something to steer round, never in the way at GO.
+   * start clear. Traffic sitting on it moves on down the road, and a cable car whose rails run along
+   * that stretch (Hyde St's) waits at the far end of its line for a while: something to steer round,
+   * never in the way at GO.
    */
   placeStart(p: PlayerIndex, s: number): void {
     this.place(p, s, 0, 0);
@@ -2845,14 +2997,13 @@ export class RaceSim {
       w.z = base.z;
       w.heading = base.heading;
     }
-    const hyde = this.course.sections.find((q) => q.kind === 'hyde');
-    const cb = this.cable;
-    if (cb && hyde && s > hyde.s0 - 5 && s < hyde.s1) {
-      const z = this.cars[p].z;
-      cb.along = Math.abs(cb.z1 - z) > Math.abs(cb.z0 - z) ? cb.z1 : cb.z0;
-      cb.z = cb.along;
-      cb.dir = cb.along === cb.z1 ? -1 : 1;
-      cb.heading = cb.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+    const car = this.cars[p];
+    for (const cb of this.cables) {
+      if (!cb.span || s <= cb.span[0] - 5 || s >= cb.span[1]) continue;
+      const a = (car.x - cb.ox) * cb.ux + (car.z - cb.oz) * cb.uz;
+      cb.along = Math.abs(cb.a1 - a) > Math.abs(cb.a0 - a) ? cb.a1 : cb.a0;
+      cb.dir = cb.along === cb.a1 ? -1 : 1;
+      this.placeCable(cb);
       cb.dwell = 12;
     }
   }

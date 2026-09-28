@@ -36,7 +36,22 @@ interface Pose {
 const DEG = Math.PI / 180;
 /** The course the cameras follow (the map in play). */
 let C: Course;
+/** The side-on views look across the jump from its right, a quarter turn round from the lip. */
 const SIDE_YAW = Math.PI / 2;
+
+/** The jump's frame: where the lip is, and the way it launches (a course without one: world x). */
+function lipFrame(): { x: number; y: number; z: number; tx: number; tz: number; heading: number } {
+  const l = C.lip;
+  return l ? { x: l.x, y: l.y, z: l.z, tx: l.tx, tz: l.tz, heading: l.heading } : { x: 0, y: 0, z: 0, tx: 1, tz: 0, heading: 0 };
+}
+
+/** A point in the jump's frame: how far out past the lip (a), and off to its right (l). */
+function inLipFrame(p: { x: number; z: number }): { a: number; l: number } {
+  const f = lipFrame();
+  const dx = p.x - f.x;
+  const dz = p.z - f.z;
+  return { a: dx * f.tx + dz * f.tz, l: -dx * f.tz + dz * f.tx };
+}
 const MAX_SHARED_DIST = 30;
 /** How close (m) the racers still on the road must be to the lip for one shared side-on view. */
 const NEAR_LIP = 25;
@@ -74,7 +89,7 @@ export function courseDirection(s: number): number {
   return Math.atan2(z, x);
 }
 
-function inLombard(s: number): number {
+function wideViewBlend(s: number): number {
   // 0..1: how far into a wide view's framing (eases in and out around Lombard's block).
   let f = 0;
   for (const v of C.wideViews) {
@@ -107,16 +122,12 @@ class Rig {
     this.goal = this.buildPose(0);
   }
 
-  /** The long jump's lip, for the side-on framing (a lap race never flies). */
-  private get lip(): { x: number; y: number } {
-    return C.lip ?? { x: 0, y: 0 };
-  }
-
   setMode(mode: RigMode): void {
     if (mode === this.mode) return;
     this.mode = mode;
     this.modeTime = 0;
-    if (mode === 'side' || mode === 'results') this.sideFocusX = Math.max(this.cur.focus.x, this.lip.x - 10);
+    // (sideFocusX: how far out past the lip the side-on view is centred.)
+    if (mode === 'side' || mode === 'results') this.sideFocusX = Math.max(inLipFrame(this.cur.focus).a, -10);
   }
 
   snap(targets: ViewTarget[], t: number, aspect: number, fov: number): void {
@@ -176,7 +187,7 @@ class Rig {
     const dir = courseDirection(sMid);
     const dx = Math.cos(dir);
     const dz = Math.sin(dir);
-    const lomb = inLombard(sMid);
+    const lomb = wideViewBlend(sMid);
     const look = grid ? 2 : 3 + Math.min(10, speed * 0.28);
     const fx = new THREE.Vector3().copy(trail.pos);
     // Two cars: aim between the trailing car and a point just ahead of the leader, so the trailing
@@ -242,15 +253,17 @@ class Rig {
       return;
     }
     // Side-on: pan with the leader; keep the lip and every car in the air (or close to the lip) in
-    // frame while possible.
-    const lip = this.lip;
+    // frame while possible. Worked out in the jump's frame (x: out past the lip, z: across it).
+    const f = lipFrame();
+    const lip = { x: 0, y: f.y };
+    const rel = (c: ViewTarget): { a: number; l: number } => inLipFrame(c.pos);
     const flown = targets.filter((c) => c.phase === 'flight' || c.phase === 'splashed');
-    const near = targets.filter((c) => c.phase === 'race' && c.pos.x > lip.x - 65 && Math.abs(c.pos.z) < 20);
+    const near = targets.filter((c) => c.phase === 'race' && rel(c).a > -65 && Math.abs(rel(c).l) < 20);
     const framed = [...new Set([...flown, ...near])];
     const side = framed.length > 0 ? framed : targets;
-    const xs = side.map((c) => c.pos.x);
+    const xs = side.map((c) => rel(c).a);
     const ys = side.map((c) => c.pos.y);
-    const zs = side.map((c) => c.pos.z);
+    const zs = side.map((c) => rel(c).l);
     const lead = Math.max(...xs);
     const trail = Math.min(...xs);
     const maxDist = this.mode === 'results' ? 170 : 150;
@@ -272,9 +285,10 @@ class Rig {
     const panRate = this.mode === 'results' ? 1.5 : 5;
     this.sideFocusX += (centerX - this.sideFocusX) * damp(panRate, dt || 1 / 60);
     const results = this.mode === 'results';
-    const zMid = (Math.min(...zs) + Math.max(...zs)) / 2;
-    g.focus.set(this.sideFocusX, results ? -dist * 0.16 : Math.max(5, top * 0.42), Math.max(-20, Math.min(20, zMid)));
-    g.yaw = SIDE_YAW + (results ? Math.sin(t * 0.15) * 3 * DEG : 0);
+    const zMid = Math.max(-20, Math.min(20, (Math.min(...zs) + Math.max(...zs)) / 2));
+    // Back to the world: sideFocusX out along the jump, zMid across it.
+    g.focus.set(f.x + f.tx * this.sideFocusX - f.tz * zMid, results ? -dist * 0.16 : Math.max(5, top * 0.42), f.z + f.tz * this.sideFocusX + f.tx * zMid);
+    g.yaw = f.heading + SIDE_YAW + (results ? Math.sin(t * 0.15) * 3 * DEG : 0);
     g.pitch = (results ? 13 : 8) * DEG;
     g.dist = dist;
     this.need = 0;
@@ -375,8 +389,7 @@ export class Views {
       }
       const flying = live.some((c) => c.phase === 'flight' || c.phase === 'splashed');
       const allDone = live.every((c) => c.phase === 'flight' || c.phase === 'splashed' || c.phase === 'dnf');
-      const lipX = C.lip ? C.lip.x : Infinity;
-      const nearLip = live.every((c) => c.phase !== 'race' || (c.pos.x > lipX - NEAR_LIP && Math.abs(c.pos.z) < 20));
+      const nearLip = live.every((c) => c.phase !== 'race' || (C.lip !== null && inLipFrame(c.pos).a > -NEAR_LIP && Math.abs(inLipFrame(c.pos).l) < 20));
       this.shared.setMode(flying && (nearLip || allDone) ? 'side' : 'chase');
     }
     this.shared.update(dt, t, live, aspect, fov);
@@ -395,8 +408,7 @@ export class Views {
         // Coming back together needs more room (hysteresis).
         if (this.splitting) fits = this.shared.need <= MAX_SHARED_DIST - 5 && this.bothVisible(targets, 0.62);
       } else if (this.shared.mode === 'side') {
-        const lipX = C.lip ? C.lip.x : Infinity;
-        fits = targets.every((c) => c.phase !== 'race' || (c.pos.x > lipX - NEAR_LIP - 5 && Math.abs(c.pos.z) < 20));
+        fits = targets.every((c) => c.phase !== 'race' || (C.lip !== null && inLipFrame(c.pos).a > -NEAR_LIP - 5 && Math.abs(inLipFrame(c.pos).l) < 20));
       }
       want = !sameMode || !fits;
     }

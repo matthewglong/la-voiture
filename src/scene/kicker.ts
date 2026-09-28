@@ -1,33 +1,50 @@
-// The kicker: a plywood ramp hinged to the end of the pier and held up by hydraulic rams. It stands
-// at its full angle for the first car to reach it, then drops (RAMP_RATE in sim/race.ts) while amber
-// lamps flash at the lip. The lip stays over the same spot and only comes down, as in the sim.
+// The kicker: a plywood ramp hinged to the end of the run-up and held up by hydraulic rams, built
+// from any course's lip (it points the way the lip does, as wide as the road). It stands at its full
+// angle for the first car to reach it, then drops (RAMP_RATE in sim/race.ts, in modes where it
+// does) while amber lamps flash at the lip. The lip stays over the same spot and only comes down,
+// as in the sim. A chequered band across the lip marks it when the lip is a race's finish line.
 import * as THREE from 'three';
-import { DECK_Y, KICKER_ANGLE, KICKER_X, RUSSIAN_HILL } from '../maps/russianHill';
+import { pointAt, type Course } from '../track';
 import { GeoBuilder, _q, box, cyl, meshOf, type V3 } from './geo';
+import { checkerTexture, plywoodTexture, stripeTexture } from './props';
 
 export interface Kicker {
   group: THREE.Group;
   /** Stand the ramp at an angle (radians). `alarm`: the lamps flash (t: seconds, for the beat). */
   set(angle: number, alarm: boolean, t: number): void;
+  /** Show the chequered finish band across the lip (a race to the lip). */
+  setFinish(on: boolean): void;
 }
 
-const LIP = RUSSIAN_HILL.lip!;
-/** The hinge, and how far out the lip is from it (fixed: the ramp drops, it doesn't move out). */
-const X0 = KICKER_X;
-const RUN = LIP.x - X0;
-/** The ramp's length at full angle; the leaf is built at that length and stretched to fit. */
-const LEN = RUN / Math.cos(KICKER_ANGLE);
-const HALF = 7;
-/** The rams: where they stand on the deck, and where they push on the leaf (along it, below it). */
-const RAM_X = X0 + 8.4;
-const RAM_ALONG = 0.84 * LEN;
+/** The ramps' rams (across the ramp) and the length of their barrels. */
 const RAM_BELOW = -0.34;
-const RAM_ZS = [-4.4, 4.4];
 const BARREL = 1.35;
 
-export function buildKicker(mats: { ply: THREE.Material; stripe: THREE.Material; cone: THREE.Material }): Kicker {
+export function buildKicker(course: Course): Kicker {
+  const lip = course.lip;
+  if (!lip) throw new Error(`${course.id}: no lip for a kicker`);
+  const mats = {
+    ply: new THREE.MeshStandardMaterial({ map: plywoodTexture(), roughness: 0.72 }),
+    stripe: new THREE.MeshStandardMaterial({ map: stripeTexture(), roughness: 0.5 }),
+    cone: new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.32, clearcoat: 0.8, clearcoatRoughness: 0.2 }),
+  };
+  // Built in the lip's frame: x along the way it launches from the hinge, z across it, y up.
+  const hinge = pointAt(course, lip.rampS0);
+  const DECK_Y = lip.baseY;
+  const X0 = 0;
+  /** How far out the lip is from the hinge (fixed: the ramp drops, it doesn't move out). */
+  const RUN = (lip.x - hinge.x) * lip.tx + (lip.z - hinge.z) * lip.tz;
+  /** The ramp's length at full angle; the leaf is built at that length and stretched to fit. */
+  const LEN = RUN / Math.cos(lip.angle);
+  const HALF = hinge.hw;
+  /** The rams: where they stand on the deck, and where they push on the leaf (along it, below it). */
+  const RAM_X = X0 + RUN * 0.772;
+  const RAM_ALONG = 0.84 * LEN;
+  const RAM_ZS = [-HALF * 0.63, HALF * 0.63];
   const group = new THREE.Group();
   group.name = 'kicker';
+  group.position.set(hinge.x, 0, hinge.z);
+  group.rotation.y = -lip.heading;
   // The leaf: everything that tilts with the ramp, built along its local +x from the hinge with the
   // riding surface at y = 0.
   const leaf = new THREE.Group();
@@ -127,6 +144,19 @@ export function buildKicker(mats: { ply: THREE.Material; stripe: THREE.Material;
     return { z, barrel, rod };
   });
 
+  // The finish band: chequers across the last metre of the ramp (hidden unless it's a finish).
+  const finishGeo = new THREE.PlaneGeometry(1.2, 2 * HALF - 0.2);
+  finishGeo.rotateX(-Math.PI / 2);
+  const finish = new THREE.Mesh(
+    finishGeo,
+    new THREE.MeshStandardMaterial({ map: checkerTexture(2, 24), roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+  );
+  finish.name = 'kickerFinish';
+  finish.visible = false;
+  // On the leaf, so it rides the ramp as it drops.
+  finish.position.set(LEN - 0.75, 0.012, 0);
+  leaf.add(finish);
+
   const up = new THREE.Vector3(0, 1, 0);
   const dir = new THREE.Vector3();
   const base = new THREE.Vector3();
@@ -147,7 +177,7 @@ export function buildKicker(mats: { ply: THREE.Material; stripe: THREE.Material;
     leaf.rotation.z = angle;
     leaf.scale.x = stretch;
     const lipY = DECK_Y + RUN * Math.tan(angle);
-    fascia.position.set(LIP.x, lipY, 0);
+    fascia.position.set(X0 + RUN, lipY, 0);
     const along = RAM_ALONG * stretch;
     const ax = X0 + along * cos - RAM_BELOW * sin;
     const ay = DECK_Y + along * sin + RAM_BELOW * cos;
@@ -166,6 +196,12 @@ export function buildKicker(mats: { ply: THREE.Material; stripe: THREE.Material;
       r.rod.scale.set(1, Math.max(0.05, len - b + 0.05), 1);
     }
   };
-  set(KICKER_ANGLE, false, 0);
-  return { group, set };
+  set(lip.angle, false, 0);
+  return {
+    group,
+    set,
+    setFinish: (on) => {
+      finish.visible = on;
+    },
+  };
 }

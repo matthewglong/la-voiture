@@ -1,21 +1,19 @@
 // San Francisco around the race: an SF street grid on the hill, pastel Victorian row houses along
 // the course, race barriers with cheering crowds, cable-car lines, Lombard's crooked block, the
-// Embarcadero, the wooden pier and the kicker. Procedural, and merged by material to keep draw
-// calls low.
+// Embarcadero and the wooden pier. Procedural, and merged by material to keep draw calls low. (The
+// start line, the gantry, the kicker and the Bay are shared with every map: src/scene/maps.ts adds
+// them from the course.)
 import * as THREE from 'three';
 import { DECK_Y, EMB_X as SF_EMB_X, KICKER_X, ROAD_HW, RUSSIAN_HILL, SHORE_X as SF_SHORE_X, terrainBreaks, terrainY } from '../maps/russianHill';
 import { pointAt, type CoursePoint } from '../track';
 import { Crowd, type Spot } from './crowd';
 import { GeoBuilder, _e, _m4, _q, _s, _v, box, cyl, meshOf, obox, prism, rbox, shade, strip, type V3 } from './geo';
-import { buildKicker, type Kicker } from './kicker';
 import { BAND, LOMBARD_WALK, LOMBARD_X0, LOMBARD_X1, buildLombard } from './lombard';
 import { canvasTexture, makeRng } from './util';
-import { asphaltTexture, bannerTexture, barrierPanel, checkerTexture, laneLabelTexture, tree, tyreStack } from './props';
+import { asphaltTexture, barrierPanel, buildCableCar, signTexture, tree, tyreWall, type TyreSpot } from './props';
 
 export interface City {
   group: THREE.Group;
-  /** The kicker at the end of the pier (it drops once the first car is off it). */
-  kicker: Kicker;
   /** Racers' positions, so the crowd cheers as they pass. */
   update(dt: number, t: number, cars?: { x: number; z: number }[]): void;
 }
@@ -40,7 +38,6 @@ const EMB_X = SF_EMB_X;
 const SHORE_X = SF_SHORE_X;
 const LIP = C.lip!;
 const KICK_X = KICKER_X;
-const START_Y = C.startY;
 
 const RH = ROAD_HW;
 const WALK = 3;
@@ -220,87 +217,10 @@ function plankTexture(): THREE.CanvasTexture {
   );
 }
 
-function plywoodTexture(): THREE.CanvasTexture {
-  // Tile = one 2.44 m × 1.22 m sheet.
-  return canvasTexture(
-    1024,
-    512,
-    (ctx, w, h) => {
-      ctx.fillStyle = '#e2c08a';
-      ctx.fillRect(0, 0, w, h);
-      const rng = makeRng(5);
-      for (let i = 0; i < 70; i++) {
-        const y = rng() * h;
-        const amp = 6 + rng() * 22;
-        const f = 0.004 + rng() * 0.01;
-        ctx.strokeStyle = `rgba(${150 + rng() * 40},${95 + rng() * 30},${45},${0.12 + rng() * 0.18})`;
-        ctx.lineWidth = 1 + rng() * 3;
-        ctx.beginPath();
-        for (let x = 0; x <= w; x += 16) {
-          const yy = y + Math.sin(x * f + i) * amp;
-          if (x === 0) ctx.moveTo(x, yy);
-          else ctx.lineTo(x, yy);
-        }
-        ctx.stroke();
-      }
-      for (let i = 0; i < 5; i++) {
-        ctx.fillStyle = 'rgba(120,70,30,0.25)';
-        ctx.beginPath();
-        ctx.ellipse(rng() * w, rng() * h, 8 + rng() * 10, 4 + rng() * 5, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.strokeStyle = 'rgba(90,55,25,0.75)';
-      ctx.lineWidth = 5;
-      ctx.strokeRect(2, 2, w - 4, h - 4);
-      ctx.fillStyle = 'rgba(70,70,70,0.7)';
-      for (let x = 24; x < w; x += 96) {
-        for (const y of [18, h / 2, h - 18]) ctx.fillRect(x, y - 3, 6, 6);
-      }
-    },
-    { repeat: [1, 1] },
-  );
-}
-
-function stripeTexture(): THREE.CanvasTexture {
-  // One tile = 1 m: a yellow and a black diagonal band.
-  return canvasTexture(
-    256,
-    128,
-    (ctx, w, h) => {
-      ctx.fillStyle = '#ffcc12';
-      ctx.fillRect(0, 0, w, h);
-      ctx.fillStyle = '#1b1b1f';
-      for (let k = -2; k < 3; k++) {
-        const x = k * w;
-        ctx.beginPath();
-        ctx.moveTo(x + w * 0.5, 0);
-        ctx.lineTo(x + w, 0);
-        ctx.lineTo(x + w * 0.5 + h * 0.9, h);
-        ctx.lineTo(x + h * 0.9, h);
-        ctx.closePath();
-        ctx.fill();
-      }
-    },
-    { repeat: [1, 1] },
-  );
-}
 
 
 
-export function signTexture(text: string, bg: string, fg: string, w = 512, h = 96): THREE.CanvasTexture {
-  return canvasTexture(w, h, (ctx) => {
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = fg;
-    ctx.lineWidth = 6;
-    ctx.strokeRect(6, 6, w - 12, h - 12);
-    ctx.font = `900 ${Math.round(h * 0.52)}px "Arial Rounded MT Bold", "Arial Black", "Helvetica Neue", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = fg;
-    ctx.fillText(text, w / 2, h / 2 + 3);
-  });
-}
+
 
 
 function brickTexture(): THREE.CanvasTexture {
@@ -747,106 +667,6 @@ function palm(b: GeoBuilder, x: number, y: number, z: number, h: number, rng: ()
   b.add(nut, '#6b5a3a');
 }
 
-// ---------------------------------------------------------------------------------------------
-// Cable car (Powell & Hyde): its own small group so it can be placed on the rails.
-
-export function buildCableCar(signMat: THREE.Material, glassMat: THREE.Material): THREE.Group {
-  const group = new THREE.Group();
-  group.name = 'cableCar';
-  const paint = new GeoBuilder();
-  const glass = new GeoBuilder();
-  const brass = new GeoBuilder();
-  const RED = '#b01e2c';
-  const CREAM = '#f3e7c9';
-  const GOLD = '#d9a93c';
-  const WOOD = '#8a5a34';
-  const L = 8.4;
-  const hl = L / 2;
-  const hw = 1.2;
-
-  // Trucks and wheels on the rails (rail gauge 1.067 m).
-  for (const sx of [-2.6, 2.6]) {
-    box(paint, sx - 0.85, sx + 0.85, 0.22, 0.58, -0.62, 0.62, '#2a2c31');
-    for (const wx of [sx - 0.5, sx + 0.5]) {
-      for (const wz of [-0.535, 0.535]) {
-        const g = new THREE.CylinderGeometry(0.27, 0.27, 0.1, 16);
-        g.rotateX(Math.PI / 2);
-        g.translate(wx, 0.27, wz);
-        paint.add(g, '#3a3d44');
-      }
-    }
-  }
-  // Floor and body.
-  rbox(paint, -hl, hl, 0.58, 0.86, -hw, hw, 0.08, RED);
-  rbox(paint, -2.15, 2.15, 0.86, 1.62, -hw, hw, 0.06, RED);
-  box(paint, -2.2, 2.2, 1.55, 1.68, -hw - 0.03, hw + 0.03, GOLD);
-  rbox(paint, -2.15, 2.15, 1.62, 2.98, -hw + 0.02, hw - 0.02, 0.06, CREAM);
-  // Window band on the enclosed saloon.
-  for (let i = 0; i < 6; i++) {
-    const cx = -1.8 + i * 0.72;
-    for (const zs of [-1, 1]) {
-      box(glass, cx - 0.27, cx + 0.27, 1.85, 2.72, zs * (hw - 0.03), zs * (hw + 0.02), '#ffffff');
-      box(paint, cx - 0.33, cx + 0.33, 1.78, 1.85, zs * (hw - 0.02), zs * (hw + 0.04), WOOD);
-    }
-  }
-  for (const xs of [-1, 1]) {
-    box(glass, xs * 2.15 - 0.02, xs * 2.15 + 0.02, 1.85, 2.72, -0.8, 0.8, '#ffffff');
-  }
-  // Open end platforms: dashers, outward benches and brass poles.
-  for (const xs of [-1, 1]) {
-    const a = xs * 2.15;
-    const b = xs * hl;
-    rbox(paint, Math.min(a, b), Math.max(a, b), 0.86, 1.38, -hw, -hw + 0.12, 0.04, RED);
-    rbox(paint, Math.min(a, b), Math.max(a, b), 0.86, 1.38, hw - 0.12, hw, 0.04, RED);
-    box(paint, Math.min(a, b), Math.max(a, b), 1.3, 1.4, -hw - 0.02, -hw + 0.14, GOLD);
-    box(paint, Math.min(a, b), Math.max(a, b), 1.3, 1.4, hw - 0.14, hw + 0.02, GOLD);
-    box(paint, Math.min(a, b) + 0.1, Math.max(a, b) - 0.1, 1.2, 1.3, -0.35, 0.35, WOOD);
-    box(paint, b - xs * 0.25, b - xs * 0.08, 0.86, 1.9, -0.9, 0.9, CREAM);
-    for (const px of [a + xs * 0.25, (a + b) / 2, b - xs * 0.2]) {
-      for (const pz of [-hw + 0.06, hw - 0.06]) cyl(brass, [px, 0.86, pz], [px, 2.98, pz], 0.035, 0.035, 8, '#ffffff');
-    }
-    // Headlight.
-    const hg = new THREE.CylinderGeometry(0.16, 0.16, 0.12, 16);
-    hg.rotateZ(Math.PI / 2);
-    hg.translate(b + xs * 0.02, 1.25, 0);
-    brass.add(hg, '#ffffff');
-  }
-  // Grip lever in the front platform.
-  cyl(brass, [2.9, 0.86, 0.2], [3.05, 2.0, 0.2], 0.03, 0.04, 6, '#ffffff');
-  // Roof, clerestory and bell.
-  rbox(paint, -hl - 0.12, hl + 0.12, 2.98, 3.12, -hw - 0.1, hw + 0.1, 0.06, CREAM);
-  rbox(paint, -3.2, 3.2, 3.12, 3.46, -0.62, 0.62, 0.06, CREAM);
-  for (let i = 0; i < 9; i++) {
-    const cx = -2.8 + i * 0.7;
-    for (const zs of [-1, 1]) box(glass, cx - 0.2, cx + 0.2, 3.18, 3.38, zs * 0.6, zs * 0.64, '#ffffff');
-  }
-  rbox(paint, -3.3, 3.3, 3.46, 3.56, -0.72, 0.72, 0.04, RED);
-  const bell = new THREE.SphereGeometry(0.14, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2);
-  bell.translate(2.4, 3.46, 0);
-  brass.add(bell, '#ffffff');
-
-  const paintMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.12 });
-  const brassMat = new THREE.MeshStandardMaterial({ color: '#d8ac48', metalness: 1, roughness: 0.28 });
-  group.add(meshOf(paint, paintMat, 'cableCarBody', true, true));
-  group.add(meshOf(glass, glassMat, 'cableCarGlass', false, false));
-  group.add(meshOf(brass, brassMat, 'cableCarBrass', true, false));
-
-  // Destination signs on both roof ends.
-  for (const xs of [-1, 1]) {
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.32), signMat);
-    sign.position.set(xs * (hl + 0.14), 3.3, 0);
-    sign.rotation.y = xs * (Math.PI / 2);
-    group.add(sign);
-  }
-  // Side name boards.
-  for (const zs of [-1, 1]) {
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 0.3), signMat);
-    sign.position.set(0, 1.25, zs * (hw + 0.03));
-    sign.rotation.y = zs > 0 ? 0 : Math.PI;
-    group.add(sign);
-  }
-  return group;
-}
 
 // ---------------------------------------------------------------------------------------------
 // The grid: blocks between the streets, each ringed by a sidewalk, with houses facing out.
@@ -958,9 +778,6 @@ export function buildCity(): City {
   const metalMat = new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.75, roughness: 0.3 });
   const woodMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 });
   const plankMat = new THREE.MeshStandardMaterial({ map: plankTexture(), roughness: 0.8 });
-  const plyTex = plywoodTexture();
-  const plyMat = new THREE.MeshStandardMaterial({ map: plyTex, roughness: 0.72 });
-  const stripeMat = new THREE.MeshStandardMaterial({ map: stripeTexture(), roughness: 0.5 });
   const coneMat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.32, clearcoat: 0.8, clearcoatRoughness: 0.2 });
   const brickMat = new THREE.MeshStandardMaterial({
     map: brickTexture(),
@@ -1138,6 +955,7 @@ export function buildCity(): City {
     }
   }
   // Tyre walls round the outside of the Hyde St corners.
+  const tyreSpots: TyreSpot[] = [];
   for (const sec of SECS.filter((s) => s.kind === 'corner')) {
     let i = 0;
     for (let s = sec.s0 - 1; s <= sec.s1 + 1; s += 0.72) {
@@ -1146,7 +964,7 @@ export function buildCity(): City {
       const d = side * (RH + 0.45);
       const x = p.x - p.tz * d;
       const z = p.z + p.tx * d;
-      tyreStack(cones, x, gy(x), z, i++);
+      tyreSpots.push({ x, y: gy(x), z, i: i++ });
     }
     // Fans in the corner, behind the tyres.
     for (let k = 0; k < 16; k++) {
@@ -1186,96 +1004,6 @@ export function buildCity(): City {
     group.add(meshOf(plates, new THREE.MeshStandardMaterial({ map: namesTexture(names), roughness: 0.45 }), 'streetSigns', true, false));
   }
 
-  // --- Start line, grid labels and the start gantry -----------------------------------------------
-  const startS = C.startS;
-  const sp = pointAt(C, startS);
-  const startX0 = sp.x - 0.4;
-  const startX1 = sp.x + 0.4;
-  const startGeo = new GeoBuilder();
-  slab(startGeo, startX0, startX1, GREENWICH_Z - RH + 0.2, GREENWICH_Z + RH - 0.2, markTop, markTop, '#ffffff', 1, false);
-  const startLine = meshOf(
-    startGeo,
-    new THREE.MeshStandardMaterial({
-      map: checkerTexture(34, 2),
-      roughness: 0.55,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
-    }),
-    'startLine',
-    false,
-    true,
-  );
-  {
-    const uv = startLine.geometry.getAttribute('uv');
-    const p = startLine.geometry.getAttribute('position');
-    for (let i = 0; i < uv.count; i++) {
-      uv.setXY(i, (p.getZ(i) - GREENWICH_Z + RH - 0.2) / (2 * (RH - 0.2)), (p.getX(i) - startX0) / (startX1 - startX0));
-    }
-    uv.needsUpdate = true;
-  }
-  group.add(startLine);
-
-  const laneTex = laneLabelTexture();
-  const laneMat = new THREE.MeshStandardMaterial({ map: laneTex, transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false });
-  for (const [i, slot] of [
-    [0, C.grid[0]],
-    [1, C.grid[1]],
-  ] as const) {
-    const g = new THREE.PlaneGeometry(3.0, 3.0);
-    const uv = g.getAttribute('uv');
-    for (let k = 0; k < uv.count; k++) uv.setX(k, (uv.getX(k) + i) / 2);
-    g.rotateX(-Math.PI / 2);
-    g.rotateY(-Math.PI / 2);
-    const label = new THREE.Mesh(g, laneMat);
-    const lp = pointAt(C, slot.s - 3.2);
-    label.position.set(lp.x, lp.y + 0.014, lp.z + slot.d);
-    label.receiveShadow = true;
-    label.name = `laneLabel${i + 1}`;
-    group.add(label);
-  }
-
-  const gantry = new THREE.Group();
-  gantry.name = 'startGantry';
-  const flags: { mesh: THREE.Mesh; base: Float32Array; phase: number }[] = [];
-  {
-    const gb = new GeoBuilder();
-    const yb = START_Y + CURB;
-    const topY = START_Y + 8.1;
-    const gz = GREENWICH_Z;
-    for (const dz of [-8.7, 8.7]) {
-      rbox(gb, startX0 - 0.25, startX0 + 0.25, yb, topY + 0.3, gz + dz - 0.25, gz + dz + 0.25, 0.08, '#f7f7f2');
-      box(gb, startX0 - 0.4, startX0 + 0.4, yb, yb + 0.3, gz + dz - 0.4, gz + dz + 0.4, '#2b2f36');
-    }
-    rbox(gb, startX0 - 0.3, startX0 + 0.3, topY - 0.45, topY + 0.1, gz - 9.0, gz + 9.0, 0.08, '#2b2f36');
-    const mat = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.35, clearcoat: 0.6 });
-    gantry.add(meshOf(gb, mat, 'gantryFrame', true, true));
-    const banner = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.75, 13.6), new THREE.MeshStandardMaterial({ map: bannerTexture(), roughness: 0.55 }));
-    banner.position.set(startX0, topY - 1.45, gz);
-    banner.castShadow = true;
-    banner.name = 'gantryBanner';
-    gantry.add(banner);
-    // Waving chequered flags on the gantry posts.
-    const flagMat = new THREE.MeshStandardMaterial({ map: checkerTexture(6, 4), roughness: 0.6, side: THREE.DoubleSide });
-    for (const [i, dz] of [
-      [0, -8.7],
-      [1, 8.7],
-    ] as const) {
-      const g = new THREE.PlaneGeometry(1.8, 1.2, 12, 4);
-      g.translate(0.9, 0, 0);
-      const mesh = new THREE.Mesh(g, flagMat);
-      mesh.position.set(startX0, START_Y + 8.1 + 0.9, gz + dz);
-      mesh.rotation.y = dz < 0 ? 0.35 : -0.35 + Math.PI;
-      mesh.castShadow = true;
-      mesh.name = `startFlag${i + 1}`;
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.8, 8), new THREE.MeshStandardMaterial({ color: '#d8dce2', metalness: 0.8, roughness: 0.3 }));
-      pole.position.set(startX0, START_Y + 8.1 + 0.9, gz + dz);
-      gantry.add(pole);
-      gantry.add(mesh);
-      flags.push({ mesh, base: Float32Array.from(g.getAttribute('position').array as ArrayLike<number>), phase: i * 1.7 });
-    }
-  }
-  group.add(gantry);
 
   // --- Houses: Victorians facing the course, simpler blocks everywhere else ------------------------
   for (const b of blocks) {
@@ -1438,9 +1166,7 @@ export function buildCity(): City {
     cones.add(ring, '#ff5a2a');
   }
 
-  // --- Kicker: a hinged ramp on hydraulic rams (it drops once the first car is off it) ----------------
-  const kicker = buildKicker({ ply: plyMat, stripe: stripeMat, cone: coneMat });
-  group.add(kicker.group);
+  // (The kicker at the end of the pier is shared with every lip: src/scene/kicker.ts.)
   const kx0 = KICK_X;
 
   // --- Traffic cones --------------------------------------------------------------------------------
@@ -1471,6 +1197,7 @@ export function buildCity(): City {
   // --- The crowd ---------------------------------------------------------------------------------------
   const crowd = new Crowd(crowdSpots, rng);
   group.add(crowd.group);
+  group.add(tyreWall(tyreSpots));
 
   // --- Assemble --------------------------------------------------------------------------------------
   group.add(meshOf(concrete, concreteMat, 'concrete', false, true));
@@ -1491,22 +1218,10 @@ export function buildCity(): City {
   group.add(meshOf(boards, barricadeMat, 'barricades', true, true));
 
   const update = (dt: number, t: number, cars: { x: number; z: number }[] = []): void => {
-    for (const f of flags) {
-      const pos = f.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const arr = pos.array as Float32Array;
-      for (let i = 0; i < pos.count; i++) {
-        const x = f.base[i * 3];
-        const y = f.base[i * 3 + 1];
-        const amp = 0.18 * (x / 1.8);
-        arr[i * 3 + 2] = f.base[i * 3 + 2] + Math.sin(t * 5 + x * 3.2 + f.phase) * amp + Math.sin(t * 3.1 + y * 2) * 0.03 * x;
-      }
-      pos.needsUpdate = true;
-      f.mesh.geometry.computeVertexNormals();
-    }
     crowd.update(dt, t, cars);
   };
 
-  return { group, kicker, update };
+  return { group, update };
 }
 
 // ---------------------------------------------------------------------------------------------

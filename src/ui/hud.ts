@@ -2,7 +2,7 @@
 // flashes; in a lap race the lap and the race clock), a strip showing where the cars are on the
 // course, the countdown with a controls card, name tags over the cars, and the results. Racing solo
 // there's one card, split times against the best run and the ghost's marker on the strip.
-import type { Mode } from '../maps';
+import type { ModeRules } from '../modes';
 import type { ItemKind } from '../sim/race';
 import type { PlayerIndex } from '../types';
 import { renderWind } from './build';
@@ -69,11 +69,28 @@ export interface ResultRow {
   wins: number;
 }
 
+/** What the HUD needs to know about the event in play. */
+export interface HudEvent {
+  rules: ModeRules;
+  /** Laps to race; a loop shows the lap counter. */
+  laps: number;
+  loop: boolean;
+  /** Where the run ends ("the lip", "the flag"), for the straggler's clock. */
+  goal: string;
+  /** Where the wind forecast applies ("on the straight"), if not everywhere. */
+  windWhere?: string;
+  /** The controls card's tip, and its warning line (shown racing two, not solo). */
+  tip?: string;
+  warn?: string;
+}
+
 export interface ResultsView {
-  mode: Mode;
-  /** The map's name, and its laps (a race). */
+  rules: ModeRules;
+  /** The map's name, its laps, whether it's a loop, and where the run ends ("the lip"). */
   map: string;
   laps: number;
+  loop: boolean;
+  goal: string;
   rows: ResultRow[];
   winner: PlayerIndex | null;
   round: number;
@@ -99,7 +116,7 @@ export const ITEM_LABELS: Record<ItemKind, string> = {
 };
 /** One line per item for the controls card. */
 export const ITEM_HELP: [ItemKind, string][] = [
-  ['jump', 'Jump: hop over trouble, or Lombard’s hedges'],
+  ['jump', 'Jump: hop over trouble, or a low hedge'],
   ['grit', 'Determination: plough through the next thing'],
   ['poo', 'Poo: drop it for your rival'],
   ['topup', 'Boost +50%: refills half the bottle'],
@@ -177,7 +194,7 @@ export class HUD {
   private readonly callout: HTMLElement;
   private results: HTMLElement | null = null;
   private solo = false;
-  private mode: Mode = 'jump';
+  private ev: HudEvent | null = null;
   private laps = 1;
   private readonly marks: HTMLElement[] = [];
   private readonly line: HTMLElement;
@@ -282,13 +299,13 @@ export class HUD {
     this.root.classList.toggle('hidden', !visible);
   }
 
-  setup(names: [string, string], colors: [string, string], wind: number, keys: [HudKeys | null, HudKeys | null], solo = false, mode: Mode = 'jump', laps = 1): void {
+  setup(names: [string, string], colors: [string, string], wind: number, keys: [HudKeys | null, HudKeys | null], solo: boolean, ev: HudEvent): void {
     this.solo = solo;
-    this.mode = mode;
-    this.laps = laps;
-    renderWind(this.wind, wind, 'WIND', mode === 'race' ? 'on the straight' : undefined);
+    this.ev = ev;
+    this.laps = ev.laps;
+    renderWind(this.wind, wind, 'WIND', ev.windWhere);
     this.root.classList.toggle('solo', solo);
-    this.root.classList.toggle('race', mode === 'race');
+    this.root.classList.toggle('no-hype', !ev.rules.hype);
     this.ghostDot.classList.add('hidden');
     for (const p of [0, 1] as PlayerIndex[]) {
       const c = this.cars[p];
@@ -306,7 +323,7 @@ export class HUD {
       c.dist.classList.add('hidden');
       c.speed.classList.remove('hidden');
       c.split.classList.add('hidden');
-      c.lap.classList.toggle('hidden', mode !== 'race');
+      c.lap.classList.toggle('hidden', !ev.loop);
       c.lap.textContent = '';
       c.splitUntil = 0;
       c.gauge.style.width = '100%';
@@ -354,7 +371,7 @@ export class HUD {
     c.speed.classList.toggle('hidden', flying || home);
     if (flying) c.dist.innerHTML = `${s.distance.toFixed(1)}<small>m</small>`;
     if (home) c.dist.textContent = fmtTime(s.raceTime);
-    if (this.mode === 'race') {
+    if (this.ev?.loop) {
       const text = home ? `${ORD[s.position - 1] ?? ''} 🏁` : s.lap >= this.laps ? `FINAL LAP` : `LAP ${Math.max(1, s.lap)}/${this.laps}`;
       if (c.lap.textContent !== text) c.lap.textContent = text;
       c.lap.classList.toggle('final', !home && s.lap >= this.laps);
@@ -394,7 +411,7 @@ export class HUD {
     // The straggler's clock.
     const clock = s.phase === 'race' && s.clock !== null && s.clock < 20;
     c.clock.classList.toggle('hidden', !clock);
-    if (clock && s.clock !== null) c.clock.textContent = `⏱ ${Math.ceil(s.clock)}s to the ${this.mode === 'race' ? 'flag' : 'lip'}!`;
+    if (clock && s.clock !== null) c.clock.textContent = `⏱ ${Math.ceil(s.clock)}s to ${this.ev?.goal ?? 'the finish'}!`;
     // The kicker dropping in front of a car that's still on its way to it.
     const ramp = s.phase === 'race' && s.ramp !== null;
     c.ramp.classList.toggle('hidden', !ramp);
@@ -536,23 +553,11 @@ export class HUD {
       el('b', '', it, ITEM_ICONS[kind]);
       it.append(text);
     }
-    if (this.mode === 'race') {
-      el(
-        'div',
-        'tip',
-        this.help,
-        `${this.laps} laps · Tap the brake while turning to DRIFT: tighter corners, and it fills your boost · Boost on the straights and up the hill · Gas as “1” fades: rocket start`,
-      );
-      el('div', 'tip ramp', this.help, '⚠ The crests throw you in the air: line up before them, you can’t steer or brake in flight');
-    } else {
-      el(
-        'div',
-        'tip',
-        this.help,
-        'Tap the brake while turning to DRIFT: tighter corners, and it fills your boost · Empty the boost on the pier: what’s left at the lip is wasted · Gas as “1” fades: rocket start',
-      );
-      if (!opts.solo) el('div', 'tip ramp', this.help, '⚠ Be first to the kicker: it drops the moment someone jumps, and the later you get there the lower it is');
-    }
+    const ev = this.ev;
+    if (ev?.tip) el('div', 'tip', this.help, `${ev.loop && ev.laps > 1 ? `${ev.laps} laps · ` : ''}${ev.tip}`);
+    // The map's own warning, else the mode's (the dropping kicker only matters racing two).
+    if (ev?.warn) el('div', 'tip ramp', this.help, ev.warn);
+    else if (ev?.rules.warn && !opts.solo) el('div', 'tip ramp', this.help, ev.rules.warn);
   }
 
   showResults(v: ResultsView, actions: { label: string; primary?: boolean; id: string; key?: string; onClick: () => void }[]): void {
@@ -561,15 +566,13 @@ export class HUD {
     r.id = 'results';
     const solo = v.solo;
     const row0 = v.rows[0];
-    const race = v.mode === 'race';
+    // Scored on time (a race) or on distance (the long jump): the mode's rules say how to show it.
+    const race = v.rules.score === 'time';
+    const fmt = (x: number): string => v.rules.format(x);
     const title = solo
       ? row0.dnf
-        ? race
-          ? 'Never made the flag'
-          : 'Never made the lip'
-        : race
-          ? fmtTime(row0.race?.time ?? 0)
-          : `${row0.distance.toFixed(1)} m`
+        ? `Never made ${v.goal}`
+        : fmt(race ? (row0.race?.time ?? 0) : row0.distance)
       : v.winner === null
         ? v.rows.every((x) => x.dnf)
           ? 'Nobody made it!'
@@ -580,12 +583,11 @@ export class HUD {
     else if (v.winner !== null) h.style.color = v.rows[v.winner].color;
     const windKmh = Math.round(Math.abs(v.wind) * 3.6);
     const windText = windKmh === 0 ? 'calm' : `${windKmh} km/h ${v.wind < 0 ? 'headwind' : 'tailwind'}`;
-    const event = race ? `${v.map}, ${v.laps} laps` : v.map;
+    const event = v.loop ? `${v.map}, ${v.laps} laps` : v.map;
     // Solo: how this run compares with the best before it (further is better in the long jump,
     // quicker in a race).
     const score = race ? (row0.race?.time ?? 0) : row0.distance;
-    const fmt = (x: number): string => (race ? fmtTime(x) : `${x.toFixed(1)} m`);
-    const better = (a: number, b: number): boolean => (race ? a < b - 0.005 : a > b + 0.005);
+    const better = (a: number, b: number): boolean => v.rules.better(a, b);
     el(
       'div',
       'sub',
@@ -612,12 +614,17 @@ export class HUD {
       nm.append(row.name);
       const boostNote = row.boostLeft >= 0.01 ? ` · ${Math.round(row.boostLeft * 100)}% boost unspent` : '';
       const rr = row.race;
+      const line = v.loop ? 'across the line' : `to ${v.goal}`;
       el(
         'div',
         'det',
         mid,
         rr
-          ? `${rr.finished ? (solo ? `${v.laps} laps` : rr.place === 1 ? 'First across the line' : 'Second across the line') : `Out after ${rr.laps} of ${v.laps} laps`}${rr.bestLap !== null ? ` · best lap ${fmtTime(rr.bestLap)}` : ''}`
+          ? v.loop
+            ? `${rr.finished ? (solo ? `${v.laps} laps` : `${rr.place === 1 ? 'First' : 'Second'} ${line}`) : `Out after ${rr.laps} of ${v.laps} laps`}${rr.bestLap !== null ? ` · best lap ${fmtTime(rr.bestLap)}` : ''}`
+            : rr.finished
+              ? `${solo ? 'Home' : `${rr.place === 1 ? 'First' : 'Second'} ${line}`}${row.airTime > 0 ? ` · ${Math.round(row.launchKmh)} km/h off the kicker, ${row.airTime.toFixed(1)} s in the air` : ''}`
+              : `Never made ${v.goal}`
           : row.dnf
             ? 'Never reached the lip'
             : `Lip in ${row.runTime.toFixed(1)} s at ${Math.round(row.launchKmh)} km/h${row.hypeBonus > 0.004 ? ` (HYPE +${Math.round(row.hypeBonus * 100)}%)` : ''}${row.ramp === null ? '' : ` · ramp ${Math.round(row.ramp)}°`} · ${row.airTime.toFixed(1)} s in the air${boostNote}`,
@@ -640,10 +647,10 @@ export class HUD {
     const best = el('div', 'best', r);
     best.id = 'session-best';
     if (v.best) {
-      // A solo race keeps the best run (all its laps); a race between two, the fastest lap.
-      const what = race ? (solo ? 'best run' : 'session best lap') : 'session best';
+      // A solo race keeps the best run (all its laps); a race of laps between two, the fastest lap.
+      const what = race ? (solo ? 'best run' : v.loop ? 'session best lap' : 'session best') : 'session best';
       best.append(v.newRecord ? `🎉 New ${what}: ` : `${what[0].toUpperCase()}${what.slice(1)}: `);
-      el('b', '', best, race ? fmtTime(v.best.distance) : `${v.best.distance.toFixed(1)} m`);
+      el('b', '', best, fmt(v.best.distance));
       best.append(solo ? ` ${race ? 'at' : 'from'} ${solo.start}` : ` by ${v.best.name} (round ${v.best.round})`);
     } else {
       best.textContent = 'No session best yet';

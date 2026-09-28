@@ -1,9 +1,11 @@
-// Dev preview of the Twin Peaks loop's scenery.
+// Dev preview of the Twin Peaks loop's scenery (as the game builds it: the venue and the course's
+// shared start line and gantry).
 // /preview/twinpeaks.html?view=aerial|start|climb|summit|drop|sweeper|city[&stats=1]
 // or any view: ?pos=x,y,z&target=x,y,z
 import * as THREE from 'three';
+import { TWIN_PEAKS_MAP } from '../src/maps';
 import { TWIN_PEAKS } from '../src/maps/twinPeaks';
-import { buildTwinPeaks } from '../src/scene/twinPeaks';
+import { mapScene } from '../src/scene/maps';
 import { pointAt } from '../src/track';
 import { startPreview, type PreviewView } from './harness';
 
@@ -34,9 +36,9 @@ startPreview({
     sweeper: along(sec('The Sweeper') + 10),
     city: { pos: [120, 60, 290], target: [120, 0, -600] },
   },
-  build: (scene: THREE.Scene) => {
+  build: (scene, world) => {
     const t0 = performance.now();
-    const tp = buildTwinPeaks();
+    const tp = mapScene(TWIN_PEAKS_MAP, world);
     const buildMs = performance.now() - t0;
     scene.add(tp.group);
     if (params.has('stats')) {

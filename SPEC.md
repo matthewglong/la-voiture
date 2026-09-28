@@ -2,14 +2,24 @@
 
 Two players build cars on one shared screen, then race each other down a San Francisco hill, through
 Lombard Street's switchbacks, along the pier and off a kicker into the Bay. The furthest splash wins.
-Or, the second event: a race of laps round a hilly loop at Twin Peaks. First across the line wins.
+Or race the same run (first into the Bay wins), or laps round a hilly loop at Twin Peaks (first across
+the line wins).
 
 ## Events and maps
-- The garage picks the **event**: a map, and what's raced on it. **The long jump** (Russian Hill):
-  point to point, ending at a kicker; the furthest splash wins. **The race** (Twin Peaks): a loop,
-  three laps; first across the line wins.
-- Everything below holds for both unless it says otherwise (the kicker, HYPE's launch boost, the
-  flight and the Bay are the long jump's).
+- The garage picks the **event**: a mode raced on a venue. **The long jump** (Russian Hill): point
+  to point, ending at a kicker; the furthest splash wins. **The sprint** (Russian Hill): the same
+  course, traffic and scenery, raced for time: the kicker is the finish line, the first car off it
+  wins, and it never drops. **The race** (Twin Peaks): a loop, three laps; first across the line
+  wins.
+- **Modes** are rules the whole game reads (`src/modes.ts`): what a run is scored on (distance from
+  the lip, or time), laps, the time limit, whether HYPE boosts the launch and whether the kicker
+  drops. A race point to point ends at the course's lip (the launch is the finish; the car flies on
+  into the water) or at a finish line, after which the cars brake to a stop in the run-off.
+- **Venues** are courses with their traffic, item boxes, strip, splits, starts and scenery; several
+  events can share one. Every course gets the same start line, grid and gantry, and a course with a
+  lip the same kicker, water and distance buoys, built from its shape.
+- Everything below holds for every event unless it says otherwise (the dropping kicker and HYPE's
+  launch boost are the long jump's).
 - **Elevation matters on the loop:** climbs at up to 11% that the weakest engines crawl up, three
   sharp crests that launch fast cars, and a drop at up to 16%. The ground contours the course
   (cuttings, embankments, the peaks behind) and the chase camera tilts with the road, so the climbs
@@ -20,7 +30,8 @@ Or, the second event: a race of laps round a hilly loop at Twin Peaks. First acr
 - A race's results show the times home, the best laps and the session's fastest lap; solo racing is a
   time trial of the full race against a ghost of the best run, with splits every lap.
 - **Balance:** `npm run balance` enforces the long jump's rules (below). `npm run balance:race`
-  reports how every build does over a lap of each loop; race mode has no balance targets yet.
+  reports how every build does on each race map (a lap of a loop, or the whole sprint); race mode
+  has no balance targets yet. `npm run smoke` races the CPU against itself on every map and mode.
 
 ## Scope
 - **One screen, two players.** Build phase → countdown → race → flight → results → rematch. No
@@ -81,7 +92,11 @@ Or, the second event: a race of laps round a hilly loop at Twin Peaks. First acr
   same spot and only comes down).
 - **Flight:** gravity, drag against the airspeed, lift perpendicular to it (capped kite; glider wings
   that spring open at the top of the arc and trim to a glide).
-- **Score:** the horizontal distance from the lip to the first contact with the water.
+- **Score:** the horizontal distance from the lip, along the way the kicker points, to the first
+  contact with the water.
+- **One sim, one model:** every map and mode runs the same sim, and the CPU plans with the same
+  handling formulas (`src/sim/physics.ts`). The one rule that still depends on the course is the
+  wind's effect on top speed (see "Wind along the car" in `DECISIONS.md`).
 
 ## Rematch
 - Both cars are kept exactly as they raced; changed slots and last race's parts are marked. A new

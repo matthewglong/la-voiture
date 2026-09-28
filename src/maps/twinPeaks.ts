@@ -2,8 +2,9 @@
 // straight along the bottom of the valley, a climb up the switchbacks with a crest at the top, the
 // summit hairpin, then a long, fast run back down with two crests that throw the quick cars into
 // the air, and a chicane onto the straight. No Three.js or DOM imports.
+import type { Venue } from '.';
 import type { RaceSim } from '../sim/race';
-import { buildLoop, pointAt, type Course, type LoopNode, type LoopSection } from '../track';
+import { buildLoop, pointAt, type Course, type SplineNode, type SplineSection } from '../track';
 
 /** Road half-width (m). */
 export const TP_HW = 6.5;
@@ -12,7 +13,7 @@ export const TP_HW = 6.5;
  * The loop, anticlockwise seen from above (+x east, +z south): heading +x along the start straight,
  * right onto the climb, and round. Heights in metres above the valley floor.
  */
-const NODES: LoopNode[] = [
+const NODES: SplineNode[] = [
   // 0: the start/finish straight.
   { x: -40, z: 0, y: 0 },
   { x: 60, z: 0, y: 0.5 },
@@ -47,7 +48,7 @@ const NODES: LoopNode[] = [
   { x: -92, z: 4, y: 0 },
 ];
 
-const SECTIONS: LoopSection[] = [
+const SECTIONS: SplineSection[] = [
   { from: 0, kind: 'straight', name: 'Portola Straight', hw: TP_HW, edgeL: 'rail', edgeR: 'rail' },
   { from: 1, kind: 'corner', name: 'Turn 1', hw: TP_HW, edgeL: 'barrier', edgeR: 'curb' },
   { from: 3, kind: 'climb', name: 'The Switchbacks', hw: TP_HW, edgeL: 'barrier', edgeR: 'barrier' },
@@ -92,3 +93,40 @@ export function populateTwinPeaks(sim: RaceSim, r: () => number): void {
     p.d1 = hw - 0.8;
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The venue
+
+const tp = secS0;
+
+export const TWIN_PEAKS_VENUE: Venue = {
+  id: 'twin-peaks',
+  name: 'Twin Peaks',
+  course: TWIN_PEAKS,
+  boxes: [
+    { s: tp('Turn 1') - 30, ds: [-4.4, 0, 4.4] },
+    { s: tp('The Switchbacks') + 90, ds: [-4.4, 0, 4.4] },
+    { s: tp('The Drop') + 20, ds: [-4.4, 0, 4.4] },
+    { s: tp('The Sweeper') + 70, ds: [-4.4, 0, 4.4] },
+  ],
+  populate: populateTwinPeaks,
+  strip: [
+    { label: 'START', s: TWIN_PEAKS.startS },
+    { label: 'CLIMB', s: tp('The Switchbacks') },
+    { label: 'SUMMIT', s: tp('Summit Hairpin') },
+    { label: 'DROP', s: tp('The Drop') },
+    { label: 'CHICANE', s: tp('Chicane') },
+  ],
+  splits: [
+    { label: 'SUMMIT', s: tp('Summit Hairpin') },
+    { label: 'SWEEPER', s: tp('The Sweeper') },
+  ],
+  starts: [{ id: 'top', name: 'The grid', what: 'a full race', s: null }],
+  hints: {
+    driftUntil: Infinity,
+  },
+  // On a loop the wind is behind you on one straight and in your face on the other.
+  windWhere: 'on the straight',
+  tip: 'Tap the brake while turning to DRIFT: tighter corners, and it fills your boost · Boost on the straights and up the hill · Gas as “1” fades: rocket start',
+  warn: '⚠ The crests throw you in the air: line up before them, you can’t steer or brake in flight',
+};

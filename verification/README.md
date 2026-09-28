@@ -1,5 +1,34 @@
 # Verification
 
+## One game, many maps pass
+
+The restructure that defines modes, maps and physics once (see "One game, many maps" in
+`DECISIONS.md`), and the Russian Hill sprint. Checked in Node and in headless Chromium (GPU) against
+`npm run dev`:
+
+- **Existing maps unchanged:** 16 fingerprinted two-car races (traffic, items, HYPE, drifting CPUs)
+  identical before and after every step (one Twin Peaks trace moved by rounding when the CPU took the
+  sim's grip formula; no result changed). `npm run balance` byte-identical and passing;
+  `npm run balance:race`'s Twin Peaks section byte-identical.
+- **`npm run smoke`:** every map and mode, plus spline test courses (a kicker facing −z raced as a
+  long jump and as a race; a finish line with a run-off): no NaNs, all runs end, results follow the
+  rules, splashes measured along the lip, deterministic. Passing.
+- **Browser:** autopilot races to the results on all three events; switching events in the garage;
+  a solo sprint; 0 console errors or warnings; `npm run build` clean.
+
+`extensible/` (JPEG, 1280×720; 05 is 1100×620 from `/preview/city.html?view=kickerTop&map=russian-hill-race`):
+
+| File | Shows |
+|---|---|
+| `ext-01-garage-three-events` | The event picker: long jump and sprint on Russian Hill, the Twin Peaks race; the shared gantry and grid |
+| `ext-02-long-jump-flight` | The long jump as before: the kicker and buoys built from the lip, the ramp dropping for the chaser |
+| `ext-03-sprint-winner-off-the-kicker` | The sprint: first off the kicker is the winner (no HYPE, the ramp stays up) |
+| `ext-04-sprint-results` | Sprint results: times, "First to the lip", the flights, the session best |
+| `ext-05-kicker-finish-band` | The chequered finish band on the kicker, shown only for the sprint |
+| `ext-06-twin-peaks-shared-gantry` | Twin Peaks' start line, grid and gantry from the shared builders |
+| `ext-07-twin-peaks-shared-tyre-walls` | Twin Peaks mid-race with the shared tyre walls |
+| `ext-08-solo-sprint` | A solo sprint from Leavenworth: a time trial against the ghost |
+
 ## Two events and maps pass
 
 A second event (a lap race round a new loop, Twin Peaks) and the restructure that makes events and

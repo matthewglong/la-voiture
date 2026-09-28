@@ -1,8 +1,9 @@
-// Race-mode balance report: every affordable build, one lap of each loop map from a standing start
-// with the autopilot (empty course, no items or HYPE), in three winds. The parts were designed and
-// balanced for the long jump (see balance.ts, which enforces it); this reports how they come out
-// racing laps, so race mode can be tuned against numbers. It checks nothing (only that every
-// build gets round and nothing is NaN): what "balanced" means for racing is still to be decided.
+// Race-mode balance report: every affordable build, driven by the autopilot on each race map
+// (empty course, no items or HYPE) in three winds: one lap of a loop from a standing start, or the
+// whole run of a point-to-point race from the grid. The parts were designed and balanced for the
+// long jump (see balance.ts, which enforces it); this reports how they come out racing, so race
+// mode can be tuned against numbers. It checks nothing (only that every build gets home and
+// nothing is NaN): what "balanced" means for racing is still to be decided.
 // Run with `npm run balance:race`.
 import { MAPS, type MapDef } from '../src/maps';
 import { BUDGET, PARTS, SLOT_LABELS, computeStats, defaultConfig } from '../src/parts';
@@ -24,7 +25,7 @@ interface Lapped {
   lap: number;
 }
 
-/** One build, one lap: the autopilot on an empty loop. */
+/** One build, one lap (or the whole run point to point): the autopilot on an empty course. */
 function lapTime(map: MapDef, config: CarConfig, wind: number): Lapped['result'] {
   const sim = new RaceSim([computeStats(config)], wind, { obstacles: false, items: false, hype: false, laps: 1 }, map);
   const bot = new Bot(sim, 0, { dodge: false, items: false });
@@ -52,8 +53,9 @@ let stuck = 0;
 
 const builds = enumerateBuilds();
 for (const map of MAPS.filter((m) => m.mode === 'race')) {
-  out(`# ${map.name}: one lap (${map.course.length.toFixed(0)} m) from a standing start`);
-  out(`Every affordable build (budget $${BUDGET}): ${builds.length}, driven by the autopilot on an empty loop.`);
+  const loop = map.course.loop;
+  out(loop ? `# ${map.name}: one lap (${map.course.length.toFixed(0)} m) from a standing start` : `# ${map.name} (race): the whole run (${map.course.length.toFixed(0)} m) from the grid`);
+  out(`Every affordable build (budget $${BUDGET}): ${builds.length}, driven by the autopilot on an empty ${loop ? 'loop' : 'course'}.`);
   out('');
   const ranked = new Map<number, Lapped[]>();
   for (const wind of WINDS) {
@@ -70,7 +72,7 @@ for (const map of MAPS.filter((m) => m.mode === 'race')) {
   for (const wind of WINDS) {
     const scored = ranked.get(wind)!;
     out(`## Quickest ${TOP_N}, ${windLabel(wind)}`);
-    out(`${pad('#', 3, true)}  ${pad('lap s', 6, true)}  ${pad('$', 3, true)}  build`);
+    out(`${pad('#', 3, true)}  ${pad(loop ? 'lap s' : 'time s', 6, true)}  ${pad('$', 3, true)}  build`);
     scored.slice(0, TOP_N).forEach((sc, i) => out(`${pad(i + 1, 3, true)}  ${pad(sc.lap.toFixed(1), 6, true)}  ${pad(sc.build.price, 3, true)}  ${label(sc.build.config)}`));
     out('');
   }
@@ -141,26 +143,31 @@ for (const map of MAPS.filter((m) => m.mode === 'race')) {
   const quick = paceOf((c) => c.engine !== 'mower');
   const mower = paceOf((c) => c.engine === 'mower');
   const zero = lapTime(map, defaultConfig(0), 0);
-  out('## Pacing (calm, the autopilot, one lap from a standing start)');
+  out(`## Pacing (calm, the autopilot, ${loop ? 'one lap from a standing start' : 'the whole run'})`);
   out(`V8 or jet builds (${quick.length}): median ${median(quick).toFixed(1)} s, 90% within ${pct(quick, 0.9).toFixed(1)} s`);
   out(`Lawnmower builds (${mower.length}): median ${median(mower).toFixed(1)} s, 90% within ${pct(mower, 0.9).toFixed(1)} s`);
-  out(`All-$0 build (${label(defaultConfig(0))}): ${zero.finished ? `${zero.runTime.toFixed(1)} s` : 'never got round'}`);
-  out(`So ${map.laps} laps take about ${(median(quick) * map.laps * 0.97).toFixed(0)} s for a V8 or jet build (flying laps are a touch quicker), and ${(median(mower) * map.laps).toFixed(0)} s on a lawnmower.`);
+  out(`All-$0 build (${label(defaultConfig(0))}): ${zero.finished ? `${zero.runTime.toFixed(1)} s` : loop ? 'never got round' : 'never got home'}`);
+  if (loop) out(`So ${map.laps} laps take about ${(median(quick) * map.laps * 0.97).toFixed(0)} s for a V8 or jet build (flying laps are a touch quicker), and ${(median(mower) * map.laps).toFixed(0)} s on a lawnmower.`);
   out('');
 
   out('## Notes');
   out(`- Paid parts never in the quickest ${Math.round(TOP_FRACTION * 100)}% in any wind: ${unused.length ? unused.join(', ') : 'none'}`);
   out(`- Never the quickest pick for their slot: ${neverBest.length ? neverBest.join(', ') : 'none'}`);
-  out(`- The long jump's rules (see npm run balance) would call those dominated. Racing laps is a different`);
-  out(`  event: flight parts (wings' lift, the kite, the launch rocket) do nothing on the road, and the hills`);
-  out(`  reward power. Race mode needs its own targets before it can pass or fail.`);
+  if (loop) {
+    out(`- The long jump's rules (see npm run balance) would call those dominated. Racing laps is a different`);
+    out(`  event: flight parts (wings' lift, the kite, the launch rocket) do nothing on the road, and the hills`);
+    out(`  reward power. Race mode needs its own targets before it can pass or fail.`);
+  } else {
+    out(`- The long jump's rules (see npm run balance) would call those dominated. A race to the lip is scored`);
+    out(`  on the time to the lip, so flight parts (wings' lift, the kite, the launch rocket) do nothing for it.`);
+  }
   out('');
 }
 
 out('## Checks');
 if (nan || stuck > 0) {
   if (nan) out('- FAIL: NaN values in the results');
-  if (stuck > 0) out(`- FAIL: ${stuck} build-and-wind runs never got round the lap`);
+  if (stuck > 0) out(`- FAIL: ${stuck} build-and-wind runs never got home`);
   process.exitCode = 1;
-} else out('- PASS: every build gets round every loop in every wind, no NaNs.');
+} else out('- PASS: every build gets home on every race map in every wind, no NaNs.');
 console.log(lines.join('\n'));

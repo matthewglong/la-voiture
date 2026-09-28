@@ -1,14 +1,15 @@
 // Twin Peaks around the lap race: golden grassy hills that meet the road in embankments and
-// cuttings, the two peaks with Sutro Tower on one of them, a grandstand and the start gantry on the
-// straight, armco and tyre walls, eucalyptus and cypress, a few houses down in the valley, and the
-// city and the Bay far below. Procedural, and merged by material to keep draw calls low.
+// cuttings, the two peaks with Sutro Tower on one of them, a grandstand on the straight, armco and
+// tyre walls, eucalyptus and cypress, a few houses down in the valley, and the city and the Bay far
+// below. Procedural, and merged by material to keep draw calls low. (The start line and the gantry
+// are shared with every map: src/scene/maps.ts adds them from the course.)
 import * as THREE from 'three';
 import { TP_HW, TWIN_PEAKS } from '../maps/twinPeaks';
-import { pointAt, toWorld, type CoursePoint } from '../track';
+import { pointAt, type CoursePoint } from '../track';
 import { Crowd, type Spot } from './crowd';
 import { GeoBuilder, box, cyl, meshOf, obox, prism, rbox, strip, type V3 } from './geo';
-import type { MapScene } from './maps';
-import { asphaltTexture, bannerTexture, checkerTexture, laneLabelTexture, tree } from './props';
+import type { VenueScene } from './maps';
+import { asphaltTexture, tree, tyreWall, type TyreSpot } from './props';
 import { canvasTexture, makeRng, smoothstep } from './util';
 
 const C = TWIN_PEAKS;
@@ -344,7 +345,7 @@ function cypress(b: GeoBuilder, x: number, y: number, z: number, s: number): voi
 // ---------------------------------------------------------------------------------------------
 // Build
 
-export function buildTwinPeaks(): MapScene {
+export function buildTwinPeaks(): VenueScene {
   const group = new THREE.Group();
   group.name = 'twin-peaks';
   const rng = makeRng(1932);
@@ -438,7 +439,7 @@ export function buildTwinPeaks(): MapScene {
 
   // --- Walls: tyre walls round the outside of the tight bends, armco everywhere else there's a
   // wall, and a low kerbstone where the road just runs onto the grass -----------------------------
-  const tyreAt: { x: number; y: number; z: number; i: number }[] = [];
+  const tyreAt: TyreSpot[] = [];
   {
     for (const side of [-1, 1] as const) {
       const edgeOf = (p: CoursePoint): string => (side > 0 ? p.edgeR : p.edgeL);
@@ -495,90 +496,10 @@ export function buildTwinPeaks(): MapScene {
     }
   }
   // The tyres, three to a stack, instanced (there are thousands).
-  {
-    const geo = new THREE.TorusGeometry(0.32, 0.15, 5, 10);
-    geo.rotateX(Math.PI / 2);
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshPhysicalMaterial({ roughness: 0.45, clearcoat: 0.4 }), tyreAt.length * 3);
-    const m = new THREE.Matrix4();
-    const c = new THREE.Color();
-    const colors = ['#1e1f22', '#e8322a', '#f4f4ef'];
-    tyreAt.forEach((t, k) => {
-      for (let j = 0; j < 3; j++) {
-        m.makeTranslation(t.x, t.y + 0.15 + j * 0.29, t.z);
-        mesh.setMatrixAt(k * 3 + j, m);
-        mesh.setColorAt(k * 3 + j, c.set(j === 1 ? colors[1 + (t.i % 2)] : colors[0]));
-      }
-    });
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.name = 'tyreWalls';
-    mesh.computeBoundingSphere();
-    group.add(mesh);
-  }
+  group.add(tyreWall(tyreAt));
 
-  // --- Start/finish: the chequered line, the grid, the gantry and the grandstand -------------------
+  // --- The grandstand on the outside of the start/finish straight --------------------------------
   const sp = pointAt(C, C.startS);
-  {
-    const g = new THREE.PlaneGeometry(0.9, 2 * HW - 0.4);
-    g.rotateX(-Math.PI / 2);
-    g.rotateY(-sp.heading);
-    g.translate(sp.x, sp.y + 0.05, sp.z);
-    const line = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: checkerTexture(2, 34), roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }));
-    line.name = 'startLine';
-    line.receiveShadow = true;
-    group.add(line);
-    const laneMat = new THREE.MeshStandardMaterial({ map: laneLabelTexture(), transparent: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, depthWrite: false });
-    C.grid.forEach((slot, i) => {
-      const lg = new THREE.PlaneGeometry(3.0, 3.0);
-      const uv = lg.getAttribute('uv');
-      for (let k = 0; k < uv.count; k++) uv.setX(k, (uv.getX(k) + i) / 2);
-      lg.rotateX(-Math.PI / 2);
-      lg.rotateY(-Math.PI / 2 - sp.heading);
-      const w = toWorld(C, slot.s - 3.2, slot.d);
-      lg.translate(w.x, w.y + 0.05, w.z);
-      const label = new THREE.Mesh(lg, laneMat);
-      label.receiveShadow = true;
-      label.name = `laneLabel${i + 1}`;
-      group.add(label);
-    });
-  }
-  const gantry = new THREE.Group();
-  gantry.name = 'startGantry';
-  const flags: { mesh: THREE.Mesh; base: Float32Array; phase: number }[] = [];
-  {
-    const gb = new GeoBuilder();
-    const topY = 8.1;
-    const post = HW + 1.9;
-    for (const dz of [-post, post]) {
-      rbox(gb, -0.25, 0.25, 0, topY + 0.3, dz - 0.25, dz + 0.25, 0.08, '#f7f7f2');
-      box(gb, -0.4, 0.4, -0.4, 0.3, dz - 0.4, dz + 0.4, '#2b2f36');
-    }
-    rbox(gb, -0.3, 0.3, topY - 0.45, topY + 0.1, -post - 0.3, post + 0.3, 0.08, '#2b2f36');
-    gantry.add(meshOf(gb, new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.35, clearcoat: 0.6 }), 'gantryFrame', true, true));
-    const banner = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.75, 2 * HW + 0.4), new THREE.MeshStandardMaterial({ map: bannerTexture(), roughness: 0.55 }));
-    banner.position.set(0, topY - 1.45, 0);
-    banner.castShadow = true;
-    banner.name = 'gantryBanner';
-    gantry.add(banner);
-    const flagMat = new THREE.MeshStandardMaterial({ map: checkerTexture(6, 4), roughness: 0.6, side: THREE.DoubleSide });
-    for (const [i, dz] of [
-      [0, -post],
-      [1, post],
-    ] as const) {
-      const g = new THREE.PlaneGeometry(1.8, 1.2, 12, 4);
-      g.translate(0.9, 0, 0);
-      const mesh = new THREE.Mesh(g, flagMat);
-      mesh.position.set(0, topY + 0.9, dz);
-      mesh.rotation.y = dz < 0 ? 0.35 : -0.35 + Math.PI;
-      mesh.castShadow = true;
-      mesh.name = `startFlag${i + 1}`;
-      gantry.add(mesh);
-      flags.push({ mesh, base: Float32Array.from(g.getAttribute('position').array as ArrayLike<number>), phase: i * 1.7 });
-    }
-    gantry.position.set(sp.x, sp.y, sp.z);
-    gantry.rotation.y = -sp.heading;
-  }
-  group.add(gantry);
   // The grandstand on the outside of the straight, tiers of fans under a roof.
   {
     const s0 = C.startS - 40;
@@ -734,22 +655,10 @@ export function buildTwinPeaks(): MapScene {
   group.add(meshOf(city, cityMat, 'distantCity', false, false));
 
   const update = (dt: number, t: number, cars: { x: number; z: number }[]): void => {
-    for (const f of flags) {
-      const pos = f.mesh.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const arr = pos.array as Float32Array;
-      for (let i = 0; i < pos.count; i++) {
-        const x = f.base[i * 3];
-        const y = f.base[i * 3 + 1];
-        const amp = 0.18 * (x / 1.8);
-        arr[i * 3 + 2] = f.base[i * 3 + 2] + Math.sin(t * 5 + x * 3.2 + f.phase) * amp + Math.sin(t * 3.1 + y * 2) * 0.03 * x;
-      }
-      pos.needsUpdate = true;
-      f.mesh.geometry.computeVertexNormals();
-    }
     crowd.update(dt, t, cars);
     const on = Math.sin(t * 2.4) > 0.2;
     for (const m of lampMeshes) m.visible = on;
   };
 
-  return { group, gantry, update };
+  return { group, update };
 }

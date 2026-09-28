@@ -9,6 +9,8 @@
     "preview": "vite preview --host",
     "balance": "tsx scripts/balance.ts",
     "balance:race": "tsx scripts/balanceRace.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "check": "tsc --noEmit && tsx scripts/smoke.ts && tsx scripts/balance.ts > /dev/null && echo 'check: typecheck, smoke and balance pass'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

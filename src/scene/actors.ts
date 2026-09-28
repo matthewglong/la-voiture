@@ -1,10 +1,10 @@
 // The race's moving cast, drawn from the simulation each frame: toy Waymos (lidar hats spinning,
-// hazards blinking, sometimes a protest cone on the hood), wobbly tourist figurines, the Hyde St
-// cable car, loose traffic cones, item boxes, poo and seagulls.
+// hazards blinking, sometimes a protest cone on the hood), wobbly tourist figurines, the map's
+// cable cars, loose traffic cones, item boxes, poo and seagulls.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { RaceSim } from '../sim/race';
-import { buildCableCar, signTexture } from './city';
+import { buildCableCar, signTexture } from './props';
 import { canvasTexture } from './util';
 
 const TAU = Math.PI * 2;
@@ -360,9 +360,8 @@ export class Actors {
   private boxes = new Map<number, { root: THREE.Object3D; scale: number; seen: number }>();
   private cones = new Map<number, THREE.Object3D>();
   private gulls = new Map<number, GullView>();
-  /** Built once and kept: it only moves between rounds. */
-  private cable: THREE.Group | null = null;
-  private cableFaded = false;
+  /** Cable cars: built once and kept (they only move between rounds), one per car on the rails. */
+  private readonly cables: { root: THREE.Group; faded: boolean; sign: string }[] = [];
   private readonly boxGeo = new RoundedBoxGeometry(1.25, 1.25, 1.25, 3, 0.18);
   private readonly boxMat = new THREE.MeshPhysicalMaterial({
     map: boxTexture(),
@@ -530,16 +529,18 @@ export class Actors {
       this.group.remove(v.root);
       this.gulls.delete(id);
     }
-    // The cable car.
-    if (sim.cable) {
-      if (!this.cable) {
-        const signMat = new THREE.MeshStandardMaterial({ map: signTexture('POWELL & HYDE', '#1d1d22', '#f6e7b8'), roughness: 0.5 });
-        this.cable = buildCableCar(signMat, m.glass);
+    // The cable cars.
+    sim.cables.forEach((cb, i) => {
+      let v = this.cables[i];
+      if (!v || v.sign !== cb.sign) {
+        if (v) this.group.remove(v.root);
+        const signMat = new THREE.MeshStandardMaterial({ map: signTexture(cb.sign, '#1d1d22', '#f6e7b8'), roughness: 0.5 });
+        v = this.cables[i] = { root: buildCableCar(signMat, m.glass), faded: false, sign: cb.sign };
       }
-      if (this.cable.parent !== this.group) this.group.add(this.cable);
-      this.cable.position.set(sim.cable.x, sim.cable.y + 0.07, sim.cable.z);
-      this.cable.rotation.y = -sim.cable.heading;
-    }
+      if (v.root.parent !== this.group) this.group.add(v.root);
+      v.root.position.set(cb.x, cb.y + 0.07, cb.z);
+      v.root.rotation.y = -cb.heading;
+    });
   }
 
   /**
@@ -555,11 +556,12 @@ export class Actors {
         this.swap(v.root, fade);
       }
     }
-    if (this.cable && this.cable.parent) {
-      const fade = this.inTheWay(this.cable, cam, cars, 4.4, 3.4, 1.35);
-      if (fade !== this.cableFaded) {
-        this.cableFaded = fade;
-        this.swap(this.cable, fade);
+    for (const v of this.cables) {
+      if (!v.root.parent) continue;
+      const fade = this.inTheWay(v.root, cam, cars, 4.4, 3.4, 1.35);
+      if (fade !== v.faded) {
+        v.faded = fade;
+        this.swap(v.root, fade);
       }
     }
   }

@@ -11,8 +11,114 @@ of fuel, two item slots with more items, and a solo training mode: "Drift, boost
 first because it overrides parts of "The race" (those passages now point back to it). Then the keys
 were laid out afresh for one player or two, and the kicker started dropping once the first car is
 off it ("Keys, and a kicker worth racing to"). Most recently the game got a second event, a lap race
-on a new map, and the code was restructured so events and maps can be added: "Two events, and maps"
-comes first of all. The older sections that still hold are kept after them.
+on a new map, and the code was restructured so events and maps can be added: "Two events, and maps".
+Then the structure was finished off so that maps, modes and physics are each defined once and
+shared: "One game, many maps" comes first of all (it overrides parts of "Two events, and maps"). The
+older sections that still hold are kept after them.
+
+## One game, many maps
+
+The request: make sure maps can be added cleanly and a physics change reaches every map and mode,
+with no bespoke, siloed or parallel constructs, before piling on more; and make a race version of
+Russian Hill.
+
+### What was siloed, and what it is now
+
+- **Modes were a string checked in about 20 places** (`map.mode === 'race'` in the sim, the shell,
+  the HUD, the garage and the results). A mode is now one record of rules (`src/modes.ts`,
+  `ModeRules`): what it scores (`'distance'` or `'time'`) and how to compare and show a score, its
+  laps and time limit, the garage chip, where the run ends ("the lip", "the flag"), whether HYPE pays
+  at the lip and whether the kicker drops, and its countdown warning. Everything reads the rules;
+  nothing asks which mode it is. What differs by course (a loop, a lip, a finish line) is asked of
+  the course, not the mode.
+- **A map was one flat record** mixing where you race with what you race there. It's now an event
+  (`defineMap(venue, { id, mode, laps, blurb })`, in `src/maps/index.ts`) on a venue (course, item
+  boxes, traffic, strip, splits, starts, hints, tips, in the venue's own file). Events on one venue
+  share everything, including the built scenery (keyed by venue).
+- **The CPU restated the sim's handling** (its corner speeds, yaw limit, braking and drift grip were
+  its own copies of the formulas, with a hard-coded `0.3 * wind`). The formulas now live once in
+  `src/sim/physics.ts` (`normalLoad`, `cornerForce`, `cornerGrip`, `driftGrip`, `maxYawRate`,
+  `cornerSpeed`, `brakeDecel`, `topSpeedIn`, `windAlong`), the sim drives with them and the CPU plans
+  with them, so a change to the handling reaches both. The sim's arithmetic is unchanged to the bit;
+  the CPU's grip now comes out exactly as the sim's (`(μ·1.6·N)/m` rather than `μ·1.6·g`), which
+  moved one Twin Peaks race by rounding and changed no result or report.
+- **Russian Hill was built into the long jump.** Jumps were measured as `x − lip.x` over water at
+  y = 0, the side-on camera assumed the kicker faced +x at z = 0, the kicker and the Bay were built
+  from Russian Hill's constants, cross traffic ran along world z past a hard-coded 7 m road, one
+  cable car ran along world z and only waited at the start if it was on the "hyde" section, Lombard
+  was the only possible walled garden, and "first to the pier" was an event name. Now: a `Lip` has
+  its heading, direction and water level, and jumps, splashes, the camera, the kicker and the buoys
+  work in its frame; cross traffic and cable cars live in their own lane or rail frame (any number
+  of cable cars, each with the stretch of course its rails follow and its sign); gardens are a list
+  of rectangles in their own frames; the run-up is named by the lip ("the pier"), and the event is
+  `runupFirst`. Every change was checked to reproduce Russian Hill's arithmetic exactly (its heading
+  there is exactly 0), and it does: see "Checks".
+- **Two course builders lived in two maps.** The pieces builder (straights and arcs, Russian Hill's)
+  moved into `src/track.ts` (`layPieces`, `shiftPieces`, `samplePieces`), and the spline builder
+  (`buildSpline`, Twin Peaks' `buildLoop`) now builds point-to-point courses too, ending at a finish
+  line or in a kicker it ramps up itself (`lipAt` makes the lip for either builder).
+- **Scenery duplicated its furniture.** Both scenes built their own start line, grid labels and
+  gantry with waving flags, and their own tyre walls (merged tori in the city, instanced on Twin
+  Peaks). Now `src/scene/trackside.ts` builds the start line, grid and gantry (and a finish gantry
+  over a point-to-point finish line) from any course; `props.tyreWall` is the one tyre wall; the
+  kicker (`kicker.ts`) and the water and buoys (`bay.ts`) are built from any lip; the cable car and
+  the kicker's textures moved into `props.ts`. `src/scene/maps.ts` composes a venue's own scenery
+  (`VenueScene`: only what's the venue's) with all of that, so a new map gets it for free and a
+  change to it shows everywhere. The dev previews show the composed scene.
+
+### The race version of Russian Hill (the sprint)
+
+- The same venue as the long jump (course, traffic, items, splits, starts, scenery), raced for time.
+  The kicker is the finish line: the first car off it wins, and the cars fly on into the Bay (the
+  distance shows, but only the time counts). The kicker doesn't drop and HYPE doesn't boost the
+  launch (the race modes don't show HYPE). A chequered band across the kicker's lip marks the finish.
+- Why the lip rather than a line on the pier: it keeps the jump (the best bit of the map) and needs
+  nothing new: a race on a course with a lip is simply scored at the launch. The sim also supports a
+  point-to-point race with no lip: it finishes at `course.finishS`, and cars past the flag brake to
+  a stop in the run-off (a fence stops the end of the road too). The smoke test races both.
+- Results say "First to the lip · 84 km/h off the kicker, 2.8 s in the air"; the session best is the
+  quickest run; solo is a time trial from any of the four starts; "Every drop of boost" still counts
+  (boost left at the lip is wasted either way); "Fastest lap" only shows for more than one lap.
+- The CPU's boost plan already dumps the bottle before the lip (it follows the course, not the
+  mode), which is right for a race to the lip too. `npm run balance:race` reports the sprint: every
+  build gets home in every wind; the quickest take about 28 s in calm air (go-kart, monster wheels,
+  V8, spoiler).
+
+### Wind along the car (open question)
+
+Drag and flight treat the wind as a vector along +x, but its effect on the engine's top speed was
+the component along the car round a loop and the whole wind point to point, wherever the car
+points. Making it the component along the car everywhere (the consistent rule) was tried: it changes
+the long jump a little (a tailwind no longer raises top speed across Hyde St, a headwind no longer
+lowers it) and `npm run balance` then fails one check. Bathtub · Standard · Lawnmower · Bottle ·
+Glider wings · Wedge · None flies 39.6 m in calm air and 40.1 m into the −8 m/s headwind: +0.58 m,
+over the check's 0.5 m tolerance. It isn't the new rule so much as an old glider quirk: with the old
+rule the same build already flew 0.39 m further into the headwind than in calm air (a slow car's
+glider wings get more lift from the headwind's extra airspeed and stay up 3.6 s instead of 2.8 s).
+The rule stays as it was, in one shared function (`windAlong` in `physics.ts`, read by the sim and
+the CPU), until one of these is chosen: accept the consistent rule and widen that tolerance to
+1 m; retune the glider wings' trim so a headwind can't lengthen a slow car's glide; or keep the
+per-course rule.
+
+### Checks
+
+- **Nothing changed for the existing maps.** A fingerprint of 16 full two-car races (traffic, items,
+  HYPE, drifting CPUs; positions every quarter second, results and event counts) was taken before
+  the work and compared after every step: identical, apart from the one rounding move above and the
+  renamed event. `npm run balance` prints a report byte-identical to the one before the work (and
+  passes); `npm run balance:race`'s Twin Peaks section is byte-identical.
+- **`npm run smoke`** (new) races the CPU against itself on every map and mode (traffic, items and
+  HYPE on, four seeds each), plus test courses made only from the shared builders: a
+  point-to-point spline with a kicker facing −z raced as a long jump and as a race, and one with a
+  finish line. It checks no NaNs, every run ends, finishers have all their laps, places follow the
+  times, every splash is measured along the lip and lands in line with it, the kicker only drops
+  where the mode says, finished cars stop before the road runs out, and a seed replays exactly. It
+  caught the one bug of the work: cars past a point-to-point finish line braked too gently and ran
+  off the end of the road.
+- **In the browser** (headless Chromium on the GPU, against `npm run dev`): two autopilot cars to
+  the results on each of the three maps; the event picker switching between all three and back (the
+  scenery shared, the finish band only on the sprint); a solo sprint from Leavenworth; the kicker,
+  gantries and grid from the shared builders. 0 console errors or warnings. `npm run build` clean.
 
 ## Two events, and maps
 

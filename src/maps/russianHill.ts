@@ -6,19 +6,10 @@
 //
 // x runs down towards the Bay, z is to the right when looking along +x. The city's ground is a hill
 // that only varies along x (terrainY). No Three.js or DOM imports.
+import type { Venue } from '.';
 import type { RaceSim } from '../sim/race';
-import { DS, finishCourse, pointAt, type Course, type CoursePoint, type EdgeKind, type Section, type SectionKind } from '../track';
+import { finishCourse, layPieces, lipAt, pointAt, samplePieces, shiftPieces, type Course, type EdgeKind, type PieceSection } from '../track';
 
-interface Piece {
-  sec: number;
-  s0: number;
-  len: number;
-  x0: number;
-  z0: number;
-  h0: number;
-  /** Curvature (1/m, signed); 0 for straights. */
-  k: number;
-}
 
 // ---------------------------------------------------------------------------------------------
 // Layout
@@ -49,13 +40,9 @@ export const LOMBARD = {
   bandHalf: 15.5,
 } as const;
 
-interface PlanSection {
-  kind: SectionKind;
-  name: string;
-  hw: number;
+interface PlanSection extends PieceSection {
   /** Rise over run along x for x-running sections. */
   grade?: number;
-  pieces: { len: number; turn?: number }[];
 }
 
 const DEG = Math.PI / 180;
@@ -98,15 +85,6 @@ const PLAN: PlanSection[] = [
 // ---------------------------------------------------------------------------------------------
 // Construction
 
-function piecePos(p: Piece, u: number): { x: number; z: number; h: number } {
-  if (p.k === 0) return { x: p.x0 + Math.cos(p.h0) * u, z: p.z0 + Math.sin(p.h0) * u, h: p.h0 };
-  const h = p.h0 + p.k * u;
-  return {
-    x: p.x0 + (Math.sin(h) - Math.sin(p.h0)) / p.k,
-    z: p.z0 - (Math.cos(h) - Math.cos(p.h0)) / p.k,
-    h,
-  };
-}
 
 /** Piecewise-linear terrain profile along x: [x, y] breakpoints, ascending x. */
 let PROFILE: [number, number][] = [];
@@ -145,48 +123,12 @@ export function terrainGrade(x: number): number {
 
 function buildCourse(): { course: Course; marks: Marks } {
   // 1. Lay the pieces out from the origin heading +x.
-  const pieces: Piece[] = [];
-  const sections: Section[] = [];
-  let x = 0;
-  let z = 0;
-  let h = 0;
-  let s = 0;
-  PLAN.forEach((ps, si) => {
-    const s0 = s;
-    let xMin = x;
-    let xMax = x;
-    for (const pd of ps.pieces) {
-      const k = pd.turn ? pd.turn / pd.len : 0;
-      const p: Piece = { sec: si, s0: s, len: pd.len, x0: x, z0: z, h0: h, k };
-      pieces.push(p);
-      // Track the x range covered (arcs can bulge).
-      for (let u = 0; u <= pd.len; u += 0.5) {
-        const q = piecePos(p, u);
-        xMin = Math.min(xMin, q.x);
-        xMax = Math.max(xMax, q.x);
-      }
-      const e = piecePos(p, pd.len);
-      x = e.x;
-      z = e.z;
-      h = e.h;
-      s += pd.len;
-    }
-    sections.push({ kind: ps.kind, name: ps.name, s0, s1: s, hw: ps.hw, xMin, xMax: Math.max(xMax, x), heading: h });
-  });
+  const { pieces, sections, length: s } = layPieces(PLAN);
 
   // 2. Shift so the Embarcadero starts where it always has, on the pier axis (z = 0).
   const emb = sections.find((q) => q.kind === 'embarcadero')!;
   const embPiece = pieces.find((p) => p.s0 === emb.s0)!;
-  const dx = EMB_X - embPiece.x0;
-  const dz = -embPiece.z0;
-  for (const p of pieces) {
-    p.x0 += dx;
-    p.z0 += dz;
-  }
-  for (const q of sections) {
-    q.xMin += dx;
-    q.xMax += dx;
-  }
+  shiftPieces(pieces, sections, EMB_X - embPiece.x0, -embPiece.z0);
 
   // 3. Terrain profile, built backwards (uphill) from the Embarcadero at deck height.
   const prof: [number, number][] = [];
@@ -207,42 +149,9 @@ function buildCourse(): { course: Course; marks: Marks } {
   // Merge duplicate x breakpoints (the flat Hyde band has zero-width sections in x).
   PROFILE = prof.filter((p, i) => i === 0 || p[0] > prof[i - 1][0] + 1e-9 || p[1] !== prof[i - 1][1]);
 
-  // 4. Sample the centreline.
+  // 4. Sample the centreline (the last sample sits exactly on the lip).
   const total = s;
-  const n = Math.floor(total / DS) + 1;
-  const points: CoursePoint[] = [];
-  let pi = 0;
-  for (let i = 0; i < n; i++) {
-    const si = Math.min(i * DS, total);
-    while (pi < pieces.length - 1 && si >= pieces[pi].s0 + pieces[pi].len) pi++;
-    const p = pieces[pi];
-    const q = piecePos(p, si - p.s0);
-    const sec = sections[p.sec];
-    points.push({
-      s: si,
-      x: q.x,
-      y: 0,
-      z: q.z,
-      tx: Math.cos(q.h),
-      tz: Math.sin(q.h),
-      heading: q.h,
-      grade: 0,
-      curv: p.k,
-      hw: sec.hw,
-      edgeL: 'curb',
-      edgeR: 'curb',
-      sec: p.sec,
-    });
-  }
-  // The last sample sits exactly on the lip.
-  {
-    const p = pieces[pieces.length - 1];
-    const q = piecePos(p, p.len);
-    const last = points[points.length - 1];
-    if (last.s < total - 1e-9) {
-      points.push({ ...last, s: total, x: q.x, z: q.z });
-    }
-  }
+  const points = samplePieces(pieces, sections, total);
 
   // 5. Heights: the terrain for the city streets, a steady descent along Lombard's switchbacks, and
   // the ramp for the kicker.
@@ -296,7 +205,6 @@ function buildCourse(): { course: Course; marks: Marks } {
     if (sec.kind === 'embarcadero') crosswalks.push({ s0: sec.s0 + 1, s1: sec.s0 + 3.8 });
   });
 
-  const lipPt = points[points.length - 1];
   const startS = 33;
   const pier = sections.find((q) => q.kind === 'pier')!;
   const hyde = sections.find((q) => q.kind === 'hyde')!;
@@ -308,20 +216,17 @@ function buildCourse(): { course: Course; marks: Marks } {
     length: total,
     bumps,
     crosswalks,
-    lip: {
-      s: total,
-      x: lipPt.x,
-      y: lipPt.y,
-      z: lipPt.z,
+    lip: lipAt(points, {
       angle: KICKER_ANGLE,
       grade: KICKER_GRADE,
-      cos: 1 / Math.sqrt(1 + KICKER_GRADE * KICKER_GRADE),
-      sin: KICKER_GRADE / Math.sqrt(1 + KICKER_GRADE * KICKER_GRADE),
       rampS0: kick.s0,
       baseY: DECK_Y,
       runupS0: pier.s0,
+      runupName: 'the pier',
       finalS0: lomb.s1,
-    },
+      waterY: 0,
+    }),
+    finishS: null,
     startS,
     grid: [
       { s: startS - 3.2, d: -3 },
@@ -331,8 +236,9 @@ function buildCourse(): { course: Course; marks: Marks } {
     wideViews: [{ s0: lomb.s0, s1: lomb.s1 }],
     // The chase camera was tuned for the hill as it is: it doesn't tilt with the grade.
     followGrade: 0,
-    // Lombard's block (gardens between the switchbacks): walled in along its sides, houses at its ends.
-    garden: { x0: lomb.xMin + 0.5, x1: lomb.xMax - 0.5, zWall: LOMBARD.bandHalf - 0.9, gate: 7.5 },
+    // Lombard's block (gardens between the switchbacks): walled in along its sides, houses at its
+    // ends. It runs down the hill along x, centred on the pier's axis.
+    gardens: [{ ox: 0, oz: 0, heading: 0, u0: lomb.xMin + 0.5, u1: lomb.xMax - 0.5, wall: LOMBARD.bandHalf - 0.9, gate: 7.5 }],
     index: new Map(),
   };
   const marks: Marks = {
@@ -407,7 +313,7 @@ export function populateRussianHill(sim: RaceSim, r: () => number): void {
   for (const [lx, dir] of lanes) {
     let z = -dir * (60 + r() * 40);
     for (let k = 0; k < 3; k++) {
-      sim.addCrossing(lx, dir, z, DECK_Y, 7 + r() * 1.5, m.embS0 + 10);
+      sim.addCrossing({ x: lx, z: 0, ux: 0, uz: dir }, z * dir, DECK_Y, 7 + r() * 1.5, m.embS0 + 10);
       z -= dir * (38 + r() * 34);
     }
   }
@@ -421,7 +327,7 @@ export function populateRussianHill(sim: RaceSim, r: () => number): void {
     const z1 = h1.z - 9;
     const along = z0 + r() * (z1 - z0);
     const dir: 1 | -1 = r() < 0.5 ? 1 : -1;
-    sim.addCable(h0.x, h0.y, z0, z1, along, dir, 2 + r() * 3);
+    sim.addCable({ x: h0.x, z: 0, ux: 0, uz: 1 }, h0.y, z0, z1, along, dir, 2 + r() * 3, [hyde.s0, hyde.s1], 'POWELL & HYDE');
   }
   // Pedestrians on the crosswalks: each walks across and back, pausing at the kerb.
   for (const cw of c.crosswalks) {
@@ -449,3 +355,49 @@ export function populateRussianHill(sim: RaceSim, r: () => number): void {
     p.d1 = hw - 0.8;
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The venue
+
+const M = SF_MARKS;
+
+export const RUSSIAN_HILL_VENUE: Venue = {
+  id: 'russian-hill',
+  name: 'Russian Hill',
+  course: RUSSIAN_HILL,
+  boxes: [
+    { s: 62, ds: [-4.2, 0, 4.2] },
+    { s: M.hydeS0 + 30, ds: [-4.2, 0, 4.2] },
+    { s: M.lombardS0 + (M.lombardS1 - M.lombardS0) * 0.46, ds: [-2.2, 2.2] },
+    { s: M.lombardS1 + 34, ds: [-4.2, 0, 4.2] },
+    { s: M.pierS0 + 6, ds: [-4.2, 0, 4.2] },
+  ],
+  populate: populateRussianHill,
+  strip: [
+    { label: 'START', s: 0 },
+    { label: 'HYDE', s: M.hydeS0 },
+    { label: 'LOMBARD', s: M.lombardS0 },
+    { label: 'PIER', s: M.pierS0 },
+  ],
+  splits: [
+    { label: 'HYDE', s: M.hydeS0 },
+    { label: 'LOMBARD', s: M.lombardS0 },
+    { label: 'LEAVENWORTH', s: M.lombardS1 },
+    { label: 'PIER', s: M.pierS0 },
+  ],
+  starts: [
+    { id: 'top', name: 'The top', what: 'the whole run', s: null },
+    { id: 'hyde', name: 'Larkin St', what: 'the fast Hyde St corners', s: RUSSIAN_HILL.sections.find((q) => q.kind === 'intersection')!.s0 + 1 },
+    // Just round the Hyde St corner: the cable car waits at the far end (see RaceSim.placeStart).
+    { id: 'lombard', name: 'Hyde St', what: 'Lombard’s switchbacks', s: M.hydeS0 + 4 },
+    { id: 'final', name: 'Leavenworth', what: 'the last blocks and the jump', s: M.lombardS1 + 3 },
+  ],
+  hints: {
+    boostDump: [M.embS0 - 20, M.embS0],
+    hedges: [M.lombardS0 - 25, M.lombardS0 + 20],
+    hedgeHop: [M.lombardS0, M.lombardS1 + 6],
+    driftUntil: M.lombardS1,
+  },
+  tip: 'Tap the brake while turning to DRIFT: tighter corners, and it fills your boost · Empty the boost on the pier: what’s left at the lip is wasted · Gas as “1” fades: rocket start',
+  marks: { ...M },
+};

@@ -1,24 +1,33 @@
-// The maps: a course, what to race on it (the long jump or laps), and what lives on it (item boxes,
-// traffic, tourists). The race sim, the CPU and the balance check use these; the scenery for each
-// map lives in src/scene/maps.ts. No Three.js or DOM imports.
+// The maps. A map is an event on a venue:
+//   - a venue (src/maps/<venue>.ts) is a course and what lives on it: the item boxes, the traffic
+//     and tourists, the HUD strip's landmarks, the solo splits and starts, the tips. Its scenery is
+//     registered under the same id in src/scene/maps.ts.
+//   - an event is what's raced there: a mode (src/modes.ts), laps, and a line for the garage.
+// One venue can host several events (Russian Hill has the long jump and a race to the Bay), and they
+// share everything: the course, the traffic, the scenery. The race sim, the CPU, the HUD and the
+// balance scripts read maps only through MapDef. No Three.js or DOM imports.
+import { MODES, type Mode, type ModeRules } from '../modes';
 import type { RaceSim } from '../sim/race';
 import type { Course } from '../track';
-import { RUSSIAN_HILL, SF_MARKS, populateRussianHill } from './russianHill';
-import { TWIN_PEAKS, populateTwinPeaks } from './twinPeaks';
+import { RUSSIAN_HILL_VENUE } from './russianHill';
+import { TWIN_PEAKS_VENUE } from './twinPeaks';
 
-/** The long jump (point to point, furthest splash wins) or a lap race (first home wins). */
-export type Mode = 'jump' | 'race';
+export type { Mode } from '../modes';
 
-export interface MapDef {
+/** Where a solo run can start (s: arc length; null: the grid). */
+export interface SoloStart {
+  id: string;
+  name: string;
+  what: string;
+  s: number | null;
+}
+
+export interface Venue {
+  /** Also the scenery's id (src/scene/maps.ts). */
   id: string;
   /** Shown in the garage and the results. */
   name: string;
-  mode: Mode;
-  /** One line on what the event is. */
-  blurb: string;
   course: Course;
-  /** Laps in a race (1 for the long jump). */
-  laps: number;
   /** Rows of item boxes across the road (arc length, and offsets from the centreline). */
   boxes: { s: number; ds: number[] }[];
   /** Put the traffic and tourists out for a round (with the round's seeded RNG). */
@@ -27,8 +36,8 @@ export interface MapDef {
   strip: { label: string; s: number }[];
   /** Solo split points along the course (arc length; on a loop, every lap). */
   splits: { label: string; s: number }[];
-  /** Where a solo run can start (null: the grid). */
-  starts: { id: string; name: string; what: string; s: number | null }[];
+  /** Where a solo run can start. */
+  starts: SoloStart[];
   /** Stretches the tips talk about (arc lengths), for the one-off hints. */
   hints: {
     /** Empty the boost here: the run to the lip. */
@@ -40,86 +49,80 @@ export interface MapDef {
     /** Before here a corner is a good place to learn to drift. */
     driftUntil?: number;
   };
+  /** Where the wind forecast's head- or tailwind applies ("on the straight"), if not everywhere. */
+  windWhere?: string;
+  /** The countdown card's tip, and a warning line (shown instead of the mode's). */
+  tip?: string;
+  warn?: string;
+  /** Named arc lengths along the route (the test hooks and the balance check read them). */
+  marks?: Record<string, number>;
 }
 
-const M = SF_MARKS;
+export interface EventDef {
+  /** The map's id (?map=...). */
+  id: string;
+  mode: Mode;
+  /** Laps round a loop (ignored point to point). */
+  laps?: number;
+  /** One line on what the event is. */
+  blurb: string;
+  /** Overrides for this event (a different tip, fewer starts...). */
+  tip?: string;
+  warn?: string;
+  starts?: SoloStart[];
+}
 
-export const RUSSIAN_HILL_MAP: MapDef = {
+export interface MapDef extends Omit<Venue, 'id'> {
+  id: string;
+  /** The venue it's raced on (the scenery's id). */
+  venue: string;
+  mode: Mode;
+  rules: ModeRules;
+  /** Laps in a race (1 point to point). */
+  laps: number;
+  blurb: string;
+}
+
+/** An event on a venue. Checks the course can host the mode. */
+export function defineMap(venue: Venue, ev: EventDef): MapDef {
+  const rules = MODES[ev.mode];
+  rules.check(venue.course, ev.id);
+  const { id: venueId, ...rest } = venue;
+  return {
+    ...rest,
+    id: ev.id,
+    venue: venueId,
+    mode: ev.mode,
+    rules,
+    laps: rules.laps(venue.course, ev.laps ?? 1),
+    blurb: ev.blurb,
+    tip: ev.tip ?? venue.tip,
+    warn: ev.warn ?? venue.warn,
+    starts: ev.starts ?? venue.starts,
+  };
+}
+
+export const RUSSIAN_HILL_MAP: MapDef = defineMap(RUSSIAN_HILL_VENUE, {
   id: 'russian-hill',
-  name: 'Russian Hill',
   mode: 'jump',
   blurb: 'Down the hill, through Lombard St, off the pier: furthest splash wins',
-  course: RUSSIAN_HILL,
-  laps: 1,
-  boxes: [
-    { s: 62, ds: [-4.2, 0, 4.2] },
-    { s: M.hydeS0 + 30, ds: [-4.2, 0, 4.2] },
-    { s: M.lombardS0 + (M.lombardS1 - M.lombardS0) * 0.46, ds: [-2.2, 2.2] },
-    { s: M.lombardS1 + 34, ds: [-4.2, 0, 4.2] },
-    { s: M.pierS0 + 6, ds: [-4.2, 0, 4.2] },
-  ],
-  populate: populateRussianHill,
-  strip: [
-    { label: 'START', s: 0 },
-    { label: 'HYDE', s: M.hydeS0 },
-    { label: 'LOMBARD', s: M.lombardS0 },
-    { label: 'PIER', s: M.pierS0 },
-  ],
-  splits: [
-    { label: 'HYDE', s: M.hydeS0 },
-    { label: 'LOMBARD', s: M.lombardS0 },
-    { label: 'LEAVENWORTH', s: M.lombardS1 },
-    { label: 'PIER', s: M.pierS0 },
-  ],
-  starts: [
-    { id: 'top', name: 'The top', what: 'the whole run', s: null },
-    { id: 'hyde', name: 'Larkin St', what: 'the fast Hyde St corners', s: RUSSIAN_HILL.sections.find((q) => q.kind === 'intersection')!.s0 + 1 },
-    // Just round the Hyde St corner: the cable car waits at the far end (see RaceSim.placeStart).
-    { id: 'lombard', name: 'Hyde St', what: 'Lombard’s switchbacks', s: M.hydeS0 + 4 },
-    { id: 'final', name: 'Leavenworth', what: 'the last blocks and the jump', s: M.lombardS1 + 3 },
-  ],
-  hints: {
-    boostDump: [M.embS0 - 20, M.embS0],
-    hedges: [M.lombardS0 - 25, M.lombardS0 + 20],
-    hedgeHop: [M.lombardS0, M.lombardS1 + 6],
-    driftUntil: M.lombardS1,
-  },
-};
+});
 
-const tp = (name: string): number => TWIN_PEAKS.sections.find((q) => q.name === name)!.s0;
-
-export const TWIN_PEAKS_MAP: MapDef = {
-  id: 'twin-peaks',
-  name: 'Twin Peaks',
+export const RUSSIAN_HILL_RACE: MapDef = defineMap(RUSSIAN_HILL_VENUE, {
+  id: 'russian-hill-race',
   mode: 'race',
-  blurb: 'Three laps up and over Twin Peaks: first across the line wins',
-  course: TWIN_PEAKS,
-  laps: 3,
-  boxes: [
-    { s: tp('Turn 1') - 30, ds: [-4.4, 0, 4.4] },
-    { s: tp('The Switchbacks') + 90, ds: [-4.4, 0, 4.4] },
-    { s: tp('The Drop') + 20, ds: [-4.4, 0, 4.4] },
-    { s: tp('The Sweeper') + 70, ds: [-4.4, 0, 4.4] },
-  ],
-  populate: populateTwinPeaks,
-  strip: [
-    { label: 'START', s: TWIN_PEAKS.startS },
-    { label: 'CLIMB', s: tp('The Switchbacks') },
-    { label: 'SUMMIT', s: tp('Summit Hairpin') },
-    { label: 'DROP', s: tp('The Drop') },
-    { label: 'CHICANE', s: tp('Chicane') },
-  ],
-  splits: [
-    { label: 'SUMMIT', s: tp('Summit Hairpin') },
-    { label: 'SWEEPER', s: tp('The Sweeper') },
-  ],
-  starts: [{ id: 'top', name: 'The grid', what: 'a full race', s: null }],
-  hints: {
-    driftUntil: Infinity,
-  },
-};
+  blurb: 'Down the hill, through Lombard St and off the pier: first into the Bay wins',
+  tip: 'Tap the brake while turning to DRIFT: tighter corners, and it fills your boost · Empty the boost on the pier · The kicker is the finish line · Gas as “1” fades: rocket start',
+});
 
-export const MAPS: readonly MapDef[] = [RUSSIAN_HILL_MAP, TWIN_PEAKS_MAP];
+export const TWIN_PEAKS_MAP: MapDef = defineMap(TWIN_PEAKS_VENUE, {
+  id: 'twin-peaks',
+  mode: 'race',
+  laps: 3,
+  blurb: 'Three laps up and over Twin Peaks: first across the line wins',
+});
+
+export const MAPS: readonly MapDef[] = [RUSSIAN_HILL_MAP, RUSSIAN_HILL_RACE, TWIN_PEAKS_MAP];
 
 export function mapById(id: string | null | undefined): MapDef | null {
   return MAPS.find((m) => m.id === id) ?? null;

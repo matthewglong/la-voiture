@@ -2058,8 +2058,8 @@ kbd {
   display: none;
 }
 
-/* HYPE only pays off at the kicker, so a lap race doesn't show it. */
-.hud.race .meter.hype {
+/* HYPE only pays off at the kicker in the long jump, so the other modes don't show it. */
+.hud.no-hype .meter.hype {
   display: none;
 }
 
