@@ -1061,7 +1061,7 @@ function handleEvent(e: RaceEvent): void {
     case 'shortcut': {
       const hop = map.hints.hedgeHop;
       const lomb = !!hop && e.s > hop[0] && e.s < hop[1];
-      const word = lomb ? 'HEDGE HOP!' : 'SHORTCUT!';
+      const word = lomb ? `${(map.hints.hopName ?? 'hedge').toUpperCase()} HOP!` : 'SHORTCUT!';
       hud.flash(e.p, 'shortcut', `${word} +${Math.round(e.gained)} m`, 'hype', now, 2.2);
       shoutAt(e.p, word);
       particles.confetti(tmpV.copy(carPos(e.p)), 20);
@@ -1076,6 +1076,21 @@ function handleEvent(e: RaceEvent): void {
     case 'bell':
       sound.bell(0);
       break;
+    case 'bark': {
+      // Heard by whichever racer is nearer, panned to their side of the screen.
+      if (!sim) break;
+      let best = Infinity;
+      let side = 0;
+      for (const c of sim.cars) {
+        const d = Math.hypot(c.x - e.x, c.z - e.z);
+        if (d < best) {
+          best = d;
+          side = c.p === 0 ? -0.45 : 0.45;
+        }
+      }
+      sound.bark(side, Math.max(0, 1 - best / 45) * (e.chasing ? 1 : 0.6), e.id % 3 === 0);
+      break;
+    }
     case 'runupFirst': {
       const word = `FIRST TO ${(map.course.lip?.runupName ?? 'the kicker').toUpperCase()}!`;
       hud.flash(e.p, 'pier', word, 'hype', now, 2.2);
@@ -1175,7 +1190,7 @@ function awardsFor(p: PlayerIndex, res: CarResult[]): string[] {
   if (!race && o && !res[p].dnf && (o.dnf || res[p].runTime < o.runTime - 0.05)) out.push([6, '🏁 First to the lip']);
   if (race && sim && sim.laps > 1 && o && res[p].bestLap !== null && (o.bestLap === null || res[p].bestLap! < o.bestLap - 0.005)) out.push([7, '⏱ Fastest lap']);
   if (t.rocket) out.push([5, '🚀 Rocket start']);
-  if (t.shortcuts > 0) out.push([9, map.hints.hedgeHop ? '🌸 Hedge hopper' : '✂️ Corner cutter']);
+  if (t.shortcuts > 0) out.push([9, map.hints.hedgeHop ? ((map.hints.hopName ?? 'hedge') === 'hedge' ? '🌸 Hedge hopper' : `🧱 ${(map.hints.hopName ?? '').replace(/^./, (c) => c.toUpperCase())} hopper`) : '✂️ Corner cutter']);
   if (t.pooLanded > 0) out.push([8, `💩 Poo sniper${t.pooLanded > 1 ? ` ×${t.pooLanded}` : ''}`]);
   if (t.plowed > 0) out.push([7, '😤 Unstoppable']);
   if (t.shoves >= 3) out.push([6, `🥊 Bully ×${t.shoves}`]);
@@ -1827,6 +1842,15 @@ function updateCars(dt: number, gdt: number, t: number): void {
       tmpV.set(sc.x + fx * back - fz * out, sc.y + 0.15, sc.z + fz * back + fx * out);
       particles.driftSparks(tmpV, tmpV2.set(-fx, 0, -fz), 3, sc.driftT > 1.2);
     }
+    // Cutting across a park's lawn: grass clippings thrown up behind the wheels.
+    if (sc.phase === 'race' && (sc.surface === 'grass' || sc.surface === 'rough') && sc.grounded && speed > 3 && Math.random() < gdt * (4 + speed * 1.2)) {
+      const back = -k.length * 0.35;
+      const side = (Math.random() - 0.5) * k.width;
+      const fx = Math.cos(sc.heading);
+      const fz = Math.sin(sc.heading);
+      const greens = ['#6fae45', '#86c257', '#5a9a3a', '#a7c46a'];
+      particles.puff(tmpV.set(sc.x + fx * back - fz * side, sc.y + 0.15, sc.z + fz * back + fx * side), 1, greens[Math.floor(Math.random() * greens.length)], 0.22, 1.3);
+    }
     // Status effects: spinning in poo flings brown from the wheels.
     if (sc.phase === 'race' && sc.spin > 0 && sc.grounded && Math.random() < gdt * 30) {
       particles.puff(tmpV.set(sc.x, sc.y + 0.25, sc.z), 1, Math.random() < 0.5 ? '#6b4122' : '#7a4a24', 0.32, 1.2);
@@ -1841,9 +1865,14 @@ function updateCars(dt: number, gdt: number, t: number): void {
         car.hinted.add('pier');
         hud.flash(p, 'hint', `🔥 EMPTY YOUR BOOST FOR THE JUMP! (${input.labels(p).boost})`, 'boost', gameClock, 2.6);
       }
+      // A park's long grass is a crawl: say so the first time a player wades in.
+      if (sc.surface === 'rough' && sc.grounded && !car.hinted.has('rough')) {
+        car.hinted.add('rough');
+        hud.flash(p, 'hint', '🌾 LONG GRASS! STICK TO THE PATHS, OR JUMP IT', 'hype', gameClock, 2.6);
+      }
       if (hedges && sc.items.includes('jump') && sc.s > hedges[0] && sc.s < hedges[1] && !car.hinted.has('lombard')) {
         car.hinted.add('lombard');
-        hud.flash(p, 'hint', '🦘 JUMP THE HEDGES!', 'hype', gameClock, 3);
+        hud.flash(p, 'hint', `🦘 JUMP THE ${(map.hints.hopName ?? 'hedge').toUpperCase()}S!`, 'hype', gameClock, 3);
       }
       car.draftTime = sc.draft > 0.35 ? car.draftTime + gdt : 0;
       if (car.draftTime > 0.6 && !car.hinted.has(`draft${Math.floor(gameClock / 8)}`)) {

@@ -2,6 +2,7 @@
 // lip to the splash. No Three.js or DOM imports: the race sim (every map, every mode), the CPU and
 // the balance scripts share it exactly. The sim drives with these formulas and the CPU plans with
 // the same ones, so a change here reaches every map, every mode and the CPU's judgement at once.
+import type { Surface } from '../track';
 import type { CarStats } from '../types';
 
 export const RHO = 1.225;
@@ -23,6 +24,36 @@ export const MAX_YAW = 3.3;
 export const DRIFT_GRIP = 2.4;
 /** How much the wind shifts an engine's top speed (m/s per m/s of tailwind along the car). */
 export const WIND_TOP = 0.3;
+
+/** The steepest climb a course may have (every map is checked against it: see courseProblems). */
+export const MAX_CLIMB = 0.25;
+/**
+ * The crawl: on a climb steeper than CRAWL_GRADE, a car on the gas (not sliding, spun or stunned)
+ * never drops below CRAWL_SPEED (m/s): its lowest gear pulls anything up any hill a course is
+ * allowed to have, however heavy or weak it is. It picks up at CRAWL_ACC (m/s²).
+ */
+export const CRAWL_SPEED = 4;
+export const CRAWL_GRADE = 0.12;
+export const CRAWL_ACC = 2.5;
+
+/** What driving on a surface does: grip (× the tyres' friction), the top speed (× the engine's),
+ *  and how fast (1/s) speed above that bleeds away. */
+export interface SurfaceGrip {
+  grip: number;
+  top: number;
+  drag: number;
+  /** The fastest anything goes on it (m/s), whatever the engine: a jet on a lawn is still on a lawn. */
+  cap: number;
+}
+
+/** Every surface, the same on every map (a course says where each one is: see Surface). */
+export const SURFACES: Record<Surface, SurfaceGrip> = {
+  paved: { grip: 1, top: 1, drag: 0, cap: Infinity },
+  // A lawn: about half speed (and never more than about 30 km/h), and slidey.
+  grass: { grip: 0.7, top: 0.5, drag: 1.4, cap: 8 },
+  // Long grass and planting (a park's rough patches and beds): a crawl, and it grabs the wheels.
+  rough: { grip: 0.55, top: 0.15, drag: 3.5, cap: 2.5 },
+};
 
 /** The tyres' load (N): the car's weight into a slope whose cos is `cosT`, plus the wing's downforce
  *  at this speed² (m²/s²). */

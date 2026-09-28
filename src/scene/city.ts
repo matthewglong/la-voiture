@@ -7,10 +7,11 @@ import * as THREE from 'three';
 import { DECK_Y, EMB_X as SF_EMB_X, KICKER_X, ROAD_HW, RUSSIAN_HILL, SHORE_X as SF_SHORE_X, terrainBreaks, terrainY } from '../maps/russianHill';
 import { pointAt, type CoursePoint } from '../track';
 import { Crowd, type Spot } from './crowd';
-import { GeoBuilder, _e, _m4, _q, _s, _v, box, cyl, meshOf, obox, prism, rbox, shade, strip, type V3 } from './geo';
+import { GeoBuilder, _e, _m4, _q, _s, _v, box, cyl, meshOf, obox, strip, type V3 } from './geo';
 import { BAND, LOMBARD_WALK, LOMBARD_X0, LOMBARD_X1, buildLombard } from './lombard';
 import { canvasTexture, makeRng } from './util';
-import { asphaltTexture, barrierPanel, buildCableCar, signTexture, tree, tyreWall, type TyreSpot } from './props';
+import { asphaltTexture, barricade, barricadeTexture, barrierPanel, buildCableCar, namePlate, namesTexture, signTexture, tree, tyreWall, type TyreSpot } from './props';
+import { facadeTexture, rowBlocks, rowHouses, type HouseSinks, type HouseSite } from './victorian';
 
 export interface City {
   group: THREE.Group;
@@ -40,6 +41,8 @@ const LIP = C.lip!;
 const KICK_X = KICKER_X;
 
 const RH = ROAD_HW;
+const CONCRETE = '#dcd6c9';
+const DARK_WOOD = '#5c4633';
 const WALK = 3;
 const CURB = 0.18;
 const HOUSE_DEPTH = 12;
@@ -59,6 +62,10 @@ const CROOKED: [number, number] = [HYDE_X + RH, LEAV_X - RH];
 
 /** City ground height (the hill is flat along z). */
 const gy = (x: number): number => terrainY(Math.min(x, SHORE_X));
+/** Where the houses stand (src/scene/victorian.ts): the Victorians on the hill itself, the background
+ *  blocks on the city's ground. */
+const HOUSE_SITE: HouseSite = { ground: (x) => terrainY(x) };
+const BLOCK_SITE: HouseSite = { ground: (x) => gy(x) };
 
 /**
  * A solid slab over [x0,x1]×[z0,z1] whose top follows `top(x)` up and down the hill.
@@ -134,49 +141,6 @@ function coursePts(s0: number, s1: number, step = 0.5): CoursePoint[] {
 // Canvas textures.
 
 
-
-function facadeTexture(): THREE.CanvasTexture {
-  // One tile = 4 m wide × 3.2 m tall (one window per floor); white walls get tinted by vertex colours.
-  return canvasTexture(
-    256,
-    256,
-    (ctx, w, h) => {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, w, h);
-      // floor line
-      ctx.fillStyle = 'rgba(0,0,0,0.10)';
-      ctx.fillRect(0, h - 10, w, 10);
-      const wx = 64;
-      const wy = 44;
-      const ww = 128;
-      const wh = 150;
-      ctx.fillStyle = 'rgba(40,30,30,0.35)';
-      ctx.fillRect(wx - 12, wy - 12, ww + 24, wh + 24);
-      ctx.fillStyle = '#fbfbf7';
-      ctx.fillRect(wx - 9, wy - 9, ww + 18, wh + 18);
-      const grad = ctx.createLinearGradient(0, wy, 0, wy + wh);
-      grad.addColorStop(0, '#6f8fb3');
-      grad.addColorStop(0.5, '#2d3f5c');
-      grad.addColorStop(1, '#22304a');
-      ctx.fillStyle = grad;
-      ctx.fillRect(wx, wy, ww, wh);
-      ctx.fillStyle = '#fbfbf7';
-      ctx.fillRect(wx + ww / 2 - 4, wy, 8, wh);
-      ctx.fillRect(wx, wy + wh * 0.42, ww, 8);
-      ctx.fillStyle = 'rgba(255,255,255,0.25)';
-      ctx.beginPath();
-      ctx.moveTo(wx + 10, wy + wh);
-      ctx.lineTo(wx + 50, wy);
-      ctx.lineTo(wx + 70, wy);
-      ctx.lineTo(wx + 30, wy + wh);
-      ctx.fill();
-      // sill
-      ctx.fillStyle = '#fbfbf7';
-      ctx.fillRect(wx - 16, wy + wh + 10, ww + 32, 10);
-    },
-    { repeat: [1, 1] },
-  );
-}
 
 function plankTexture(): THREE.CanvasTexture {
   // Tile: 4 m across the pier (u) × 2 m along it (v): 8 planks of 0.25 m running across the pier.
@@ -257,377 +221,9 @@ function brickTexture(): THREE.CanvasTexture {
   );
 }
 
-function barricadeTexture(): THREE.CanvasTexture {
-  // Orange and white stripes with ROAD CLOSED in the middle; one tile per board.
-  return canvasTexture(512, 96, (ctx, w, h) => {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#ff6a1f';
-    for (let x = -h; x < w + h; x += 64) {
-      ctx.beginPath();
-      ctx.moveTo(x, h);
-      ctx.lineTo(x + 32, h);
-      ctx.lineTo(x + 32 + h, 0);
-      ctx.lineTo(x + h, 0);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(w * 0.22, 12, w * 0.56, h - 24);
-    ctx.font = '900 44px "Arial Rounded MT Bold", "Arial Black", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#1b1b1f';
-    ctx.fillText('ROAD CLOSED', w / 2, h / 2 + 2);
-  });
-}
-
-function namesTexture(names: string[], bg = '#12704a'): THREE.CanvasTexture {
-  const rows = names.length;
-  return canvasTexture(512, 64 * rows, (ctx, w) => {
-    names.forEach((name, r) => {
-      const y = r * 64;
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, y, w, 64);
-      ctx.strokeStyle = '#f4f4ee';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(5, y + 5, w - 10, 54);
-      ctx.font = '800 36px "Arial Rounded MT Bold", "Helvetica Neue", Arial, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#f4f4ee';
-      ctx.fillText(name, w / 2, y + 34);
-    });
-  });
-}
-
-/** A plate for row `row` of a names texture; `alongZ` plates face ±x. */
-function namePlate(row: number, rows: number, alongZ: boolean, len = 1.6): THREE.BufferGeometry {
-  const g = alongZ ? new THREE.BoxGeometry(0.05, 0.32, len) : new THREE.BoxGeometry(len, 0.32, 0.05);
-  const n = g.getAttribute('normal');
-  const uv = g.getAttribute('uv');
-  const v0 = 1 - (row + 1) / rows;
-  const v1 = 1 - row / rows;
-  for (let i = 0; i < uv.count; i++) {
-    const face = alongZ ? Math.abs(n.getX(i)) > 0.5 : Math.abs(n.getZ(i)) > 0.5;
-    if (face) uv.setXY(i, uv.getX(i), v0 + uv.getY(i) * (v1 - v0));
-    else uv.setXY(i, 0.01, (v0 + v1) / 2);
-  }
-  return g;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Palettes.
-
-const HOUSE_COLORS = [
-  '#62cfa3', // mint
-  '#ffa274', // peach
-  '#ab8ef0', // lavender
-  '#ffd154', // butter
-  '#68b6f2', // sky
-  '#ff8db6', // pink
-  '#9dcc66', // sage
-  '#ff7d66', // coral
-  '#58c8c1', // aqua
-  '#e592d6', // orchid
-  '#f4b64c', // apricot
-  '#8aa0f5', // periwinkle
-];
-const TRIM = '#fffaf0';
-const ACCENTS = ['#2f6f8f', '#8a2d4a', '#3d5a80', '#c9a227', '#6b4c9a', '#2e7d6b', '#d9534f'];
-const DOORS = ['#b3263a', '#1f3d6b', '#2f6b4f', '#7a4a2a', '#f2c14e', '#5b3a82', '#0f7c7c'];
-const ROOF = '#8d9199';
-const CONCRETE = '#dcd6c9';
-const DARK_WOOD = '#5c4633';
-
-
-// ---------------------------------------------------------------------------------------------
-// Houses.
-
-interface HouseSinks {
-  walls: GeoBuilder;
-  trim: GeoBuilder;
-  glass: GeoBuilder;
-}
-
-interface Face {
-  /** Face start point in house-local (u, w). */
-  ou: number;
-  ow: number;
-  /** Unit direction along the face in (u, w). */
-  du: number;
-  dw: number;
-  /** Outward normal in (u, w). */
-  nu: number;
-  nw: number;
-  /** Rotation about y that maps the box x-axis onto the face direction. */
-  rotY: number;
-}
-
-const MAIN_FACE: Face = { ou: 0, ow: 0, du: 1, dw: 0, nu: 0, nw: -1, rotY: 0 };
-
-/** Box on a face: along-face [a0,a1], height [y0,y1], out from the face [c0,c1]. */
-function faceBox(b: GeoBuilder, m: THREE.Matrix4, f: Face, a0: number, a1: number, y0: number, y1: number, c0: number, c1: number, color: THREE.ColorRepresentation): void {
-  const a = (a0 + a1) / 2;
-  const c = (c0 + c1) / 2;
-  const cu = f.ou + f.du * a + f.nu * c;
-  const cw = f.ow + f.dw * a + f.nw * c;
-  obox(b, [cu, (y0 + y1) / 2, cw], [a1 - a0, y1 - y0, c1 - c0], [0, f.rotY, 0], color, m);
-}
-
-function faceWindow(s: HouseSinks, m: THREE.Matrix4, f: Face, a0: number, a1: number, y0: number, y1: number, hood: THREE.ColorRepresentation, arched = false): void {
-  const w = a1 - a0;
-  faceBox(s.trim, m, f, a0 - 0.14, a1 + 0.14, y0 - 0.12, y1 + 0.12, -0.02, 0.07, TRIM);
-  faceBox(s.glass, m, f, a0, a1, y0, y1, 0.0, 0.1, '#ffffff');
-  faceBox(s.trim, m, f, a0 + w / 2 - 0.035, a0 + w / 2 + 0.035, y0, y1, 0.0, 0.13, TRIM);
-  faceBox(s.trim, m, f, a0, a1, y0 + (y1 - y0) * 0.58 - 0.035, y0 + (y1 - y0) * 0.58 + 0.035, 0.0, 0.13, TRIM);
-  faceBox(s.trim, m, f, a0 - 0.26, a1 + 0.26, y0 - 0.26, y0 - 0.12, -0.02, 0.24, TRIM);
-  if (arched) {
-    faceBox(s.trim, m, f, a0 - 0.3, a1 + 0.3, y1 + 0.12, y1 + 0.3, -0.02, 0.26, hood);
-    faceBox(s.trim, m, f, a0 - 0.1, a1 + 0.1, y1 + 0.3, y1 + 0.46, -0.02, 0.2, hood);
-  } else {
-    faceBox(s.trim, m, f, a0 - 0.3, a1 + 0.3, y1 + 0.12, y1 + 0.3, -0.02, 0.28, hood);
-  }
-}
-
-/** Plain framed window (backs and side walls). */
-function simpleWindow(s: HouseSinks, m: THREE.Matrix4, f: Face, a0: number, a1: number, y0: number, y1: number): void {
-  faceBox(s.trim, m, f, a0 - 0.12, a1 + 0.12, y0 - 0.12, y1 + 0.12, -0.02, 0.06, TRIM);
-  faceBox(s.glass, m, f, a0, a1, y0, y1, 0.0, 0.09, '#ffffff');
-  faceBox(s.trim, m, f, a0 - 0.2, a1 + 0.2, y0 - 0.24, y0 - 0.12, -0.02, 0.18, TRIM);
-}
-
-/** Rows of plain windows along a wall face of length `len`, one row per floor. */
-function wallWindows(s: HouseSinks, m: THREE.Matrix4, f: Face, len: number, yb: number, floors: number, fh: number, spacing: number): void {
-  const n = Math.max(1, Math.floor((len - 1) / spacing));
-  const step = len / n;
-  for (let fl = 0; fl < floors; fl++) {
-    const y0 = yb + fl * fh + 0.9;
-    for (let k = 0; k < n; k++) {
-      const a = step * (k + 0.5);
-      simpleWindow(s, m, f, a - 0.5, a + 0.5, y0, y0 + 1.6);
-    }
-  }
-}
-
-/**
- * Where a house stands: its frontage starts at (ox, oz) on the property line and runs along (ux, uz)
- * for W metres; the house extends away from the street, to the left of that direction.
- */
-interface Lot {
-  ox: number;
-  oz: number;
-  ux: number;
-  uz: number;
-  W: number;
-}
-
-function buildHouse(s: HouseSinks, lot: Lot, rng: () => number, exposeU0 = false, exposeUW = false): void {
-  const W = lot.W;
-  const D = HOUSE_DEPTH;
-  // Local u runs along the frontage, w into the house: w = u x up.
-  const wx = -lot.uz;
-  const wz = lot.ux;
-  const m = new THREE.Matrix4().makeBasis(
-    new THREE.Vector3(lot.ux, 0, lot.uz),
-    new THREE.Vector3(0, 1, 0),
-    new THREE.Vector3(wx, 0, wz),
-  );
-  m.setPosition(lot.ox, 0, lot.oz);
-  const uToX = (u: number): number => lot.ox + lot.ux * u;
-  const groundHi = Math.max(terrainY(lot.ox), terrainY(lot.ox + lot.ux * W));
-  const groundLo = Math.min(
-    terrainY(lot.ox),
-    terrainY(lot.ox + lot.ux * W),
-    terrainY(lot.ox + wx * D),
-    terrainY(lot.ox + lot.ux * W + wx * D),
-  );
-
-  const color = HOUSE_COLORS[Math.floor(rng() * HOUSE_COLORS.length)];
-  const accent = ACCENTS[Math.floor(rng() * ACCENTS.length)];
-  const trimAccent = rng() < 0.45 ? accent : TRIM;
-  const floors = rng() < 0.3 ? 2 : 3;
-  const fh = 3.1;
-  const queenAnne = rng() < 0.45;
-  const yb = groundHi + CURB + 0.35;
-  const yFound = groundLo + CURB - 0.9;
-  const wallTop = yb + floors * fh + (queenAnne ? 0.25 : 1.25);
-
-  // Foundation / garage plinth and the main body.
-  box(s.walls, 0.06, W - 0.06, yFound, yb + 0.02, 0.1, D, shade(color, 0.72), m);
-  rbox(s.walls, 0, W, yb, wallTop, 0, D, 0.22, color, m);
-  // Roof membrane seen from above.
-  box(s.walls, 0.3, W - 0.3, wallTop - 0.02, wallTop + 0.04, queenAnne ? 6 : 0.9, D - 0.3, ROOF, m);
-  if (rng() < 0.35) {
-    const cu = 0.8 + rng() * (W - 2);
-    box(s.walls, cu, cu + 0.7, wallTop, wallTop + 1.1, D - 3, D - 2.2, '#b4574a', m);
-  }
-
-  // Back wall windows, and side windows where the house faces a cross street.
-  wallWindows(s, m, { ou: W, ow: D, du: -1, dw: 0, nu: 0, nw: 1, rotY: Math.PI }, W, yb, floors, fh, 2.6);
-  const sideLeft: Face = { ou: 0, ow: D, du: 0, dw: -1, nu: -1, nw: 0, rotY: Math.PI / 2 };
-  const sideRight: Face = { ou: W, ow: 0, du: 0, dw: 1, nu: 1, nw: 0, rotY: -Math.PI / 2 };
-  if (exposeU0) wallWindows(s, m, sideLeft, D, yb, floors, fh, 3.0);
-  if (exposeUW) wallWindows(s, m, sideRight, D, yb, floors, fh, 3.0);
-
-  // Ground floor: door with stoop, plus a garage door or a window.
-  const doorLeft = rng() < 0.5;
-  const da0 = doorLeft ? 0.55 : W - 1.65;
-  const da1 = da0 + 1.1;
-  const doorColor = DOORS[Math.floor(rng() * DOORS.length)];
-  faceBox(s.trim, m, MAIN_FACE, da0 - 0.18, da1 + 0.18, yb, yb + 2.55, -0.02, 0.08, TRIM);
-  faceBox(s.trim, m, MAIN_FACE, da0, da1, yb, yb + 2.3, 0.0, 0.1, doorColor);
-  faceBox(s.glass, m, MAIN_FACE, da0 + 0.1, da1 - 0.1, yb + 2.34, yb + 2.5, 0.0, 0.11, '#ffffff');
-  faceBox(s.trim, m, MAIN_FACE, da0 - 0.35, da1 + 0.35, yb + 2.6, yb + 2.78, -0.02, 0.5, trimAccent);
-  // Stoop down to the sidewalk (the sidewalk drops along the facade on the slope).
-  const doorX = uToX((da0 + da1) / 2);
-  const walk = terrainY(doorX) + CURB;
-  const rise = Math.max(0.2, yb - walk);
-  const steps = Math.max(1, Math.round(rise / 0.2));
-  for (let k = 0; k < steps; k++) {
-    const yTop = yb - k * (rise / steps);
-    faceBox(s.trim, m, MAIN_FACE, da0 - 0.15, da1 + 0.15, walk - 0.1, yTop, 0, 0.32 * (k + 1), '#ece6da');
-  }
-
-  const other0 = doorLeft ? 2.1 : 0.5;
-  const other1 = doorLeft ? W - 0.5 : W - 2.1;
-  if (rng() < 0.55 && other1 - other0 > 2.6) {
-    // Garage door with panel grooves.
-    const g0 = other0 + 0.2;
-    const g1 = Math.min(other1 - 0.2, g0 + 2.7);
-    faceBox(s.trim, m, MAIN_FACE, g0 - 0.15, g1 + 0.15, yb, yb + 2.45, -0.02, 0.08, TRIM);
-    faceBox(s.trim, m, MAIN_FACE, g0, g1, yb, yb + 2.3, 0, 0.1, '#f3efe6');
-    for (let k = 1; k < 4; k++) {
-      faceBox(s.trim, m, MAIN_FACE, g0, g1, yb + k * 0.57 - 0.03, yb + k * 0.57 + 0.03, 0, 0.12, '#cfc8ba');
-    }
-  } else {
-    const wa = (other0 + other1) / 2;
-    faceWindow(s, m, MAIN_FACE, wa - 0.55, wa + 0.55, yb + 0.9, yb + 2.5, trimAccent);
-  }
-
-  // Bay window over the upper floors on the side opposite the door.
-  const bayW = Math.min(3.4, W * 0.5);
-  const b0 = doorLeft ? W - 0.45 - bayW : 0.45;
-  const b1 = b0 + bayW;
-  const dB = 0.85;
-  const bayY0 = yb + fh - 0.25;
-  const bayY1 = yb + floors * fh - 0.1;
-  const bayColor = rng() < 0.3 ? shade(color, 0.93) : new THREE.Color(color);
-  prism(
-    s.walls,
-    [
-      [b0, bayY0, 0],
-      [b0 + dB, bayY0, -dB],
-      [b1 - dB, bayY0, -dB],
-      [b1, bayY0, 0],
-    ],
-    [0, bayY1 - bayY0, 0],
-    bayColor,
-    m,
-  );
-  // Bay cap and corbel.
-  prism(
-    s.trim,
-    [
-      [b0 - 0.25, bayY1, 0],
-      [b0 + dB - 0.1, bayY1, -dB - 0.28],
-      [b1 - dB + 0.1, bayY1, -dB - 0.28],
-      [b1 + 0.25, bayY1, 0],
-    ],
-    [0, 0.32, 0],
-    trimAccent,
-    m,
-  );
-  prism(
-    s.trim,
-    [
-      [b0 + 0.1, bayY0 - 0.3, 0],
-      [b0 + dB, bayY0 - 0.3, -dB + 0.1],
-      [b1 - dB, bayY0 - 0.3, -dB + 0.1],
-      [b1 - 0.1, bayY0 - 0.3, 0],
-    ],
-    [0, 0.3, 0],
-    TRIM,
-    m,
-  );
-  const r2 = Math.SQRT1_2;
-  const faces: [Face, number][] = [
-    [{ ou: b0 + dB, ow: -dB, du: 1, dw: 0, nu: 0, nw: -1, rotY: 0 }, bayW - 2 * dB],
-    [{ ou: b0, ow: 0, du: r2, dw: -r2, nu: -r2, nw: -r2, rotY: Math.PI / 4 }, dB * Math.SQRT2],
-    [{ ou: b1 - dB, ow: -dB, du: r2, dw: r2, nu: r2, nw: -r2, rotY: -Math.PI / 4 }, dB * Math.SQRT2],
-  ];
-  for (let fl = 1; fl < floors; fl++) {
-    const y0 = yb + fl * fh + 0.55;
-    const y1 = y0 + 1.85;
-    for (const [f, len] of faces) {
-      const inset = len > 1.4 ? 0.3 : 0.2;
-      faceWindow(s, m, f, inset, len - inset, y0, y1, trimAccent, !queenAnne && f === faces[0][0]);
-    }
-    // Flat window beside the bay, above the door.
-    const wa = doorLeft ? (0.3 + b0) / 2 : (b1 + W - 0.3) / 2;
-    if (Math.abs((doorLeft ? b0 : W - b1) - 0.3) > 1.3) {
-      faceWindow(s, m, MAIN_FACE, wa - 0.5, wa + 0.5, y0, y1, trimAccent, !queenAnne);
-    }
-    // Floor band.
-    faceBox(s.trim, m, MAIN_FACE, 0, W, yb + fl * fh - 0.1, yb + fl * fh + 0.1, -0.02, 0.12, TRIM);
-  }
-
-  if (queenAnne) {
-    // Front gable facing the street with an attic window and trimmed eaves.
-    const gh = W * 0.42;
-    const eave = wallTop;
-    prism(
-      s.walls,
-      [
-        [0.05, eave, 0],
-        [W - 0.05, eave, 0],
-        [W / 2, eave + gh, 0],
-      ],
-      [0, 0, 6.2],
-      color,
-      m,
-    );
-    const ang = Math.atan2(gh, W / 2);
-    const len = Math.hypot(W / 2, gh) + 0.5;
-    for (const sgn of [-1, 1]) {
-      const cu = W / 2 + (sgn * (W / 2)) / 2;
-      const cy = eave + gh / 2 + 0.12;
-      obox(s.walls, [cu, cy + 0.12, 2.9], [len, 0.16, 6.9], [0, 0, -sgn * ang], ROOF, m);
-      obox(s.trim, [cu, cy, -0.38], [len, 0.26, 0.2], [0, 0, -sgn * ang], trimAccent, m);
-    }
-    faceWindow(s, m, MAIN_FACE, W / 2 - 0.45, W / 2 + 0.45, eave + 0.45, eave + Math.min(1.6, gh - 0.5), trimAccent);
-    faceBox(s.trim, m, MAIN_FACE, -0.1, W + 0.1, eave - 0.3, eave, -0.02, 0.35, trimAccent);
-    // Fish-scale shingle band.
-    faceBox(s.walls, m, MAIN_FACE, 0.2, W - 0.2, eave - 1.0, eave - 0.3, -0.02, 0.06, shade(color, 0.88));
-  } else {
-    // Italianate: bracketed cornice over a frieze, parapet above the roof.
-    faceBox(s.trim, m, MAIN_FACE, -0.1, W + 0.1, wallTop - 0.5, wallTop, -0.02, 0.62, TRIM);
-    faceBox(s.trim, m, MAIN_FACE, 0, W, wallTop - 1.15, wallTop - 0.5, -0.02, 0.1, accent);
-    const n = Math.max(3, Math.round(W / 1.1));
-    for (let k = 0; k <= n; k++) {
-      const a = 0.25 + (k * (W - 0.5)) / n;
-      faceBox(s.trim, m, MAIN_FACE, a - 0.11, a + 0.11, wallTop - 1.0, wallTop - 0.5, -0.02, 0.5, TRIM);
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Background buildings, trees and palms.
 
-function worldUvBox(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): THREE.BufferGeometry {
-  const g = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
-  g.translate((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-  const p = g.getAttribute('position');
-  const n = g.getAttribute('normal');
-  const uv = g.getAttribute('uv');
-  const floorY = y1 - Math.floor((y1 - y0) / 3.2) * 3.2;
-  for (let i = 0; i < p.count; i++) {
-    const nx = Math.abs(n.getX(i));
-    const along = nx > 0.5 ? p.getZ(i) : p.getX(i);
-    uv.setXY(i, along / 4, (p.getY(i) - floorY) / 3.2);
-  }
-  return g;
-}
 
 
 function palm(b: GeoBuilder, x: number, y: number, z: number, h: number, rng: () => number): void {
@@ -731,24 +327,7 @@ function onCourse(b: Block, side: 'n' | 's' | 'e' | 'w'): boolean {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Street furniture.
-
-
-/** A sawhorse barricade (two striped boards on A-frame legs) centred at (x, z), facing along `ang`. */
-function barricade(boards: GeoBuilder, legs: GeoBuilder, x: number, y: number, z: number, ang: number, len = 2.2): void {
-  for (const h of [0.62, 1.02]) {
-    const g = new THREE.BoxGeometry(len, 0.26, 0.05);
-    _m4.compose(_v.set(x, y + h, z), _q.setFromEuler(_e.set(0, ang, 0)), _s.set(1, 1, 1));
-    boards.add(g, '#ffffff', _m4);
-  }
-  for (const f of [-0.42, 0.42]) {
-    const px = x + Math.cos(-ang) * len * f;
-    const pz = z + Math.sin(-ang) * len * f;
-    for (const t of [-1, 1]) {
-      obox(legs, [px, y + 0.55, pz], [0.07, 1.15, 0.07], [t * 0.18, ang, 0], '#e8e8e2');
-    }
-  }
-}
+// Street furniture (the sawhorse barricades are props.ts's, shared with Old Stomping Grounds).
 
 
 // ---------------------------------------------------------------------------------------------
@@ -1023,8 +602,8 @@ export function buildCity(): City {
       const D = depthOf(course);
       nsDepth[side] = D;
       const lot = side === 's' ? { ox: lx0, oz: lz0, ux: 1, uz: 0, len: lx1 - lx0 } : { ox: lx1, oz: lz1, ux: -1, uz: 0, len: lx1 - lx0 };
-      if (course) rowHouses(houses, lot, rng);
-      else if (!far || rng() < 0.9) rowBlocks(facades, houses.walls, lot, D, rng);
+      if (course) rowHouses(houses, lot, rng, HOUSE_SITE);
+      else if (!far || rng() < 0.9) rowBlocks(facades, houses.walls, lot, D, rng, BLOCK_SITE);
     }
     for (const { side, course } of sides) {
       if (side !== 'e' && side !== 'w') continue;
@@ -1033,8 +612,8 @@ export function buildCity(): City {
       const zb = lz1 - nsDepth.n;
       if (zb - za < 6) continue;
       const lot = side === 'e' ? { ox: lx1, oz: za, ux: 0, uz: 1, len: zb - za } : { ox: lx0, oz: zb, ux: 0, uz: -1, len: zb - za };
-      if (course) rowHouses(houses, lot, rng);
-      else rowBlocks(facades, houses.walls, lot, D, rng);
+      if (course) rowHouses(houses, lot, rng, HOUSE_SITE);
+      else rowBlocks(facades, houses.walls, lot, D, rng, BLOCK_SITE);
     }
     // Backyard trees.
     const inner = { x0: lx0 + HOUSE_DEPTH + 2, x1: lx1 - HOUSE_DEPTH - 2, z0: lz0 + HOUSE_DEPTH + 2, z1: lz1 - HOUSE_DEPTH - 2 };
@@ -1222,64 +801,4 @@ export function buildCity(): City {
   };
 
   return { group, update };
-}
-
-// ---------------------------------------------------------------------------------------------
-// Frontages.
-
-interface Frontage {
-  ox: number;
-  oz: number;
-  ux: number;
-  uz: number;
-  len: number;
-}
-
-/** Victorian row houses filling a frontage (the first and last show their side walls). */
-function rowHouses(s: HouseSinks, f: Frontage, rng: () => number): void {
-  const widths: number[] = [];
-  let total = 0;
-  while (total < f.len - 6) {
-    const w = 6 + rng() * 2;
-    widths.push(w);
-    total += w;
-  }
-  if (widths.length === 0) return;
-  const scale = f.len / total;
-  let u = 0;
-  widths.forEach((w, i) => {
-    const ww = w * scale;
-    buildHouse(s, { ox: f.ox + f.ux * u, oz: f.oz + f.uz * u, ux: f.ux, uz: f.uz, W: ww }, rng, i === 0, i === widths.length - 1);
-    u += ww;
-  });
-}
-
-/** Plain pastel buildings with a tiled window texture, filling a frontage to a depth. */
-function rowBlocks(walls: GeoBuilder, roofs: GeoBuilder, f: Frontage, depth: number, rng: () => number): void {
-  const wx = -f.uz;
-  const wz = f.ux;
-  let u = 0;
-  while (u < f.len - 4) {
-    const w = Math.min(f.len - u, 7 + rng() * 7);
-    const a = u + 0.15;
-    const b = u + w - 0.15;
-    const xs = [f.ox + f.ux * a, f.ox + f.ux * b, f.ox + f.ux * a + wx * depth, f.ox + f.ux * b + wx * depth];
-    const zs = [f.oz + f.uz * a, f.oz + f.uz * b, f.oz + f.uz * a + wz * depth, f.oz + f.uz * b + wz * depth];
-    const x0 = Math.min(...xs);
-    const x1 = Math.max(...xs);
-    const z0 = Math.min(...zs);
-    const z1 = Math.max(...zs);
-    const hi = Math.max(gy(x0), gy(x1)) + CURB;
-    const lo = Math.min(gy(x0), gy(x1)) - 0.5;
-    const hgt = 8 + rng() * 11;
-    const color = shade(HOUSE_COLORS[Math.floor(rng() * HOUSE_COLORS.length)], 0.95);
-    walls.add(worldUvBox(x0, x1, lo, hi + hgt, z0, z1), color);
-    box(roofs, x0 + 0.3, x1 - 0.3, hi + hgt - 0.02, hi + hgt + 0.08, z0 + 0.3, z1 - 0.3, ROOF);
-    if (rng() < 0.3 && x1 - x0 > 4 && z1 - z0 > 4) {
-      const cx = x0 + 1 + rng() * (x1 - x0 - 3);
-      const cz = z0 + 1 + rng() * (z1 - z0 - 3);
-      box(roofs, cx, cx + 1.4, hi + hgt, hi + hgt + 1.2, cz, cz + 1.4, '#9aa0a8');
-    }
-    u += w;
-  }
 }

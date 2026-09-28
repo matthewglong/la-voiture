@@ -437,6 +437,15 @@ export class Sound {
     this.burst(pan, 'bandpass', 900, 500, 0.12, 0.12, 2);
   }
 
+  /** A dog: a woof (a little yap from a small one), `vol` for how far off it is. */
+  bark(pan = 0, vol = 1, small = false): void {
+    if (vol <= 0.02) return;
+    const f = small ? 820 : 420;
+    this.panTone(pan, f, 0.11, 'sawtooth', 0.09 * vol, 0, f * 0.62);
+    this.panTone(pan, f * 1.5, 0.08, 'square', 0.03 * vol, 0.01, f);
+    this.burst(pan, 'bandpass', small ? 2200 : 1200, small ? 900 : 500, 0.1, 0.16 * vol, 2.5);
+  }
+
   /** A loose traffic cone: a hollow plastic tock. */
   tock(pan = 0): void {
     this.panTone(pan, 660, 0.08, 'square', 0.06, 0, 420);

@@ -159,6 +159,13 @@ export class GeoBuilder {
     for (const k of UNIT_BOX.idx) this.idx.push(base + k);
   }
 
+  /** Every triangle built so far, its corners in order (for whatever needs to know what's where). */
+  eachTriangle(fn: (a: V3, b: V3, c: V3) => void): void {
+    const p = this.pos;
+    const at = (k: number): V3 => [p[k * 3], p[k * 3 + 1], p[k * 3 + 2]];
+    for (let i = 0; i + 2 < this.idx.length; i += 3) fn(at(this.idx[i]), at(this.idx[i + 1]), at(this.idx[i + 2]));
+  }
+
   build(): THREE.BufferGeometry {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
@@ -251,8 +258,8 @@ export function shade(color: THREE.ColorRepresentation, f: number): THREE.Color 
 export function strip(
   b: GeoBuilder,
   pts: { x: number; z: number; tx: number; tz: number }[],
-  d0: number,
-  d1: number,
+  d0In: number | ((i: number) => number),
+  d1In: number | ((i: number) => number),
   top: (i: number) => number,
   color: THREE.ColorRepresentation,
   opts: { uvScale?: number; bottom?: (i: number) => number; sides?: boolean; v0?: number } = {},
@@ -260,34 +267,41 @@ export function strip(
   const uvS = opts.uvScale ?? 1;
   let v = opts.v0 ?? 0;
   const up: V3 = [0, 1, 0];
+  // The edges' offsets: fixed, or per point (a road's inside edge pulled in on a tight bend).
+  const D0 = typeof d0In === 'number' ? (): number => d0In : d0In;
+  const D1 = typeof d1In === 'number' ? (): number => d1In : d1In;
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i];
     const c = pts[i + 1];
     const ya = top(i);
     const yc = top(i + 1);
+    const d0 = D0(i);
+    const d1 = D1(i);
+    const e0 = D0(i + 1);
+    const e1 = D1(i + 1);
     const la0: V3 = [a.x - a.tz * d0, ya, a.z + a.tx * d0];
     const la1: V3 = [a.x - a.tz * d1, ya, a.z + a.tx * d1];
-    const lc0: V3 = [c.x - c.tz * d0, yc, c.z + c.tx * d0];
-    const lc1: V3 = [c.x - c.tz * d1, yc, c.z + c.tx * d1];
+    const lc0: V3 = [c.x - c.tz * e0, yc, c.z + c.tx * e0];
+    const lc1: V3 = [c.x - c.tz * e1, yc, c.z + c.tx * e1];
     const seg = Math.hypot(c.x - a.x, c.z - a.z);
     const v1 = v + seg / uvS;
     b.quad(la0, lc0, lc1, la1, color, up, [
       [d0 / uvS, v],
-      [d0 / uvS, v1],
-      [d1 / uvS, v1],
+      [e0 / uvS, v1],
+      [e1 / uvS, v1],
       [d1 / uvS, v],
     ]);
     if (opts.sides && opts.bottom) {
       const ba = opts.bottom(i);
       const bc = opts.bottom(i + 1);
-      for (const [d, f] of [
-        [d0, -1],
-        [d1, 1],
+      for (const [d, e, f] of [
+        [d0, e0, -1],
+        [d1, e1, 1],
       ] as const) {
         const pa: V3 = [a.x - a.tz * d, ya, a.z + a.tx * d];
-        const pc: V3 = [c.x - c.tz * d, yc, c.z + c.tx * d];
+        const pc: V3 = [c.x - c.tz * e, yc, c.z + c.tx * e];
         const qa: V3 = [a.x - a.tz * d, ba, a.z + a.tx * d];
-        const qc: V3 = [c.x - c.tz * d, bc, c.z + c.tx * d];
+        const qc: V3 = [c.x - c.tz * e, bc, c.z + c.tx * e];
         b.quad(pa, pc, qc, qa, color, [-a.tz * f, 0, a.tx * f]);
       }
     }

@@ -13,8 +13,361 @@ were laid out afresh for one player or two, and the kicker started dropping once
 off it ("Keys, and a kicker worth racing to"). Most recently the game got a second event, a lap race
 on a new map, and the code was restructured so events and maps can be added: "Two events, and maps".
 Then the structure was finished off so that maps, modes and physics are each defined once and
-shared: "One game, many maps" comes first of all (it overrides parts of "Two events, and maps"). The
-older sections that still hold are kept after them.
+shared: "One game, many maps" (it overrides parts of "Two events, and maps"). Most recently a third
+venue, the lap race "Old Stomping Grounds", brought chunked courses, surfaces, dogs, streetcars and
+shared city scenery with it: its section comes first of all. The older sections that still hold are
+kept after them.
+
+## Old Stomping Grounds
+
+The request, settled in an interview before any code: a race map "in the charming and landmarked
+style of Russian Hill" round the user's old neighbourhood, starting in the Haight, through Alamo
+Square Park ("get this detail exactly right, including the path around the dog park, and down the
+hill where the tourists are taking photos of the painted ladies, out the park via the north east
+corner"), right past the Painted Ladies, left down Hayes into Hayes Valley, right through Patricia's
+Green, through Duboce Triangle and Duboce Park, up through Buena Vista Park and back down to the
+Haight. The answers that shaped it: start/finish at Haight & Ashbury; the name; tourists that react
+like Russian Hill's; the park near true scale and the streets compressed "between faithful and
+impressionistic, closer to faithful", the zigzags and hills familiar; drivable grass at about half
+speed; the Painted Ladies bespoke; climbs up to 25%, with a minimum crawl speed as a setting; laps a
+setting (3 for now) and 3-5 minutes of racing; a course made of chunks that can be added or taken
+out; jumps "here or there" (stairs, crests, walls); dogs that chase you; the N Judah.
+
+### The course: chunks, surveyed where it matters
+
+- **Built from chunks** (`track.ts`: `buildChunkLoop`, `Pen`). Each stretch (Scott St, Alamo Square
+  and Steiner, Hayes, Patricia's Green and Octavia, the Page/Buchanan zigzag, Duboce Ave and Duboce
+  Park, the Duboce wall, Buena Vista, Haight, Ashbury, Oak) is drawn in its own frame with a turtle
+  (`Pen`: straights, arcs, surveyed points; marks and section starts at the node it's reached) and
+  laid end to end from where the last one ended, turned to carry on the way it was going. The last
+  chunk (Oak St along the Panhandle, the main straight) is flexible: a cubic from wherever the road
+  has got to back to the start, so adding, removing or resizing a chunk (`scale`) is a one-line
+  edit and the loop still closes. Marks (`osgMark(chunk, mark)`) name every place the venue,
+  scenery and tests refer to, so nothing hard-codes an arc length.
+- **Alamo Square is surveyed** (`maps/data/alamoSquare.ts`, generated from OpenStreetMap, SF Rec &
+  Park's functional areas and USGS elevations, turned 10° so the Western Addition's grid runs along
+  the axes): the course follows route A through the real paths (in by the southwest ramp, clockwise
+  round the ring of paths about the dog lawn, over the summit, down the southeast path to the
+  tourists' lawn, along the Steiner path past the benches that face the Painted Ladies, down the
+  steep last stretch and off the 39 steps at the northeast corner), at 0.54 of real size with heights
+  to match (so its grades are the real ones). Two places were made drivable where the real paths
+  double back on the spot: the summit (a loop round the plaza at the top of the south steps) and the
+  junction of the southeast path with the Steiner path (a loop across the tourists' lawn); a few
+  surveyed points that made kinks at path junctions are skipped. The park's lawns, planted beds,
+  paths, 118 trees, benches, fences, the tennis court, playground and restrooms, and the buildings
+  round it, come from the same survey.
+- **The streets are compressed**, to about a third of their length and their heights to about 0.6
+  (so a hill arrives in a block or two at a grade a race can take), keeping every turn's direction,
+  the order of the cross streets and the landmarks on the right sides. The zigzag from Octavia to
+  Duboce Ave (up Page, over the Mint's hill on Buchanan) is made up in the real streets, as asked.
+- **Lap and race length.** The loop is 1.8 km. Every build finishes every lap in every wind
+  (`npm run balance:race`); a V8 or jet build's lap is about 108 s (median), so three laps take
+  about 5¼ minutes, and a lawnmower's about 9 (a two-car race ends 25 s after the winner). Getting to
+  3-5 minutes meant shrinking the park from 0.75 to 0.54 of real size and the streets further; to go
+  shorter, drop `laps` in `maps/index.ts` or shrink or remove a chunk.
+- **Air, here and there.** Where the CPU cars leave the ground for more than half a second, every
+  lap: off the 39 steps at Alamo Square's northeast corner (0.6 s), three crests down Hayes (0.7-0.9
+  s), Buchanan's crest over the Mint's hill where it crosses Haight (0.9 s) and the top of the Duboce
+  wall onto Buena Vista Ave East (0.9 s); on Buena Vista's switchbacks a Jump item hops the stone
+  walls onto the leg below. Each lands on a straight: the crests that first threw cars into corners
+  (into the turn off Hayes, and Page into Buchanan) were flattened on the approach.
+
+### Rules every course now follows
+
+- **`courseProblems`** (`track.ts`), run by `defineMap` for every map: no climb steeper than
+  `MAX_CLIMB` (25%, `physics.ts`; a kicker's ramp is launched off, not climbed, so it's exempt;
+  descents can be as steep as you like), no bend tighter than the road's half-width, and no two
+  stretches of road whose corridors run through each other. Russian Hill and Twin Peaks pass
+  unchanged. It caught every kink in the surveyed park path while the course was being laid.
+- **Vertical curves never outrun their spans.** `buildSpline` rounds each change of grade over the
+  node's `round` length; with nodes closer together than that (surveyed points a few metres apart)
+  a curve ran past the next node and left a step where that span stopped rounding it, which launched
+  cars off flat ground. Each node's curve is now clamped to the spans either side of it (nothing
+  changes on Twin Peaks or the test courses, whose nodes are far apart).
+
+### Surfaces, the crawl, dogs and trams (the sim, for every map)
+
+- **Surfaces.** A section can be paved only down the middle (`pave`, its paved half-width) with a
+  `verge` either side out to its walls; the sim looks up what's under the tyres (`surfaceAt`) and
+  `SURFACES` (`physics.ts`) says what it does: grass has 0.7 of the grip and half the top speed, never
+  more than 8 m/s (about 30 km/h, whatever the engine: a jet on a lawn is still on a lawn), and speed
+  over that bleeds away at 1.4/s (onto the lawn at speed, you're slowed to its pace in a second or
+  two, not stopped dead); rough (long grass and planted beds) is a crawl, 2.5 m/s, and grabs the
+  wheels. The grip factor scales everything the tyres do (cornering, traction, braking, the drift's
+  bite). The CPU's racing line keeps to the paved band. Grass clippings fly from the wheels. Paved
+  everywhere, every factor is exactly 1 and the existing maps' races are bit-identical.
+- **Open ground** (`src/openGround.ts`, `course.open`): a park the course runs through that a car can
+  drive anywhere in. The user's call, after the first version walled Alamo Square's paths in with
+  hedges: "there shouldn't be hedges at all and instead the user should be able to drive through the
+  entirety of the park but be significantly slowed down by driving on the grass". Inside its outline
+  the road's walls don't hold a car; the outline does, but for its gates (where the course crosses
+  it), and so do its trees, benches, bins, lamps, retaining walls, courts and buildings (posts and
+  blocks: `ALAMO_THINGS`, the one list the scenery builds from too). The ground is the park's own
+  (its survey, the course's paths cut into it, easing to the surrounding streets' height at its
+  edge), baked once onto a 0.5 m grid the first time it's needed: the physics drives on it and the
+  scenery draws it, so they agree. On the course's own path a car follows the path's profile exactly,
+  as on a road: the baked ground is smooth, and the sharp crest at the top of the 39 steps must still
+  throw a car off them (on the ground's slope alone it rolled down the steps, and the jump was lost).
+  A car's place on the course is the path it has been following,
+  or another that's clearly nearer (it has cut across to it): coming back onto a path further along
+  than the lawn explains is a shortcut (the 'shortcut' event and its HYPE). Roaming the grass isn't
+  going the wrong way, and the stuck check there asks whether the car is getting anywhere at all.
+  The CPU keeps to the paths as if they were walled (it doesn't roam). Nothing changes for a course
+  without open ground: the existing maps' races are bit-identical. Alamo Square and Duboce Park are
+  open (Duboce Park's plan, `maps/dubocePark.ts`, is shared by the course and the scenery the same
+  way); Patricia's Green stays a walled strip down Octavia's median, and Buena Vista's paths keep
+  their stone walls.
+- **Cutting across mustn't pay, except in the air.** The user: "the only way that cutting through is
+  gonna be faster is if you somehow get some sort of a cool jump; and there are obstacles off the
+  path that will also slow you down". Alamo Square's route is two and a half times the straight line
+  from the ramp to the steps, so with lawn alone, straight across was twice as quick as the paths (12
+  s against 24 for a V8), and a fastest-route search found cuts everywhere. What holds it: the lawn's
+  8 m/s cap; the park's footpaths drive like the lawn (as fast lanes they joined every shortcut up);
+  and rough, a crawl, in the surveyed beds, in scattered patches, between legs of the course that
+  come close (under 22 m apart: Lombard's shape, where a Jump carries you over), and in a band 11 m
+  wide beyond a mown strip along each path wherever a cut from it could pay. Measured: straight
+  across takes a V8 40 s against 25 on the paths (a jet 34 against 24, a lawnmower 48 against 29),
+  and the best line a route search can find through the park, lawn allowed, gains about a second
+  over the paths alone (clipping corners on the mown strips).
+- **The crawl** (`CRAWL_SPEED` 4 m/s, `CRAWL_GRADE` 0.12, `CRAWL_ACC` 2.5 m/s²): on the gas, not
+  sliding or spun, on a climb steeper than 12%, a car never drops below walking pace: its lowest gear
+  pulls anything up any hill a course may have. It's why the lawnmower gets up the 25% Duboce wall.
+  The threshold sits above every climb on the existing maps (Twin Peaks' steepest is 11.1%), so they
+  are untouched.
+- **Dogs** (`sim.addDog`, a `Ped` of kind `'dog'`): each trots about its patch of park (a stretch of
+  course and of its width), stopping to sniff; a chaser that a racer comes past (within 14 m) runs
+  flat out beside its back wheels, barking, for a few seconds or until the car gets 16 m away or
+  reaches the edge of the patch. They're too quick to hit: one in the way leaps clear (no penalty, a
+  bark). The CPU ignores them. Barks are events (`'bark'`), heard by the nearer racer. Measured over
+  CPU races: about two and a half chases per car per lap. (At first a chase gave up once the car was
+  12 m behind the dog, inside the 14 m at which it had noticed it, so most chases ended the step they
+  began: a tenth of a chase a lap.)
+- **Trams.** A cable car is now one kind of tram (`TRAM_DIMS`): the N Judah is a `'streetcar'`, 15.6
+  m long, cruising at 6 m/s and waiting 7 s at each end of its line. Collisions, near misses, the
+  stop-for-cars test, a car's rescue spot and the CPU's picture of it all take each tram's own size,
+  and rails can climb (a height profile along them; the tram pitches with it). Russian Hill's cable
+  car comes out exactly as before. The N Judah's line is one shared definition (`N_JUDAH` in the
+  venue: the sim runs the car on it, the scenery lays the rails and portals to it): out of the Muni
+  subway portal east of the Buchanan/Duboce corner, across the corner and along Duboce Ave on the
+  eastbound track (the south half: the racers have the rest) to Steiner, and back; the tracks carry
+  on past the park to the Sunset Tunnel as scenery (the park's lawn rises there, and its path's
+  corridor crosses the line, so the car turns back at Steiner). On the middle of the road it was hit
+  about once a lap by every car; on its own track, the CPU still runs into it about once every three
+  or four laps (measured over 20 races), nearly always coming out of the Buchanan corner onto Duboce
+  behind it as it pulls away west: the CPU pictures a tram as lying along the road, and there its
+  tail still sticks out across the intersection towards the portal. Working out each point of the
+  body's place on the course would fix that, but it's shared with Russian Hill's cable car and would
+  change those races, so it's left for when the CPU gets its turn (it was deprioritised). You see
+  the streetcar coming, and its bell.
+- **Hops have names.** Lombard's shortcut hops are hedge hops; Buena Vista's switchbacks are walled
+  in low stone walls the physics treats the same way (jumpable, 0.9 m), so the venue says
+  `hopName: 'wall'` and the hint, the shout and the results badge follow ("WALL HOP!").
+
+### Scenery shared from now on
+
+- **Victorian row houses** moved out of `city.ts` into `scene/victorian.ts` (`buildHouse`,
+  `rowHouses`, `rowBlocks`, the palettes), built over any map's ground (`HouseSite`) rather than
+  Russian Hill's hill, and pinned down by a `HouseStyle` when a house is a particular one (the
+  Painted Ladies' colours, 722 Steiner's turret). Every random draw happens in the same order as
+  before, so Russian Hill's houses are unchanged.
+- **Ground that follows a course** (`scene/terrain.ts`: `CourseIndex`, `courseGround`,
+  `buildHeightfield`): at road height beside the road, the roads' heights blended between them, a
+  map's own land further out. Twin Peaks keeps its own ground for now.
+- **Props**: windswept Monterey cypresses, pines, park benches, park lamps and hoop fences joined the
+  shared props, and the green street-name signs moved there from `city.ts`.
+- **Old Stomping Grounds' scenery** (`scene/osg/`) is a module per neighbourhood over one context
+  (`context.ts`): one geometry builder per material for the whole map (a few dozen draw calls), the
+  ground, and a metre grid of what's taken, so the parks, landmarks and cross streets claim their
+  ground first and the Victorians fill every frontage that's still free. A neighbourhood hands back
+  a `Hood`: the stretches of the course's sides that are its own (no sidewalk, or no houses), extra
+  frontages, and the corners where it puts up its own street signs (the green poles stay away).
+
+### Old Stomping Grounds, neighbourhood by neighbourhood
+
+Built by one agent per neighbourhood against the shared context, then integrated. Where a real place
+was researched, it was from Street View, OpenStreetMap and photographs as of August-September 2026.
+
+- **The Upper Haight** (`osg/haight.ts`, `osg/haight/`): Haight St from Buena Vista Ave West past
+  Masonic to Ashbury, the flats over shopfronts in the order they stand, with the Haight's paint,
+  signs and murals; the Doolan-Larson building on the far corner with HAIGHT and ASHBURY on its
+  frieze and the jeweller's clock stuck at 4:20; the white HAIGHT / ASHBURY blades on the near
+  corner; Piedmont's fishnet legs kicking out of their window; the Muni trolley wires. Past Ashbury
+  the 1500 block (Aviator Nation, the Jimi Hendrix Red House, Gus's) runs on to Golden Gate Park's
+  trees. Race day at the start: barriers along both kerbs and a crowd two deep behind them.
+- **The Panhandle** (`osg/haight/panhandle.ts`): rows of blue gums and Monterey cypresses, the
+  multi-use path down the middle, benches, lamps and the McKinley monument at its east end, Fell St
+  beyond. Its lawn is one rectangle (`panhandleBounds`) that the park and the painted ground share.
+- **Alamo Square** (`osg/alamo.ts`) from the survey: lawns, beds, paths, hedges along the course, the
+  trees, benches, fences, tennis court, playground and restrooms, and the streets round it.
+- **The Painted Ladies** (`osg/ladies.ts`), bespoke, painted as they were in August 2026: six Queen
+  Annes (710-720 Steiner) on raised basements, each with its long stair, recessed porch, two-storey
+  bay, balcony and steep front gable picked out in three or four colours (710 tan with a lattice
+  gable and gold fanlight, 712 sky blue under fish-scale shingles, 714 ivory with burgundy panels
+  and a sunburst, 716 butter yellow with red gable triangles and red stair walls, 718 sage, 720 olive
+  with an arched porch); every porch at its north end but 720's, so 718's and 720's stairs stand
+  together. 722, Matthew Kavanaugh's own house, is the big navy tower-house at the Grove corner, as
+  it really is (checked: listings put it "on the corner of Steiner and Grove", its garage on the Grove
+  side and its garden and iron fence facing Steiner): fish-scale shingles, a hipped roof, the turret
+  over the bay by 720, a balconied corner bay. The Archbishop's Mansion faces the park across Fulton
+  and the Westerfeld House stands at Scott; those two are drawn from memory (the Westerfeld's tower
+  on its Scott corner is the least certain). The block is shorter than the real one, so the houses
+  keep their height and give up width (710, the widest of the six, keeps the most).
+- **Hayes Valley** (`osg/hayes.ts`, `osg/hayes/`): the 500 block of Hayes with all 35 of its shops
+  on the right sides in the right order (frontages in proportion), every open one with its sign and
+  most with a blade sign facing the traffic; the ones asked for (Salt & Straw, Buck Mason, Industry
+  of All Nations and La Boulangerie on the north side, Gioia (579 Hayes) and Souvla on the south) are
+  where they are; closed shops are dark or papered over. Marine Layer across the turn, Suppenküche
+  at Laguna, the 21's trolley wires.
+- **Patricia's Green** (`osg/hayes/green.ts`, `proxy.ts`): the course runs down the middle of the
+  Green between knee-high granite kerb walls (on the physics walls), the Talking Heads sculpture
+  (two crossed mirror-steel slabs of stacked face profiles) in its round plaza to the side, trees,
+  acorn lamps, benches, the playground at the Fell end; Octavia's side lanes; across the way Proxy's
+  containers: the PROXY totem, the movie screen, Ritual's shipping-container kiosk, Hometown
+  Creamery, and Linden Alley with Blue Bottle's kiosk (30 m in rather than 100, to be seen), and the
+  Biergarten.
+- **Duboce** (`osg/duboce.ts`, `osg/duboce/`): the Mint on its rock above Buchanan; the N Judah's
+  tracks and catenary along Duboce Ave from the Muni Metro portal behind the corner, its eastbound
+  stop at Church, the rails on past Steiner along the park to the Sunset Tunnel's portal; Duboce Park
+  with its dogs, playground and the Harvey Milk Center; the Duboce wall with stepped sidewalks and
+  cars parked nose-in.
+- **Buena Vista** (`osg/buenaVista.ts`): coast live oaks, cypresses, pines and the 1880s blue gums;
+  the WPA's low rubble-stone walls exactly on the course's edges, and in the gutters beside them
+  broken marble headstones from the city's emptied cemeteries, most face down, here and there a name.
+- **Buena Vista's zigzag, Lombard's hops.** The user: "there are no ways to jump over walls or take
+  shortcuts... in the lombard stretch of russian hill, a player can jump over the zigzag if they have
+  that powerup... super fun". The descent is now a Lombard-style zigzag: three hairpins, legs at 60°
+  to the fall line, walled in the WPA's stone walls, which the physics treats as Lombard's hedges
+  (0.9 m: a Jump clears them). The land between the legs is a walled garden (`course.gardens`, as
+  Lombard's block is), so a car that comes down between legs slides onto the nearest one; it's drawn
+  (`buenaVista/terraces.ts`, `garden.ts`) as terraces level with the wall tops, which is where the
+  sim holds a landed car, with rubble retaining walls where one terrace drops to the next leg's, and
+  the ground sinks under it. In a scripted test, two thirds of the Jumps at a wall scored a shortcut
+  (7 to 26 m gained); the CPU drives the zigzag without a rescue. A hint says "JUMP THE WALLS!" to a
+  player holding a Jump there.
+- **The cast and the skyline** (`actors.ts`, `props.ts`, `osg/skyline.ts`): eight breeds of dog
+  (golden retriever, black lab, corgi, dalmatian, poodle, dachshund, French bulldog, shiba inu) that
+  trot, sit, sniff and gallop after you; the N Judah as a Siemens S200 SF; downtown where it stands
+  behind the Painted Ladies in the postcard (the Transamerica Pyramid, Salesforce Tower, 555
+  California, 181 Fremont, the Millennium Tower, Coit Tower) and Sutro Tower on Twin Peaks, its lamps
+  blinking.
+
+### Russian Hill's race furniture, and the lawns and sidewalks
+
+The user's review of the first version: "a majority of the walls are invisible whereas in russian
+hill there are clear marathon gates and barrel barriers... we want to use the latter's motifs and
+assets", and "the grass is too light in color and it has no texture... the sidewalks are too white
+and monolithic... they look like empty space".
+
+- **Every wall shows** (`osg/furniture.ts`, from the course's own sections, so it follows the
+  chunks): Russian Hill's crowd-control barrier panels along both kerbs of every street, 0.45 m
+  behind the kerb (on the wall line itself where there's no sidewalk: the Duboce wall's parked cars,
+  Octavia's medians); its striped sawhorse barricades across every cross-street mouth the course
+  passes (moved from `city.ts` into `props.ts`, Russian Hill's unchanged); its tyre stacks round
+  the outside of every turning corner and the Fulton hairpin; and the shared crowd behind them, two
+  deep at the start, along Hayes Valley's shops and on Duboce Ave by the N Judah, and behind each
+  turn's tyres. Street lamps and trolley poles moved back behind the barriers; a module registers
+  its shop doors and kerbside things (`kerbside.ts`) so the barriers and the crowd keep clear. Alamo
+  Square's edge is lined with barriers too, spectators outside, and banner arches (the start's
+  gantry) mark the way in and out: ALAMO SQUARE over the ramp in from Hayes, PAINTED LADIES over
+  Steiner just past the hairpin at the foot of the steps (in the hairpin itself, the chase camera
+  swung round through its post).
+- **Lawns** (`osg/lawn.ts`): a tiling grass texture in world space (clumps, tufts, blades, the odd
+  clover) over the ground, a richer, darker green that wanders between two greens every twenty-odd
+  metres, sparse worn patches, darker beds, faint mowing stripes; Buena Vista's floor leaf litter and
+  moss; the long grass shaggy and yellower, with tufts standing up in it, so you see it's deep
+  before you drive into it.
+- **Sidewalks** (`osg/paving.ts`): a warmer mid-grey paving texture of 1.5 m slabs with scored
+  joints, speckle, stains and the odd crack, a paler kerb band with an expansion joint behind it and
+  a darker kerb face, on every sidewalk the streets lay.
+- **Paths are paving too.** The parks' paths (the course's own through Alamo Square, Duboce Park and
+  Patricia's Green, Alamo Square's footpaths, the summit's plaza) were a flat, untextured near-white,
+  the same "empty space" as the old sidewalks. They're the sidewalks' scored concrete now, a shade
+  greyer (`PARK_PATH`); Buena Vista's walks and the dirt paths keep their own.
+- **The grass reaches the fence.** The ground outside a park took the city's pale sage, so the verge
+  between Alamo Square's fence and its sidewalks, and the bank over the Sunset Tunnel's portal by
+  Duboce Park (its trees standing on it), read as bare. The open grounds' lawn now carries on past
+  their edges onto bare ground (`LAWN_SPILL`: 8 m round Alamo Square, 20 m round Duboce Park);
+  everywhere else round them, streets and houses cover it.
+
+### The ground under the streets
+
+The ground follows the course (`courseGround`) and everything stands on it, so it has to agree with
+what's drawn on top. Four fixes, found by looking down on every corner:
+
+- **The lookup is the mesh.** `ground.height` interpolated bilinearly while the mesh is two flat
+  triangles a cell; along a kink in the ground the drawn surface sat above the lookup, and anything
+  laid "on the ground" was buried along a diagonal. It now reads the triangles.
+- **Strips drape.** A cross street, a corner square or a neighbourhood's own street
+  (`sideStreet`) took the ground's height down its middle and stayed flat across; on a hillside one
+  edge was under the ground. They're now a 2 m grid, every corner on the ground.
+- **Side streets are graded.** Past the road's verge the ground banks up or down to the land; a
+  cross street's arm (34 m) draped over that bank, and between its vertices the bank showed through.
+  The arms are one definition (`streetArms`), and the ground is graded level under each (easing back
+  over 10 m) before anything is built, as a real street's roadbed is. So are the streets round Alamo
+  Square (`alamoStreets`: Scott and Fulton climbing from one corner's height to the next, Hayes, and
+  the corner of Fulton & Steiner at the foot of the steps, where the cars land); without that, the
+  ground under Scott took its height from the ramp climbing into the park beside it. A park keeps its
+  own ground, and Alamo Square's surveyed ground eases in from the streets' level over its outer 6 m
+  rather than starting at its boundary with a step. At a corner the ground stays level out to the far
+  corner of the sidewalk squares.
+- **Alamo Square's hill is its survey.** The park's 12 m grid of heights was surveyed square to
+  latitude and longitude, so in the park's frame (turned 10° to the streets) almost every point has
+  its own x and z, and the lookup that treated it as an axis-aligned grid found nothing: the park's
+  ground had only ever been the paths' heights blended out. It now interpolates along the grid's own
+  axes; the survey and the paths agree to within about 1.5 m.
+- **Corners are round.** The pen drew an arc with a node every 30°, and the spline between them
+  wandered: a 9 m street corner's radius swung from 2.6 m to 27 m, the inside edge folded over itself
+  (thin holes in the asphalt) and the physics' kerb followed it. A node every 10° keeps it within a
+  few per cent, and a road's edge now stops just short of the centre of any bend tighter than the
+  road is wide (the Fulton hairpin, the park's loops). The inside of each turn is a kerb-high island
+  from the kerb line in to the arc's centre, meeting the sidewalks either side (it was a small disc on
+  bare ground). A crossing that turns off (Hayes into Alamo Square) gets no crosswalk across its way
+  out.
+- **A street hands over to a park's path gradually.** The ground stays at the road's height out to a
+  verge that depends on the section: past a street's sidewalks, but only to a park path's own edge.
+  Under the ALAMO SQUARE arch, where Hayes St's crossing hands over to the park's ramp, the verge
+  went from 9.4 m to 5.2 m in a metre, and so did the ground, which the grid drew as a crest through
+  the Hayes St arm beside it, 11 cm through the asphalt. A park path's verge now narrows a metre a
+  metre from the street's (`VERGE_TAPER`).
+- **Cross streets drape finer.** The arms, the corners and the side streets drape on a 1 m grid
+  (was 2 m), 9 cm over the ground (was 7: still 2 cm under the course's asphalt where they meet), so
+  the ground's creases stay under them. The N Judah's bed in Duboce Park lies as high as the ground
+  under either edge (the lawn slopes across it and showed through its uphill side). Checked by a
+  scan of the whole corridor (every metre of the course, out to 22 m either side, looking straight
+  down): the ground shows through the asphalt nowhere a racer sees it; what's left is a centimetre or
+  so here and there, under the cars parked on the Duboce wall's crest, and Hayes St by the summit.
+- **Left: Hayes St leans beside the summit.** The summit loop runs along Alamo Square's edge 7 m
+  above Hayes St's line, its paved band hanging a metre past the fence, and the ground (and the
+  street draped over it) rises to carry it: mid-block, the street leans across its width, and a few
+  centimetres of lawn show on it. Leaving the path's samples out of the street's ground drops the
+  street to its line but leaves the path's edge in the air; the real fix is a retaining wall along
+  the park's edge there. From the course it reads as the street below the railing.
+
+### Checks
+
+- **The existing maps are untouched.** The fingerprints of 18 full two-car races on Russian Hill
+  (both events) and Twin Peaks are identical after every change; `npm run balance` passes as before.
+  Their scenery shares `victorian.ts`, `props.ts` and `geo.ts` with this map: the houses come out of
+  the same draws in the same order, and `strip` (now able to take a per-point edge) gives
+  byte-identical geometry for a fixed one (checked against the committed version on random input).
+- **`npm run smoke`** passes with Old Stomping Grounds in it, and `defineMap` holds it to
+  `courseProblems` (no climb over 25%, no bend tighter than the road, no legs through each other).
+- **`npm run balance:race`**: every build gets home on every race map in every wind. Here a V8 or
+  jet build's lap is 109.0 s (median; 90% within 120 s), so three laps take about 5¼ minutes; a
+  lawnmower's is 177 s (about 9 minutes for three).
+- **Open ground** (scripted drives through Alamo Square): straight across the park takes a V8 40 s
+  against 25 on the paths (a jet 34 against 24, a lawnmower 48 against 29); a route search, lawn
+  allowed, gains about a second on the paths; a Jump over the summit loop saves two.
+- **CPU races** (headless, random builds, winds and items; 10 races, 54 car-laps): no rescues; per
+  car per lap, about 2.7 dog chases, 0.2 streetcar collisions (see Trams), 0.4 Waymo and 0.2
+  tourist hits, and air every lap off the steps (0.6 s), off the three crests down Hayes (0.7-0.9
+  s), over Buchanan by the Mint (0.8 s) and off the Duboce wall's crest (0.9 s).
+- **In the browser** (headless Chromium on the GPU against `npm run dev`): two autopilot cars from
+  the garage to the results, captured round the lap (`verification/osg/`); 0 console errors or
+  warnings; 60 fps (the cap) on the results and in every still view of the scenery at 1920×1080 on
+  a 2× display (Apple silicon); racing in split screen there, 48-58 fps with the machine busy
+  (Russian Hill, alongside, 52-61). The scenery is about 1.12 million triangles in 59 meshes, built
+  in 1.3-1.5 s. `npm run build` clean.
 
 ## One game, many maps
 

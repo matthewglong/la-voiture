@@ -6,6 +6,7 @@
 // loop the arc length s wraps: it runs over [0, length) and the last sample sits exactly on the
 // first. The maps build their courses (src/maps); this module holds the types, the builders they
 // share and the queries.
+import type { OpenGround } from './openGround';
 
 /** What a stretch of road is (the map decides: Lombard's switchbacks, a hairpin, the pier...). */
 export type SectionKind = string;
@@ -24,6 +25,19 @@ export const WALL_HEIGHT: Record<EdgeKind, number> = {
   open: Infinity,
 };
 
+/**
+ * What the ground is between the walls. Every section is paved from edge to edge unless it says
+ * otherwise; a park path is paved only down the middle (`pave`, its paved half-width), with a
+ * `verge` either side of it out to the walls (a lawn). The physics reads what each surface does
+ * from SURFACES (src/sim/physics.ts), so a surface behaves the same on every map.
+ */
+export type Surface = 'paved' | 'grass' | 'rough';
+
+/** The surface at lateral offset d from the centreline at a course point. */
+export function surfaceAt(pt: CoursePoint, d: number): Surface {
+  return Math.abs(d) <= pt.pave ? 'paved' : pt.verge;
+}
+
 export interface Section {
   kind: SectionKind;
   /** Street name (signs, HUD). */
@@ -32,6 +46,10 @@ export interface Section {
   s1: number;
   /** Corridor half-width (m). */
   hw: number;
+  /** Paved half-width (m): the whole corridor (hw) unless the section has verges. */
+  pave: number;
+  /** What's beside the paved band, out to the walls. */
+  verge: Surface;
   /** x range covered (min, max), for the terrain and the city. */
   xMin: number;
   xMax: number;
@@ -54,6 +72,9 @@ export interface CoursePoint {
   /** dψ/ds: + turns right (towards +z when heading +x). */
   curv: number;
   hw: number;
+  /** Paved half-width, and what's beyond it out to the walls (see Surface). */
+  pave: number;
+  verge: Surface;
   edgeL: EdgeKind;
   edgeR: EdgeKind;
   sec: number;
@@ -159,6 +180,10 @@ export interface Course {
   followGrade: number;
   /** Walled-in blocks the road winds through (Lombard's). */
   gardens: Garden[];
+  /** Parks the course runs through that a car can drive anywhere in (src/openGround.ts). */
+  open?: OpenGround[];
+  /** A spline course: the arc length of each of its nodes (for placing things by node). */
+  nodeS?: number[];
   /** Spatial hash of the samples (built by finishCourse). */
   index: Map<number, number[]>;
 }
@@ -252,7 +277,7 @@ export function layPieces(plan: readonly PieceSection[]): { pieces: Piece[]; sec
       h = e.h;
       s += pd.len;
     }
-    sections.push({ kind: ps.kind, name: ps.name, s0, s1: s, hw: ps.hw, xMin, xMax: Math.max(xMax, x), heading: h });
+    sections.push({ kind: ps.kind, name: ps.name, s0, s1: s, hw: ps.hw, pave: ps.hw, verge: 'paved', xMin, xMax: Math.max(xMax, x), heading: h });
   });
   return { pieces, sections, length: s };
 }
@@ -292,6 +317,8 @@ export function samplePieces(pieces: Piece[], sections: Section[], total: number
       grade: 0,
       curv: p.k,
       hw: sec.hw,
+      pave: sec.pave,
+      verge: sec.verge,
       edgeL: 'curb',
       edgeR: 'curb',
       sec: p.sec,
@@ -370,6 +397,9 @@ export interface SplineSection {
   hw: number;
   edgeL: EdgeKind;
   edgeR: EdgeKind;
+  /** Paved half-width (default: all of hw), and what's beside it (default: grass). */
+  pave?: number;
+  verge?: Surface;
 }
 
 /** A kicker at the end of a point-to-point spline course: the ramp runs from node `fromNode` to
@@ -479,6 +509,13 @@ export function buildSpline(def: SplineDef): Course {
   const nodeY = nodeS.map((s) => Math.round(s / DS) * DS);
   /** Arc length where span k (node k to node k + 1) ends; on a loop the last span ends back at node 0. */
   const spanEnd = (k: number): number => (k + 1 < N ? nodeY[k + 1] : total);
+  /** Length of span k (node k to node k + 1), wrapping on a loop; point to point, past either end
+   *  there is no neighbour to run into. */
+  const spanLen = (k: number): number => {
+    if (!loop && (k < 0 || k > N - 2)) return Infinity;
+    k = ((k % N) + N) % N;
+    return spanEnd(k) - nodeY[k];
+  };
   const segGrade = (k: number): number => {
     // Point to point, the grade carries on straight past either end.
     if (!loop) k = Math.min(Math.max(k, 0), N - 2);
@@ -502,7 +539,9 @@ export function buildSpline(def: SplineDef): Course {
       [k + 1, spanEnd(k)],
     ] as [number, number][]) {
       if (!loop && (kk <= 0 || kk >= N - 1)) continue;
-      const R = at(kk).round ?? 14;
+      // (Never longer than the spans either side: a curve that ran past the next node would leave a
+      // step in the road where that span stops rounding it.)
+      const R = Math.min(at(kk).round ?? 14, spanLen(kk - 1), spanLen(kk));
       if (R <= 0) continue;
       const x = s - (sk - R / 2);
       if (x < 0 || x > R) continue;
@@ -547,7 +586,8 @@ export function buildSpline(def: SplineDef): Course {
     prevRaw = raw;
     const si = secAt(s);
     const sd = def.sections[si];
-    return { s, x, y: height(s), z, tx: Math.cos(heading), tz: Math.sin(heading), heading, grade: 0, curv: 0, hw: sd.hw, edgeL: sd.edgeL, edgeR: sd.edgeR, sec: si };
+    const pave = Math.min(sd.pave ?? sd.hw, sd.hw);
+    return { s, x, y: height(s), z, tx: Math.cos(heading), tz: Math.sin(heading), heading, grade: 0, curv: 0, hw: sd.hw, pave, verge: pave < sd.hw ? (sd.verge ?? 'grass') : 'paved', edgeL: sd.edgeL, edgeR: sd.edgeR, sec: si };
   };
   for (let i = 0; i * DS < total - 1e-6; i++) points.push(sample(i * DS, i === 0));
   if (loop) {
@@ -596,7 +636,8 @@ export function buildSpline(def: SplineDef): Course {
       xMax = Math.max(xMax, p.x);
       h = p.heading;
     }
-    return { kind: sd.kind, name: sd.name, s0, s1, hw: sd.hw, xMin, xMax, heading: h };
+    const pave = Math.min(sd.pave ?? sd.hw, sd.hw);
+    return { kind: sd.kind, name: sd.name, s0, s1, hw: sd.hw, pave, verge: pave < sd.hw ? (sd.verge ?? 'grass') : 'paved', xMin, xMax, heading: h };
   });
 
   const startS = def.startS;
@@ -619,6 +660,7 @@ export function buildSpline(def: SplineDef): Course {
     wideViews: def.wideViews ?? [],
     followGrade: def.followGrade ?? 0.8,
     gardens: [],
+    nodeS: nodeY,
     index: new Map(),
   };
   if (loop) {
@@ -632,6 +674,363 @@ export function buildSpline(def: SplineDef): Course {
 /** A closed loop from its nodes (buildSpline with loop on). */
 export function buildLoop(def: SplineDef): Course {
   return buildSpline({ ...def, loop: true });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Building a loop from chunks: named stretches of road, each drawn in its own frame and laid end to
+// end from where the last one left off, so a stretch can be added, taken out, reordered or resized
+// by editing one list. The last chunk isn't drawn: it bends and stretches to close the loop.
+
+/** A section of a chunk. `from` counts the chunk's start as 0 and its nodes from 1. */
+export interface ChunkSection extends Omit<SplineSection, 'from'> {
+  from: number;
+}
+
+export interface ChunkDef {
+  id: string;
+  /**
+   * The heading the chunk is drawn arriving on (radians; default 0, +x). A chunk drawn on a map
+   * north-up (+x east, +z south) that starts heading north has −π/2. It's turned to meet the road
+   * however it actually arrives.
+   */
+  inHeading?: number;
+  /** Plan scale (default 1): shrink or stretch a chunk without redrawing it. Heights are kept (a
+   *  shorter hill is a steeper one). */
+  scale?: number;
+  /** The nodes after its start (the start is where the previous chunk ends): metres from the start
+   *  in the frame it's drawn in, and heights above the start. The last two set the way out. */
+  nodes: SplineNode[];
+  /** Its sections, in order (from 0: the chunk's start). A chunk that doesn't start a section
+   *  carries on the previous chunk's last one. */
+  sections: ChunkSection[];
+  /** Named nodes (as in `from`: 0 is the start); their arc lengths come back on the laid chunk. */
+  marks?: Record<string, number>;
+}
+
+/** The chunk that closes the loop: a smooth run from wherever the road has got to, back to where
+ *  the first chunk starts, arriving the way it sets off. */
+export interface FlexChunkDef {
+  id: string;
+  flex: true;
+  /** Node spacing (m, default 30). */
+  step?: number;
+  section: Omit<SplineSection, 'from'>;
+  /** How hard it may bend (the tightest radius, m) before the layout counts as broken (default 40). */
+  minRadius?: number;
+  /** Named points along it (fractions of its length). */
+  marks?: Record<string, number>;
+}
+
+/**
+ * Draws a chunk like a turtle: from the chunk's start (its origin, heading `heading`), straights and
+ * arcs that lay spline nodes as they go, the height changing evenly along each; marks and section
+ * starts at the node the pen has reached (0: the start). End a chunk with a straight, so the next
+ * one carries on the way the road is really going.
+ */
+export class Pen {
+  x = 0;
+  z = 0;
+  y = 0;
+  h: number;
+  readonly nodes: SplineNode[] = [];
+  readonly sections: ChunkSection[] = [];
+  readonly marks: Record<string, number> = {};
+
+  constructor(readonly heading = 0) {
+    this.h = heading;
+  }
+
+  /** The node the pen is at (0: the chunk's start). */
+  get at(): number {
+    return this.nodes.length;
+  }
+
+  private put(x: number, z: number, y: number, round?: number): void {
+    this.x = x;
+    this.z = z;
+    this.y = y;
+    this.nodes.push(round === undefined ? { x, z, y } : { x, z, y, round });
+  }
+
+  /** Straight on for `len` metres, climbing `dy`, a node every `step` metres (default 18);
+   *  `round` is the vertical curve at the node it ends on (0: a sharp crest). */
+  go(len: number, dy = 0, opts: { round?: number; step?: number } = {}): this {
+    const n = Math.max(1, Math.ceil(len / (opts.step ?? 18)));
+    const x0 = this.x;
+    const z0 = this.z;
+    const y0 = this.y;
+    for (let i = 1; i <= n; i++) {
+      const f = i / n;
+      this.put(x0 + Math.cos(this.h) * len * f, z0 + Math.sin(this.h) * len * f, y0 + dy * f, i === n ? opts.round : undefined);
+    }
+    return this;
+  }
+
+  /** Turn `deg` degrees (+ right) on a circle of radius `r`, climbing `dy`, a node every 10° or less
+   *  (sparser, the spline between them wanders off the circle: a street corner's radius swung from
+   *  a third to three times what was asked, and its inside edge folded over where it was tightest). */
+  arc(deg: number, r: number, dy = 0, opts: { round?: number } = {}): this {
+    const turn = (deg * Math.PI) / 180;
+    const n = Math.max(2, Math.ceil(Math.abs(deg) / 10));
+    const side = Math.sign(turn);
+    // The circle's centre is off to the side the pen turns towards.
+    const cx = this.x - Math.sin(this.h) * r * side;
+    const cz = this.z + Math.cos(this.h) * r * side;
+    const a0 = Math.atan2(this.z - cz, this.x - cx);
+    const y0 = this.y;
+    for (let i = 1; i <= n; i++) {
+      const a = a0 + (turn * i) / n;
+      this.put(cx + Math.cos(a) * r, cz + Math.sin(a) * r, y0 + (dy * i) / n, i === n ? opts.round : undefined);
+    }
+    this.h += turn;
+    return this;
+  }
+
+  /** Through surveyed points (x, z and the height, all in the chunk's frame, from its start), scaled
+   *  by `scale` (heights too); `round` sets every one of their vertical curves. */
+  through(pts: readonly (readonly [number, number, number])[], opts: { scale?: number; round?: number } = {}): this {
+    const k = opts.scale ?? 1;
+    const x0 = this.x;
+    const z0 = this.z;
+    const y0 = this.y;
+    for (const [px, pz, py] of pts) this.put(x0 + px * k, z0 + pz * k, y0 + py * k, opts.round);
+    const a = this.nodes[this.nodes.length - 2] ?? { x: x0, z: z0 };
+    const b = this.nodes[this.nodes.length - 1];
+    this.h = Math.atan2(b.z - a.z, b.x - a.x);
+    return this;
+  }
+
+  /** Name the node the pen is at. */
+  mark(name: string): this {
+    this.marks[name] = this.at;
+    return this;
+  }
+
+  /** Start a section at the node the pen is at. */
+  section(q: Omit<ChunkSection, 'from'>): this {
+    this.sections.push({ ...q, from: this.at });
+    return this;
+  }
+
+  /** The chunk it has drawn. */
+  chunk(id: string, extra: Partial<Omit<ChunkDef, 'id' | 'nodes' | 'sections' | 'marks' | 'inHeading'>> = {}): ChunkDef {
+    return { id, inHeading: this.heading, nodes: this.nodes, sections: this.sections, marks: this.marks, ...extra };
+  }
+}
+
+/** A chunk as laid: where it went, and how to place things drawn in its frame. */
+export interface LaidChunk {
+  id: string;
+  flex: boolean;
+  /** Arc lengths where it starts and ends, and of its marks. */
+  s0: number;
+  s1: number;
+  marks: Record<string, number>;
+  /** Its start in the world, and the turn and scale from the frame it's drawn in. */
+  x0: number;
+  z0: number;
+  y0: number;
+  rot: number;
+  scale: number;
+  /** Its nodes in the world (the start first). */
+  nodes: SplineNode[];
+  /** A point drawn in the chunk's frame (metres from its start), in the world, and back. */
+  toWorld(x: number, z: number): { x: number; z: number };
+  toChunk(x: number, z: number): { x: number; z: number };
+  /** A height drawn in the chunk's frame (above its start), in the world. */
+  yToWorld(y: number): number;
+  /** A heading drawn in the chunk's frame, in the world. */
+  headingToWorld(h: number): number;
+}
+
+export interface ChunkLoopDef {
+  id: string;
+  /** In order round the loop; the last is the flexible one. */
+  chunks: (ChunkDef | FlexChunkDef)[];
+  /** Where the start line is: a chunk's mark, and metres on from it. */
+  start: { chunk: string; mark: string; offset?: number };
+  wideViews?: { chunk: string; from: string; to: string }[];
+  followGrade?: number;
+}
+
+const isFlex = (c: ChunkDef | FlexChunkDef): c is FlexChunkDef => (c as FlexChunkDef).flex === true;
+
+/**
+ * Lay chunks end to end into a loop and build it (buildLoop). The first chunk starts at the origin
+ * heading +x; each one after starts where the one before ended, turned to carry on the way it was
+ * going; the flexible last chunk runs back to the origin (a cubic from where it starts, leaving
+ * the way the road was going and arriving heading +x, with the height changing evenly).
+ */
+export function buildChunkLoop(def: ChunkLoopDef): { course: Course; chunks: LaidChunk[] } {
+  const flexAt = def.chunks.findIndex(isFlex);
+  if (flexAt !== def.chunks.length - 1) throw new Error(`${def.id}: the loop needs exactly one flexible chunk, last`);
+  const nodes: SplineNode[] = [{ x: 0, z: 0, y: 0 }];
+  const sections: SplineSection[] = [];
+  const laid: (Omit<LaidChunk, 's0' | 's1' | 'marks'> & { g0: number; g1: number; def: ChunkDef | FlexChunkDef })[] = [];
+  let x = 0;
+  let z = 0;
+  let y = 0;
+  let h = 0;
+  for (const c of def.chunks) {
+    const g0 = nodes.length - 1;
+    const x0 = x;
+    const z0 = z;
+    const y0 = y;
+    let rot = 0;
+    let scale = 1;
+    if (!isFlex(c)) {
+      if (!c.nodes.length) throw new Error(`${def.id}: chunk ${c.id} has no nodes`);
+      rot = h - (c.inHeading ?? 0);
+      scale = c.scale ?? 1;
+      const cr = Math.cos(rot);
+      const sr = Math.sin(rot);
+      for (const n of c.nodes) nodes.push({ ...n, x: x0 + (n.x * cr - n.z * sr) * scale, z: z0 + (n.x * sr + n.z * cr) * scale, y: y0 + n.y });
+      for (const q of c.sections) sections.push({ ...q, from: g0 + q.from });
+      const a = nodes[nodes.length - 2];
+      const b = nodes[nodes.length - 1];
+      h = Math.atan2(b.z - a.z, b.x - a.x);
+      x = b.x;
+      z = b.z;
+      y = b.y;
+    } else {
+      // A cubic (Hermite) from here back to the origin, sampled by arc length.
+      const L = Math.hypot(x, z);
+      const k = L * 0.9;
+      const hx = (t: number): [number, number] => {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const h00 = 2 * t3 - 3 * t2 + 1;
+        const h10 = t3 - 2 * t2 + t;
+        const h01 = -2 * t3 + 3 * t2;
+        const h11 = t3 - t2;
+        return [h00 * x0 + h10 * k * Math.cos(h) + h11 * k * 1, h00 * z0 + h10 * k * Math.sin(h) + h11 * k * 0 + h01 * 0];
+      };
+      const dense: [number, number, number][] = [];
+      let len = 0;
+      for (let i = 0; i <= 400; i++) {
+        const p = hx(i / 400);
+        if (i) len += Math.hypot(p[0] - dense[i - 1][0], p[1] - dense[i - 1][1]);
+        dense.push([p[0], p[1], len]);
+      }
+      const step = c.step ?? 30;
+      const n = Math.max(2, Math.round(len / step));
+      let j = 0;
+      for (let i = 1; i < n; i++) {
+        const s = (len * i) / n;
+        while (j < dense.length - 2 && dense[j + 1][2] < s) j++;
+        const f = (s - dense[j][2]) / Math.max(1e-9, dense[j + 1][2] - dense[j][2]);
+        nodes.push({ x: dense[j][0] + (dense[j + 1][0] - dense[j][0]) * f, z: dense[j][1] + (dense[j + 1][1] - dense[j][1]) * f, y: y0 + (0 - y0) * (i / n) });
+      }
+      sections.push({ ...c.section, from: g0 });
+      x = 0;
+      z = 0;
+      y = 0;
+    }
+    const cr = Math.cos(rot);
+    const sr = Math.sin(rot);
+    laid.push({
+      id: c.id,
+      flex: isFlex(c),
+      def: c,
+      g0,
+      g1: nodes.length - 1,
+      x0,
+      z0,
+      y0,
+      rot,
+      scale,
+      nodes: nodes.slice(g0),
+      toWorld: (px, pz) => ({ x: x0 + (px * cr - pz * sr) * scale, z: z0 + (px * sr + pz * cr) * scale }),
+      toChunk: (wx, wz) => ({ x: ((wx - x0) * cr + (wz - z0) * sr) / scale, z: (-(wx - x0) * sr + (wz - z0) * cr) / scale }),
+      yToWorld: (py) => y0 + py,
+      headingToWorld: (ph) => ph + rot,
+    });
+  }
+  if (!sections.length || sections[0].from !== 0) throw new Error(`${def.id}: the first chunk must start a section`);
+  const spline: SplineDef = { id: def.id, nodes, sections, startS: 0, followGrade: def.followGrade };
+  const first = buildLoop(spline);
+  const nodeS = first.nodeS!;
+  const total = first.length;
+  const chunks: LaidChunk[] = laid.map((l) => {
+    const s0 = nodeS[l.g0];
+    const s1 = l.flex ? total : nodeS[l.g1];
+    const marks: Record<string, number> = {};
+    const m = l.def.marks ?? {};
+    for (const [name, v] of Object.entries(m)) marks[name] = l.flex ? s0 + (s1 - s0) * v : nodeS[l.g0 + v];
+    const { def: _d, g0: _a, g1: _b, ...rest } = l;
+    return { ...rest, s0, s1, marks };
+  });
+  const find = (id: string): LaidChunk => {
+    const c = chunks.find((q) => q.id === id);
+    if (!c) throw new Error(`${def.id}: no chunk ${id}`);
+    return c;
+  };
+  const mark = (id: string, name: string): number => {
+    const v = find(id).marks[name];
+    if (v === undefined) throw new Error(`${def.id}: chunk ${id} has no mark ${name}`);
+    return v;
+  };
+  const startS = wrapS(first, mark(def.start.chunk, def.start.mark) + (def.start.offset ?? 0));
+  const wideViews = (def.wideViews ?? []).map((w) => ({ s0: mark(w.chunk, w.from), s1: mark(w.chunk, w.to) }));
+  const course = buildLoop({ ...spline, startS, wideViews });
+  return { course, chunks };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Checks: what every course must satisfy, whatever map it's on. defineMap runs them.
+
+/**
+ * What's wrong with a course, in words (empty when nothing is): climbs steeper than `maxClimb`
+ * (descents can be as steep as you like: that's how crests throw cars; and a kicker's ramp is
+ * launched off, not climbed), bends tighter than the
+ * road is wide (the inside of the corridor would fold over), and stretches of road whose corridors
+ * overlap (two legs of the course running through each other).
+ */
+export function courseProblems(c: Course, rules: { maxClimb: number }): string[] {
+  const out: string[] = [];
+  const P = c.points;
+  const n = P.length - 1;
+  const name = (i: number): string => `${c.sections[P[i].sec].name} (s ${P[i].s.toFixed(0)})`;
+  // Climbs, over at least 2 m of road (a kicker's ramp is for launching off, not climbing).
+  for (let i = 0; i + 8 <= n; i += 4) {
+    if (c.lip && P[i + 8].s > c.lip.rampS0 - 1) break;
+    const g = (P[i + 8].y - P[i].y) / (P[i + 8].s - P[i].s);
+    if (g > rules.maxClimb + 1e-6) {
+      out.push(`${c.id}: a ${(g * 100).toFixed(1)}% climb at ${name(i)} (the most is ${(rules.maxClimb * 100).toFixed(0)}%)`);
+      i += 40;
+    }
+  }
+  // Bends tighter than the half-width (measured over 4 m of road).
+  for (let i = 0; i + 16 <= n; i += 4) {
+    let dh = P[i + 16].heading - P[i].heading;
+    dh -= Math.round(dh / (2 * Math.PI)) * 2 * Math.PI;
+    const r = Math.abs((P[i + 16].s - P[i].s) / (dh || 1e-9));
+    const hw = Math.max(P[i].hw, P[i + 16].hw);
+    if (r < hw - 1e-6) {
+      out.push(`${c.id}: a ${r.toFixed(1)} m bend at ${name(i)}, tighter than the road's half-width (${hw} m)`);
+      i += 40;
+    }
+  }
+  // Legs whose corridors overlap: samples closer than their half-widths add up to, from stretches
+  // of road far enough apart along the course not to be the same bend.
+  const seen = new Set<string>();
+  for (let i = 0; i < n; i += 8) {
+    const a = P[i];
+    for (let j = i + 8; j < n; j += 8) {
+      const b = P[j];
+      const reach = a.hw + b.hw;
+      const dx = a.x - b.x;
+      const dz = a.z - b.z;
+      if (dx * dx + dz * dz >= reach * reach) continue;
+      const along = c.loop ? Math.abs(deltaS(c, a.s, b.s)) : b.s - a.s;
+      if (along < Math.PI * reach) continue;
+      const key = `${a.sec}/${b.sec}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(`${c.id}: ${name(i)} and ${name(j)} run through each other (${Math.hypot(dx, dz).toFixed(1)} m apart)`);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -701,6 +1100,8 @@ export function pointAt(c: Course, s: number, out?: CoursePoint): CoursePoint {
   o.grade = a.grade;
   o.curv = a.curv;
   o.hw = a.hw;
+  o.pave = a.pave;
+  o.verge = a.verge;
   o.edgeL = a.edgeL;
   o.edgeR = a.edgeR;
   o.sec = a.sec;

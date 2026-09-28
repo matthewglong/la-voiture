@@ -14,10 +14,11 @@ export interface Gantry {
   update(t: number): void;
 }
 
-/** A gantry spanning the course at arc length s. */
-export function buildGantry(course: Course, s: number, name: string): Gantry {
+/** A gantry spanning the course at arc length s (its banner LA VOITURE unless it says otherwise; as
+ *  wide as the road there unless `hw` says). */
+export function buildGantry(course: Course, s: number, name: string, opts: { text?: string; hw?: number } = {}): Gantry {
   const p = pointAt(course, s);
-  const hw = p.hw;
+  const hw = opts.hw ?? p.hw;
   const group = new THREE.Group();
   group.name = name;
   const flags: { mesh: THREE.Mesh; base: Float32Array; phase: number }[] = [];
@@ -30,7 +31,7 @@ export function buildGantry(course: Course, s: number, name: string): Gantry {
   }
   rbox(gb, -0.3, 0.3, topY - 0.45, topY + 0.1, -post - 0.3, post + 0.3, 0.08, '#2b2f36');
   group.add(meshOf(gb, new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.35, clearcoat: 0.6 }), 'gantryFrame', true, true));
-  const banner = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.75, 2 * hw + 0.2), new THREE.MeshStandardMaterial({ map: bannerTexture(), roughness: 0.55 }));
+  const banner = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.75, 2 * hw + 0.2), new THREE.MeshStandardMaterial({ map: bannerTexture(opts.text), roughness: 0.55 }));
   banner.position.set(0, topY - 1.45, 0);
   banner.castShadow = true;
   banner.name = 'gantryBanner';

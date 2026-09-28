@@ -21,6 +21,15 @@ switchbacks, over the crest, round the summit hairpin under Sutro Tower and down
 crests throw the quick cars into the air. First across the line wins. The hills are the point: power
 pulls you up the climbs, grip gets you round the hairpin.
 
+Or three laps of **Old Stomping Grounds**, the old neighbourhood: from the clock stuck at 4:20 on
+Haight & Ashbury, along the Panhandle, through Alamo Square (round the dog park, over the summit,
+through the tourists photographing the Painted Ladies and off the steps at the northeast corner),
+past the Painted Ladies themselves, down Hayes through Hayes Valley's shops and Patricia's Green,
+over the Mint's hill to Duboce Ave and the N Judah, through Duboce Park, up the Duboce wall and over
+Buena Vista's summit, down its switchbacks (hop the stone walls if you dare) and back to Haight.
+Alamo Square and Duboce Park are open: drive anywhere in them, but the grass is slow, the long grass
+a crawl and the trees and benches solid, so a cut only pays if you jump it; the dogs chase you.
+
 Built with Vite, TypeScript and Three.js. Everything is procedural (geometry, textures, sound), and
 there is no backend.
 
@@ -39,9 +48,9 @@ npm run check      # type-check, smoke and balance in one go: run it after any p
 ## How to play
 
 0. **Pick the event** at the top of the garage: 🪂 the long jump down Russian Hill, 🏁 the sprint
-   down Russian Hill (first off the kicker wins), or 🏁 a race round Twin Peaks (or
-   `?map=russian-hill-race` / `?map=twin-peaks`; on a pad, Player 1's Y). Switching un-readies both
-   cars.
+   down Russian Hill (first off the kicker wins), 🏁 a race round Twin Peaks, or 🏁 three laps of
+   Old Stomping Grounds (or `?map=russian-hill-race` / `?map=twin-peaks` /
+   `?map=old-stomping-grounds`; on a pad, Player 1's Y). Switching un-readies both cars.
 1. **Build.** Both players build at the same time, each on their own panel. Every slot (chassis,
    wheels, engine, boost bottle, wing, nose, booster, paint, topper) has a tab showing the part
    fitted there and what it cost. Click a part to fit it, and click it again to remove it and get
@@ -174,7 +183,8 @@ URL parameters:
   Three.js or DOM. One sim runs every map and every mode.
 - `src/parts.ts`: the parts catalog; `src/garage.ts`: the build rules.
 - `src/scene/`: the renderer. `maps.ts` composes each venue's own scenery (the SF city, Lombard and
-  the landmarks in `city.ts`, `lombard.ts`, `landmarks.ts`; Twin Peaks in `twinPeaks.ts`) with what
+  the landmarks in `city.ts`, `lombard.ts`, `landmarks.ts`; Twin Peaks in `twinPeaks.ts`; Old
+  Stomping Grounds in `osg/`, a module per neighbourhood) with what
   every course gets from its shape: the start line, grid and gantries (`trackside.ts`), and for a
   course with a lip the kicker (`kicker.ts`) and the water and buoys (`bay.ts`). Shared props and
   textures (`props.ts`: tyre walls, barriers, the cable car...), cars, the race's cast
@@ -186,7 +196,8 @@ URL parameters:
   `scripts/smoke.ts`: every map and mode, end to end. `DECISIONS.md`: every choice beyond the brief,
   plus the balance report.
 - `preview/*.html`: dev-only showrooms for a map's scenery with the game's lighting (e.g.
-  `/preview/twinpeaks.html?view=climb`, `/preview/city.html?view=kickerTop&map=russian-hill-race`).
+  `/preview/twinpeaks.html?view=climb`, `/preview/city.html?view=kickerTop&map=russian-hill-race`,
+  `/preview/stomping.html?view=ladies`; add `&stats=1` for draw calls, triangles and build time).
 
 ## Adding a map
 
@@ -199,10 +210,18 @@ already has a kicker, or a race on Russian Hill with a different tip) is one `de
    sharp crest that launches fast cars) and sections from a node on with a name, half-width and wall
    types. It's a loop by default; `loop: false` runs from the first node to the last, ending at a
    finish line (`runoff` metres before the end) or, with `kicker: {...}`, in a kicker the builder
-   ramps up for you. (Or lay it from straights and arcs with `layPieces`, as Russian Hill does.) Keep
-   the tightest radius above the half-width and the legs well apart. Then export a `Venue`: the
-   course, item-box rows, a `populate` for traffic, tourists and cable cars (the sim's `addTraffic`,
-   `addStalled`, `addCrossing`, `addCable`, `addPed`, `addCone`), the strip's landmarks, splits,
+   ramps up for you. (Or lay it from straights and arcs with `layPieces`, as Russian Hill does; or
+   build a loop from **chunks** with `buildChunkLoop`, as Old Stomping Grounds does: each stretch
+   drawn in its own frame with a `Pen` (straights, arcs, surveyed points) and laid end to end, the
+   last one flexing to close the loop, so a stretch can be added, removed or resized by editing one
+   list.) A section can have a paved band narrower than its walls (`pave`) with a `verge` either
+   side (`'grass'`: half speed, slidey; `SURFACES` in `sim/physics.ts`). `defineMap` checks the
+   course against the rules every map shares (`courseProblems` in `track.ts`): no climb steeper than
+   `MAX_CLIMB` (25%), no bend tighter than the road's half-width, no legs running through each
+   other. Then export a `Venue`: the
+   course, item-box rows, a `populate` for traffic, tourists, dogs and trams (the sim's `addTraffic`,
+   `addStalled`, `addCrossing`, `addCable` (a cable car or a `'streetcar'`), `addPed`, `addDog`,
+   `addCone`), the strip's landmarks, splits,
    solo starts and tips. Walled-in blocks like Lombard's are `course.gardens`.
 2. **The events** in `src/maps/index.ts`: `defineMap(VENUE, { id, mode, laps, blurb })` for each,
    added to `MAPS`. It checks the course can host the mode (a long jump needs a lip). The garage
@@ -210,7 +229,11 @@ already has a kicker, or a race on Russian Hill with a different tip) is one `de
 3. **The scenery** (`src/scene/<name>.ts`): a `VenueScene` (a group, and `update`) with only what's
    the venue's own (ground, road surface, walls, houses, landmarks), registered under the venue's id
    in `src/scene/maps.ts`. The start line, grid, gantries, the kicker and the water come from the
-   course automatically; `scene/props.ts` has the shared props (tyre walls, barriers, trees...).
+   course automatically; `scene/props.ts` has the shared props (tyre walls, barriers, trees,
+   cypresses, benches, park lamps, street-name signs...), `scene/victorian.ts` the row houses,
+   `scene/terrain.ts` ground that follows a course. A bigger venue can split its scenery by
+   neighbourhood, as `scene/osg/` does (a shared context of per-material builders, the ground and a
+   record of what's built where, so nothing lands on anything else).
 4. Check it: `npm run check` (type-check, every map and mode end to end, the long jump's balance),
    `npm run balance:race`, and the autopilot racing it in the browser (`?map=<id>&autodrive=1`,
    then READY on both panels).

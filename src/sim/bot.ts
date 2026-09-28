@@ -25,7 +25,7 @@ const lines = new Map<Course, Line>();
 
 /**
  * A racing line: the minimum-curvature path through the corridor, keeping a safe margin inside the
- * kerbs. It swings wide into a corner, clips the apex and runs out wide again, and through
+ * kerbs (inside the paved band, where the corridor has verges: the CPU keeps off a park's lawns). It swings wide into a corner, clips the apex and runs out wide again, and through
  * Lombard's switchbacks it uses the whole width. Solved once per course by projected gradient
  * descent on the summed squared curvature, on a 2 m resampling of the centreline (fast to converge),
  * then interpolated back onto every sample.
@@ -51,7 +51,7 @@ function openLine(c: Course): Line {
   const cz = idx.map((i) => P[i].z);
   const nx = idx.map((i) => -P[i].tz);
   const nz = idx.map((i) => P[i].tx);
-  const lim = idx.map((i) => Math.max(0, P[i].hw - 2.2));
+  const lim = idx.map((i) => Math.max(0, P[i].pave - 2.2));
   const d = new Float64Array(m);
   const X = new Float64Array(m);
   const Z = new Float64Array(m);
@@ -78,7 +78,7 @@ function openLine(c: Course): Line {
   const kick = c.lip ? c.lip.runupS0 : Infinity;
   for (let i = 0; i < n; i++) {
     if (P[i].s > kick) full[i] *= clamp(1 - (P[i].s - kick) / 12, 0, 1);
-    const mm = Math.max(0, P[i].hw - 2.2);
+    const mm = Math.max(0, P[i].pave - 2.2);
     full[i] = clamp(full[i], -mm, mm);
   }
   const FX = new Float64Array(n);
@@ -121,7 +121,7 @@ function loopLine(c: Course): Line {
   const cz = idx.map((i) => P[i].z);
   const nx = idx.map((i) => -P[i].tz);
   const nz = idx.map((i) => P[i].tx);
-  const lim = idx.map((i) => Math.max(0, P[i].hw - 2.2));
+  const lim = idx.map((i) => Math.max(0, P[i].pave - 2.2));
   const d = new Float64Array(m);
   const X = new Float64Array(m);
   const Z = new Float64Array(m);
@@ -273,6 +273,8 @@ export class Bot {
     };
     this.line = racingLine(sim.course);
     this.corners = this.opt.drift ? driftCorners(sim.course) : [];
+    // Through a park it could drive anywhere in, the CPU keeps to the paths (walled as a road is).
+    sim.cars[p].keepToRoad = true;
     this.tmp = { ...sim.course.points[0] };
     this.plan = this.speedPlan();
   }
@@ -573,11 +575,15 @@ export class Bot {
     }
     for (const cb of sim.cables) {
       const loc = locate(c, cb.x, cb.z, car.s + 10, 30);
-      if (Math.abs(loc.d) < 8) consider(loc.s - 3, loc.d, 1.6, true);
-      if (Math.abs(loc.d) < 8) consider(loc.s + 3, loc.d, 1.6, true);
+      if (Math.abs(loc.d) >= 8) continue;
+      // Points along its body, a few metres apart (a cable car's two ends, more for a streetcar).
+      const half = cb.length / 2 - 1.3;
+      const n = Math.max(1, Math.ceil((2 * half) / 6));
+      for (let k = 0; k <= n; k++) consider(loc.s - half + (2 * half * k) / n, loc.d, 1.6, true);
     }
     for (const p of sim.peds) {
-      if (p.down > 0 || p.dive > 0) continue;
+      // (Dogs leap clear by themselves.)
+      if (p.down > 0 || p.dive > 0 || p.kind === 'dog') continue;
       if (Math.abs(deltaS(c, car.s, p.s)) > range + 2) continue;
       consider(p.s, p.d, 0.5, true);
     }

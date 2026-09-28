@@ -7,8 +7,10 @@
 // share everything: the course, the traffic, the scenery. The race sim, the CPU, the HUD and the
 // balance scripts read maps only through MapDef. No Three.js or DOM imports.
 import { MODES, type Mode, type ModeRules } from '../modes';
+import { MAX_CLIMB } from '../sim/physics';
 import type { RaceSim } from '../sim/race';
-import type { Course } from '../track';
+import { courseProblems, type Course } from '../track';
+import { OSG_VENUE } from './oldStompingGrounds';
 import { RUSSIAN_HILL_VENUE } from './russianHill';
 import { TWIN_PEAKS_VENUE } from './twinPeaks';
 
@@ -46,6 +48,8 @@ export interface Venue {
     hedges?: [number, number];
     /** A shortcut through here is a hedge hop. */
     hedgeHop?: [number, number];
+    /** What's hopped there (default 'hedge': Lombard's flower beds; Buena Vista's are walls). */
+    hopName?: string;
     /** Before here a corner is a good place to learn to drift. */
     driftUntil?: number;
   };
@@ -83,8 +87,10 @@ export interface MapDef extends Omit<Venue, 'id'> {
   blurb: string;
 }
 
-/** An event on a venue. Checks the course can host the mode. */
+/** An event on a venue. Checks the course is sound (courseProblems) and can host the mode. */
 export function defineMap(venue: Venue, ev: EventDef): MapDef {
+  const problems = courseProblems(venue.course, { maxClimb: MAX_CLIMB });
+  if (problems.length) throw new Error(`${ev.id}: the course doesn't hold up:\n- ${problems.join('\n- ')}`);
   const rules = MODES[ev.mode];
   rules.check(venue.course, ev.id);
   const { id: venueId, ...rest } = venue;
@@ -122,7 +128,14 @@ export const TWIN_PEAKS_MAP: MapDef = defineMap(TWIN_PEAKS_VENUE, {
   blurb: 'Three laps up and over Twin Peaks: first across the line wins',
 });
 
-export const MAPS: readonly MapDef[] = [RUSSIAN_HILL_MAP, RUSSIAN_HILL_RACE, TWIN_PEAKS_MAP];
+export const OLD_STOMPING_GROUNDS_MAP: MapDef = defineMap(OSG_VENUE, {
+  id: 'old-stomping-grounds',
+  mode: 'race',
+  laps: 3,
+  blurb: 'The Haight, Alamo Square, Hayes Valley, Duboce and Buena Vista: three laps of the old neighbourhood',
+});
+
+export const MAPS: readonly MapDef[] = [RUSSIAN_HILL_MAP, RUSSIAN_HILL_RACE, TWIN_PEAKS_MAP, OLD_STOMPING_GROUNDS_MAP];
 
 export function mapById(id: string | null | undefined): MapDef | null {
   return MAPS.find((m) => m.id === id) ?? null;

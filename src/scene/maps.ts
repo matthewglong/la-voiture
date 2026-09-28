@@ -14,6 +14,7 @@ import { buildBay, type Bay } from './bay';
 import { buildCity } from './city';
 import { buildKicker, type Kicker } from './kicker';
 import { buildLandmarks } from './landmarks';
+import { buildOldStompingGrounds } from './osg';
 import { buildTrackside } from './trackside';
 import { buildTwinPeaks } from './twinPeaks';
 import type { World } from './world';
@@ -63,6 +64,7 @@ const VENUES: Record<string, (world: World) => VenueScene> = {
     };
   },
   'twin-peaks': () => buildTwinPeaks(),
+  'old-stomping-grounds': () => buildOldStompingGrounds(),
 };
 
 /** A venue's scenery with the course's shared furniture on top. */

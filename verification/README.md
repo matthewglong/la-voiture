@@ -1,5 +1,70 @@
 # Verification
 
+## Old Stomping Grounds pass
+
+The new race map round the Haight, Alamo Square, Hayes Valley, Duboce and Buena Vista, and what came
+with it for every map: surfaces, the crawl, dogs, streetcars, chunked courses and `courseProblems`
+(see "Old Stomping Grounds" in `DECISIONS.md`). Checked with Node simulations and Playwright against
+`npm run dev`:
+
+- **Existing maps unchanged:** 18 fingerprinted two-car races on Russian Hill (both events) and Twin
+  Peaks identical after every change; `npm run balance` passes as before; the shared scenery helpers
+  give byte-identical geometry for what the old maps ask of them.
+- **`npm run smoke`** passes with the new map; `defineMap` checks every course against the shared
+  rules (climbs up to 25%, no bend tighter than the road, no overlapping legs).
+- **`npm run balance:race`:** every build gets home on every race map in every wind. Here, a V8 or
+  jet lap is 109.0 s (median), three laps about 5¼ minutes; a lawnmower's about 9.
+- **Open parks:** straight across Alamo Square takes a V8 40 s against 25 on the paths (the lawn's
+  cap, the long grass, the obstacles); the best line a route search finds, lawn allowed, gains about
+  a second; a Jump over the summit loop saves two.
+- **CPU races, headless:** no rescues; per car per lap about 2.7 dog chases, and air every lap off
+  the steps (0.6 s), three Hayes crests, Buchanan over the Mint's hill and the top of the Duboce
+  wall.
+- **Ground under the asphalt:** looking straight down every metre of the course out to 22 m either
+  side, the ground shows through nowhere a racer sees it (see "The ground under the streets").
+- **Browser:** two autopilot cars from the garage to the results; 0 console errors or warnings; 60
+  fps (the cap) on the results and in every still view at 1920×1080 on a 2× display, 48-58 racing
+  in split screen there with the machine busy (Russian Hill 52-61 alongside); the scenery about 1.12
+  million triangles in 59 meshes, built in about 1.4 s. `npm run build` clean.
+
+`osg/` (JPEG, 1280×720; `osg-p*` are from the dev preview, `/preview/stomping.html`, with the game's
+lighting):
+
+| File | Shows |
+|---|---|
+| `osg-01-garage` | The garage with the fourth event, "Old Stomping Grounds", the wind "on the Panhandle", the grid on Haight St |
+| `osg-02-start-haight` | Race day on the Upper Haight: barriers down both kerbs, the crowd, Piedmont's legs, the murals, two rocket starts |
+| `osg-03-ashbury` | Over the crest at Ashbury (0.8 s of air), barriers and the crowd |
+| `osg-04-panhandle` | Along Oak beside the Panhandle |
+| `osg-05-scott` | Up Scott St: crosswalks, barricades across the cross streets |
+| `osg-06-alamo-ramp` | Into Alamo Square under the ALAMO SQUARE arch, tyres round the corner, the paths scored concrete |
+| `osg-07-dog-park` | Round the dog lawn: the grass darker, patchy and textured, long grass in it, the dogs loose |
+| `osg-08-summit` | The summit loop and its paved plaza, the railing along the park's edge |
+| `osg-09-tourists-lawn` | Split screen through the tourists on the lawn, long grass either side of the path |
+| `osg-10-steps-jump` | Off the 39 steps (0.6 s of air) and down onto Fulton & Steiner, tyres round the hairpin |
+| `osg-11-painted-ladies` | South on Steiner towards Hayes |
+| `osg-12-hayes-crests` | Air off the crests down Hayes |
+| `osg-13-hayes-shops` | The 500 block of Hayes, its shops behind the barriers |
+| `osg-14-patricias-green` | Down the middle of Patricia's Green |
+| `osg-15-page` | Page St, tyres round the corner |
+| `osg-16-mint` | Over Buchanan's crest at Haight St, the Mint on its rock |
+| `osg-17-n-judah` | Along Duboce Ave on the N Judah's tracks under its wires |
+| `osg-18-duboce-park` | Through Duboce Park on its concrete path, the dogs, the Harvey Milk Center's playground |
+| `osg-19-duboce-wall` | Up the Duboce wall, cars parked nose-in |
+| `osg-20-buena-vista` | Buena Vista's zigzag between its stone walls, item boxes |
+| `osg-21-switchbacks` | Buena Vista's switchbacks |
+| `osg-22-upper-haight` | Back on Haight: over the line into lap 2 |
+| `osg-99-results` | The results: times, best laps, badges, the session's best lap |
+| `osg-p1-aerial` | The whole map: the Panhandle, Alamo Square, Hayes Valley, Duboce Park and Buena Vista |
+| `osg-p2-postcard` | Postcard Row from the tourists' lawn, downtown behind |
+| `osg-p3-ladies` | Steiner past the Painted Ladies, the park's lawn up to its fence |
+| `osg-p4-green` | Patricia's Green: the sculpture, Proxy's containers |
+| `osg-p5-hayes` | Down Hayes from the top, downtown beyond |
+| `osg-p6-buena-vista` | Into Buena Vista: its walk, stone walls and woods |
+| `osg-p7-dog-park` | The dog lawn from the path: the grass's patches, long grass, the concrete path |
+| `osg-p8-alamo-gate` | The ALAMO SQUARE arch over the ramp, from the chase camera's height |
+| `osg-p9-duboce-park` | Duboce Park from Steiner: its path, the N Judah into the Sunset Tunnel, the grass up the bank over it |
+
 ## One game, many maps pass
 
 The restructure that defines modes, maps and physics once (see "One game, many maps" in
