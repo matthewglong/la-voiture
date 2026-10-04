@@ -1,11 +1,12 @@
 // The race's moving cast, drawn from the simulation each frame: toy Waymos (lidar hats spinning,
-// hazards blinking, sometimes a protest cone on the hood), wobbly tourist figurines, dogs loose in
-// the parks, the map's cable cars (or its streetcar), loose traffic cones, item boxes, poo,
-// seagulls and crabs.
+// hazards blinking, sometimes a protest cone on the hood) and a map's own traffic (lowriders, on
+// their hydraulics), wobbly tourist figurines and a map's own locals (strollers, drag queens,
+// mariachis, paleteros, hipsters), dogs loose in the parks, the map's cable cars (or its
+// streetcar), loose traffic cones, item boxes, poo, seagulls and crabs.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import type { Ped, RaceSim, TramKind } from '../sim/race';
-import { GeoBuilder, cyl, type V3 } from './geo';
+import type { Ped, PedDress, RaceSim, TramKind, Waymo } from '../sim/race';
+import { GeoBuilder, box, cyl, rbox, type V3 } from './geo';
 import { buildCableCar, buildStreetcar, signTexture } from './props';
 import { canvasTexture, damp, smoothstep } from './util';
 
@@ -46,6 +47,14 @@ function makeMats() {
     // tags on a glossy one.
     dogCoat: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62 }),
     dogGloss: new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.08 }),
+    // A map's own locals (Ped.dress): clothes, skin and what they push in vertex colour on one
+    // material (double-sided, for the canopies and umbrellas), sequins, silver and brass on another.
+    dress: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, side: THREE.DoubleSide }),
+    dressGloss: new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.22, metalness: 0.55, clearcoat: 0.9, clearcoatRoughness: 0.1, side: THREE.DoubleSide }),
+    // Lowriders: chrome, wire wheels with whitewalls, and their lamps.
+    chrome: new THREE.MeshStandardMaterial({ color: '#eef1f4', roughness: 0.12, metalness: 1 }),
+    lowWheel: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.45, side: THREE.DoubleSide }),
+    lowLamp: new THREE.MeshStandardMaterial({ color: '#fff4d6', emissive: '#ffe9b0', emissiveIntensity: 0.8, roughness: 0.3 }),
   };
 }
 const mats = (): NonNullable<typeof M> => (M ??= makeMats());
@@ -157,6 +166,8 @@ interface WaymoView {
   roll: number;
   /** Drawn see-through for the view being drawn (the camera is on top of it, or it hides a car). */
   faded: boolean;
+  /** A lowrider: its hydraulics' phase (it hops; a Waymo doesn't). */
+  hop?: number;
 }
 
 function buildWaymo(): WaymoView {
@@ -215,6 +226,126 @@ function buildWaymo(): WaymoView {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Lowriders (Waymo.dress): a long, low sixties hardtop in candy paint, chrome bumpers and trim,
+// quad headlamps and triple tail lamps, wire wheels with whitewalls and knock-off spinners, sitting
+// on its hydraulics: it hops now and then as it cruises, and dances when it stops. The sim drives
+// it as a Waymo (same footprint).
+
+const CANDY = ['#b5121b', '#6a1b9a', '#0d7c7c', '#c9a227', '#1b3a8c', '#2e8b3e', '#c2185b'];
+const candy = new Map<string, THREE.MeshPhysicalMaterial>();
+function candyMat(color: string): THREE.MeshPhysicalMaterial {
+  let m = candy.get(color);
+  if (!m) {
+    m = new THREE.MeshPhysicalMaterial({ color, roughness: 0.2, metalness: 0.45, clearcoat: 1, clearcoatRoughness: 0.05 });
+    candy.set(color, m);
+  }
+  return m;
+}
+
+let LOW: ReturnType<typeof makeLowGeos> | null = null;
+function makeLowGeos() {
+  const chrome = new GeoBuilder();
+  const W = '#ffffff';
+  // Bumpers, the grille, the trim along the sides, the hood ornament.
+  rbox(chrome, 2.36, 2.52, 0.34, 0.54, -0.99, 0.99, 0.05, W, undefined, 1);
+  rbox(chrome, -2.52, -2.36, 0.34, 0.54, -0.99, 0.99, 0.05, W, undefined, 1);
+  box(chrome, 2.37, 2.43, 0.5, 0.74, -0.62, 0.62, W);
+  for (const s of [1, -1]) box(chrome, -2.3, 2.3, 0.64, 0.68, s > 0 ? 0.962 : -0.986, s > 0 ? 0.986 : -0.962, W);
+  blob(chrome, W, 2.05, 0.86, 0, 0.12, 0.05, 0.03, 0, 0, 0, 8);
+  const heads = new GeoBuilder();
+  for (const z of [-0.66, -0.44, 0.44, 0.66]) cyl(heads, [2.36, 0.66, z], [2.45, 0.66, z], 0.075, 0.075, 8, W);
+  const tails = new GeoBuilder();
+  for (const z of [-0.84, -0.66, -0.48, 0.48, 0.66, 0.84]) cyl(tails, [-2.45, 0.64, z], [-2.36, 0.64, z], 0.06, 0.06, 8, W);
+  // A wheel (axle along z, whitewall and the chrome dish on +z: the far side's are mirrored).
+  const wheel = new GeoBuilder();
+  wheel.add(new THREE.CylinderGeometry(0.33, 0.33, 0.24, 14).rotateX(Math.PI / 2), '#1d1e21');
+  for (const f of [1, -1]) {
+    wheel.add(new THREE.RingGeometry(0.21, 0.29, 14).rotateY(f > 0 ? 0 : Math.PI).translate(0, 0, f * 0.121), '#f4f4ef');
+    wheel.add(new THREE.CircleGeometry(0.21, 12).rotateY(f > 0 ? 0 : Math.PI).translate(0, 0, f * 0.122), '#d9dde2');
+  }
+  // Wire spokes on the outside, and the three-eared knock-off spinner.
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * TAU;
+    wheel.add(new THREE.BoxGeometry(0.2, 0.012, 0.012).translate(0.1, 0, 0).rotateZ(a).translate(0, 0, 0.13), '#b9bec6');
+  }
+  for (let k = 0; k < 3; k++) wheel.add(new THREE.BoxGeometry(0.15, 0.035, 0.03).translate(0.06, 0, 0).rotateZ((k / 3) * TAU + 0.3).translate(0, 0, 0.15), '#e6b54c');
+  wheel.add(new THREE.CylinderGeometry(0.045, 0.05, 0.05, 10).rotateX(Math.PI / 2).translate(0, 0, 0.145), '#e6b54c');
+  return {
+    hull: new RoundedBoxGeometry(4.8, 0.46, 1.94, 2, 0.16),
+    cabin: new RoundedBoxGeometry(1.95, 0.38, 1.66, 2, 0.12),
+    roof: new RoundedBoxGeometry(1.8, 0.08, 1.62, 1, 0.04),
+    fin: new RoundedBoxGeometry(1.4, 0.1, 0.13, 1, 0.04),
+    chrome: chrome.build(),
+    heads: heads.build(),
+    tails: tails.build(),
+    wheel: wheel.build(),
+  };
+}
+const lowGeos = (): NonNullable<typeof LOW> => (LOW ??= makeLowGeos());
+
+function buildLowrider(id: number): WaymoView {
+  const m = mats();
+  const g = lowGeos();
+  const paint = candyMat(CANDY[id % CANDY.length]);
+  const root = new THREE.Group();
+  root.name = 'lowrider';
+  // (The body first: the knock rocks root.children[0], the hydraulics lift and pitch it.)
+  const body = new THREE.Group();
+  root.add(body);
+  body.add(mesh(g.hull, paint, 0, 0.58, 0));
+  body.add(mesh(g.cabin, m.glass, -0.35, 1.0, 0));
+  body.add(mesh(g.roof, id % 3 === 0 ? m.white : paint, -0.4, 1.22, 0));
+  for (const s of [1, -1]) body.add(mesh(g.fin, paint, -1.8, 0.85, s * 0.9));
+  body.add(mesh(g.chrome, m.chrome), mesh(g.heads, m.lowLamp), mesh(g.tails, m.tail));
+  const gg = geos();
+  const hazards: THREE.Mesh[] = [];
+  for (const x of [2.3, -2.3]) {
+    for (const s of [1, -1]) {
+      const h = mesh(gg.hazard, m.hazardOff, x, 0.5, s * 0.86);
+      hazards.push(h);
+      body.add(h);
+    }
+  }
+  const wheels: THREE.Object3D[] = [];
+  for (const x of [1.5, -1.5]) {
+    for (const s of [1, -1]) {
+      const w = new THREE.Group();
+      w.position.set(x, 0.33, s * 0.84);
+      w.scale.z = s;
+      w.add(mesh(g.wheel, m.lowWheel));
+      wheels.push(w);
+      root.add(w);
+    }
+  }
+  // No lidar to spin, but the view has one; nor does it stall with a cone on its hood.
+  const lidar = new THREE.Group();
+  const cone = buildCone();
+  cone.visible = false;
+  body.add(cone);
+  return { root, lidar, hazards, cone, wheels, roll: 0, faded: false, hop: id };
+}
+
+/** A lowrider's hydraulics: stopped, it dances (front up, back up, in turn); cruising, it throws a
+ *  front-then-back hop every six or seven seconds. Lifts and pitches the body, wheels on the road. */
+function hydraulics(v: WaymoView, w: Waymo, t: number): void {
+  const body = v.root.children[0];
+  const k = (v.hop ?? 0) * 2.3;
+  const still = w.parked || w.kind === 'stalled' || w.stopped > 0 || w.v < 0.6;
+  let front = 0;
+  let back = 0;
+  if (still) {
+    front = Math.max(0, Math.sin(t * 5.5 + k));
+    back = 0.6 * Math.max(0, Math.sin(t * 5.5 + k + Math.PI));
+  } else {
+    const c = (((t + k) % 6.5) + 6.5) % 6.5;
+    if (c < 0.7) front = Math.sin((c / 0.7) * Math.PI);
+    else if (c < 1.4) back = 0.8 * Math.sin(((c - 0.7) / 0.7) * Math.PI);
+  }
+  body.position.y = 0.17 * front + 0.12 * back;
+  body.rotation.z = 0.15 * front - 0.12 * back;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Tourists: wobbly toy figures in bright shirts, some with cameras. They topple and bob back up.
 
 interface PedView {
@@ -225,6 +356,8 @@ interface PedView {
   wobble: number;
   wobbleV: number;
   tilt: number;
+  /** A map's own local (Ped.dress): their look's moving parts. */
+  dress?: DressRig;
 }
 
 const SHIRTS = ['#ff4f7a', '#2fb5ff', '#ffd23f', '#7ad151', '#b67dff', '#ff8a3d', '#1fd1c0', '#f7f7f7'];
@@ -260,6 +393,597 @@ function buildPed(seed: number, tourist: boolean): PedView {
   if (tourist) arm.add(mesh(g.camera, m.black, 0.32, -0.02, -0.05));
   body.add(arm);
   return { root, body, legs, arm, wobble: 0, wobbleV: 0, tilt: 0 };
+}
+
+// ---------------------------------------------------------------------------------------------
+// A map's own locals (Ped.dress): Noe Valley's parents pushing strollers, the Castro's drag queens,
+// a mariachi trio outside El Farolito, paleteros pushing their carts, hipsters at the top of Dolores
+// Park photographing the view. The same wobbly toy figures (they topple and bob back up with
+// whatever they're pushing), each in its own clothes with its own props and moves; the sim treats
+// them as their kind. Everything that doesn't move is merged per look (vertex colour, two shared
+// materials); the legs, arms, wheels and what's in hand move.
+
+interface DressRig {
+  kind: PedDress;
+  /** Between the body (which wobbles) and the figure: a sashay, a sway to the music. */
+  sway: THREE.Group;
+  /** The figure's other arm (its left). */
+  arm2: THREE.Object3D;
+  /** Wheels of what they push (each spun by its own k: the small ones faster), their reference
+   *  radius, and how far they've turned. */
+  wheels: { obj: THREE.Object3D; k: number }[];
+  wheelR: number;
+  spin: number;
+  /** What moves in hand (a fan; a violin's bow), and the paletero's bell. */
+  prop: THREE.Object3D | null;
+  bell: THREE.Object3D | null;
+  /** Which instrument a mariachi plays (0 guitar, 1 trumpet, 2 violin, 3 guitarrón). */
+  variant: number;
+}
+
+/** Skin tones (and warmer ones). */
+const SKINS = ['#f0c6a2', '#e0ac85', '#c68e65', '#a8714c', '#87553a', '#f5d7bf', '#6e4630'];
+const WARM_SKINS = ['#c68e65', '#a8714c', '#b47e58', '#8d5a3b', '#d39b72', '#9b6744'];
+const HAIRS = ['#2b1d14', '#5a3a22', '#c9a35b', '#8a5a2b', '#141414', '#b8854a'];
+
+/** A matrix placing a part at (x, y, z), turned (rx, ry, rz), scaled (sx, sy, sz). */
+function at(x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, sx = 1, sy = sx, sz = sx): THREE.Matrix4 {
+  return _dm.compose(_dp.set(x, y, z), _dq.setFromEuler(_de.set(rx, ry, rz)), _ds.set(sx, sy, sz));
+}
+
+/** The toy figure's body and head (as the plain pedestrian's: torso round its middle at 0.98 m, a
+ *  head at 1.52), in a top colour and a skin tone. */
+function figure(b: GeoBuilder, top: string, skin: string): void {
+  b.add(new THREE.CapsuleGeometry(0.24, 0.38, 3, 12), top, at(0, 0.98, 0));
+  b.add(new THREE.SphereGeometry(0.19, 14, 10), skin, at(0, 1.52, 0));
+}
+
+/** A leg from the hip (as the plain pedestrian's), with a shoe; `extra` dresses it. */
+function legOf(trouser: string, shoe: string, extra?: (b: GeoBuilder) => void): THREE.BufferGeometry {
+  const b = new GeoBuilder();
+  b.add(new THREE.CapsuleGeometry(0.075, 0.42, 2, 8), trouser, at(0, -0.3, 0));
+  blob(b, shoe, 0.04, -0.58, 0, 0.11, 0.05, 0.075, 0, 0, 0, 8);
+  extra?.(b);
+  return b.build();
+}
+
+/** An arm from the shoulder, hanging (a sleeve and a hand). */
+function armOf(sleeve: string, skin: string): THREE.BufferGeometry {
+  const b = new GeoBuilder();
+  b.add(new THREE.CapsuleGeometry(0.06, 0.3, 2, 6), sleeve, at(0.12, -0.1, 0));
+  blob(b, skin, 0.12, -0.33, 0, 0.065, 0.065, 0.065, 0, 0, 0, 8);
+  return b.build();
+}
+
+/** Where the hand is, from the shoulder, hanging. */
+const HAND: V3 = [0.12, -0.34, 0];
+
+/** A wheel (axle along z): tyre and hub. */
+function wheelOf(r: number, w: number, tyre: string, hub: string): THREE.BufferGeometry {
+  const b = new GeoBuilder();
+  b.add(new THREE.CylinderGeometry(r, r, w, 12).rotateX(Math.PI / 2), tyre);
+  b.add(new THREE.CylinderGeometry(r * 0.45, r * 0.45, w + 0.01, 8).rotateX(Math.PI / 2), hub);
+  return b.build();
+}
+
+/** What a look is made of (cached per look and variant). */
+interface DressKit {
+  matte: THREE.BufferGeometry;
+  gloss: THREE.BufferGeometry | null;
+  /** The legs (the left one is the right mirrored), or none showing. */
+  leg: THREE.BufferGeometry | null;
+  arm: THREE.BufferGeometry;
+  /** In the right hand (from the shoulder), and the left; glossy or not. */
+  hand: THREE.BufferGeometry | null;
+  handGloss: boolean;
+  hand2: THREE.BufferGeometry | null;
+  /** The wheels of what they push: where (each with its size against the first). */
+  wheel: THREE.BufferGeometry | null;
+  wheelAt: [number, number, number, number][];
+  wheelR: number;
+  bell: THREE.BufferGeometry | null;
+  bellAt: V3;
+}
+
+const DRESS_KITS = new Map<string, DressKit>();
+
+/** The frame of a stroller or a cart's handle: a bar across at the hands (x 0.36, y 1.0). */
+function handleBar(b: GeoBuilder, color: string, half: number): void {
+  rod(b, color, [0.36, 1.0, -half], [0.36, 1.0, half], 0.024, 0.024, 8);
+}
+
+/** A parent pushing a stroller (pram, canopy, a baby peeking out, the changing bag on the handle). */
+function strollerKit(v: number): DressKit {
+  const TOPS = ['#9aa5b1', '#2d3e5c', '#a8bfa3', '#e8b4b8', '#f2efe6', '#4a4a4a'];
+  const LEGS = ['#26262b', '#3b4a63', '#5d6168', '#26262b', '#7a6a58', '#2f2f35'];
+  const PRAMS = ['#2d3e5c', '#5c6b52', '#3a3a40', '#b5523b', '#7c8fa6', '#c9b28f'];
+  const BABY = ['#f7c6d9', '#bfe3f7', '#fff1a8', '#c9f2d4', '#e6d3ff', '#ffd6b8'];
+  const skin = SKINS[(v * 3) % SKINS.length];
+  const hair = HAIRS[v % HAIRS.length];
+  const b = new GeoBuilder();
+  figure(b, TOPS[v], skin);
+  // Hair: a cap of it over the top and back, then a bun, a ponytail or a baseball cap.
+  b.add(new THREE.SphereGeometry(0.2, 12, 6, 0, TAU, 0, Math.PI * 0.55), hair, at(-0.02, 1.53, 0, 0, 0, 0.35));
+  if (v % 3 === 0) blob(b, hair, -0.15, 1.67, 0, 0.09, 0.09, 0.09, 0, 0, 0, 10);
+  else if (v % 3 === 1) blob(b, hair, -0.2, 1.52, 0, 0.06, 0.15, 0.06, 0, 0, -0.5, 10);
+  else {
+    b.add(new THREE.SphereGeometry(0.205, 12, 6, 0, TAU, 0, Math.PI / 2), '#e8322a', at(0, 1.57, 0));
+    blob(b, '#e8322a', 0.2, 1.6, 0, 0.13, 0.02, 0.12, 0, 0, 0, 10);
+  }
+  // The stroller: handle, push bars down to the rear axle, legs down to the front wheels.
+  const frame = '#26272b';
+  handleBar(b, frame, 0.24);
+  for (const s of [1, -1]) {
+    rod(b, '#a7adb5', [0.36, 1.0, s * 0.22], [0.62, 0.12, s * 0.23], 0.018, 0.018, 8);
+    rod(b, '#a7adb5', [0.72, 0.5, s * 0.2], [1.2, 0.1, s * 0.19], 0.016, 0.016, 8);
+  }
+  rod(b, '#a7adb5', [0.62, 0.11, -0.25], [0.62, 0.11, 0.25], 0.012, 0.012, 6);
+  // The pram and its canopy (folded half up), the footboard.
+  rbox(b, 0.6, 1.2, 0.42, 0.76, -0.22, 0.22, 0.08, PRAMS[v]);
+  b.add(new THREE.CylinderGeometry(0.25, 0.25, 0.47, 10, 1, true, Math.PI / 2, Math.PI).rotateX(Math.PI / 2), PRAMS[v], at(0.82, 0.74, 0));
+  box(b, 1.14, 1.24, 0.38, 0.42, -0.18, 0.18, frame);
+  // The baby, in a knitted hat, peeking out from under the canopy.
+  blob(b, '#f3cfb3', 0.98, 0.8, 0, 0.085, 0.085, 0.085, 0, 0, 0, 10);
+  b.add(new THREE.SphereGeometry(0.09, 10, 5, 0, TAU, 0, Math.PI / 2), BABY[v], at(0.97, 0.82, 0));
+  blob(b, BABY[v], 0.97, 0.92, 0, 0.03, 0.03, 0.03, 0, 0, 0, 6);
+  // The changing bag hanging off the handle.
+  box(b, 0.4, 0.5, 0.74, 0.96, 0.17, 0.29, '#33415c');
+  return {
+    matte: b.build(),
+    gloss: null,
+    leg: legOf(LEGS[v], '#f4f4f4'),
+    arm: armOf(TOPS[v], skin),
+    hand: null,
+    handGloss: false,
+    hand2: null,
+    wheel: wheelOf(0.11, 0.05, '#1c1d20', '#c9ced6'),
+    wheelAt: [
+      [0.62, 0.11, 0.26, 1],
+      [0.62, 0.11, -0.26, 1],
+      [1.2, 0.09, 0.2, 0.82],
+      [1.2, 0.09, -0.2, 0.82],
+    ],
+    wheelR: 0.11,
+    bell: null,
+    bellAt: [0, 0, 0],
+  };
+}
+
+/** A drag queen: a sequinned gown to the floor, long gloves, a feather boa, hoops, a face, and a wig
+ *  of her own (a platinum bouffant, a pink beehive, a rainbow one, purple curls, a red bob, golden
+ *  curls); a fan in her raised hand, the other on her hip. */
+function dragKit(v: number): DressKit {
+  const GOWNS = ['#ff2fa0', '#ffd23f', '#2f6bff', '#9b3cff', '#18c98f', '#ff3b30'];
+  const BOAS = ['#ffc2e2', '#ffffff', '#1b1b1f', '#e0b3ff', '#ffe082', '#ff8fb1'];
+  const GLOVES = ['#f7f7f7', '#1b1b1f', '#f7f7f7', '#1b1b1f', '#f7f7f7', '#ff2fa0'];
+  const skin = SKINS[(v * 5 + 1) % SKINS.length];
+  const gown = GOWNS[v];
+  const b = new GeoBuilder();
+  const gl = new GeoBuilder();
+  // The gown and bodice (sequins), the face (lips, shadow), the boa.
+  gl.add(new THREE.CylinderGeometry(0.2, 0.47, 1.08, 18), gown, at(0, 0.54, 0));
+  gl.add(new THREE.CapsuleGeometry(0.21, 0.3, 3, 12), gown, at(0, 1.05, 0));
+  b.add(new THREE.SphereGeometry(0.19, 14, 10), skin, at(0, 1.52, 0));
+  blob(b, '#d0103a', 0.178, 1.455, 0, 0.022, 0.018, 0.055, 0, 0, 0, 8);
+  for (const s of [1, -1]) blob(b, v % 2 ? '#c04cff' : '#3fb6ff', 0.166, 1.565, s * 0.066, 0.02, 0.026, 0.045, 0, 0, 0, 8);
+  b.add(new THREE.TorusGeometry(0.25, 0.075, 6, 18).rotateX(Math.PI / 2), BOAS[v], at(0, 1.34, 0, 0, 0, 0.12));
+  for (const s of [1, -1]) b.add(new THREE.CapsuleGeometry(0.065, 0.34, 2, 8), BOAS[v], at(0.16, 1.07, s * 0.17, 0, 0, s * 0.12));
+  // Gold hoops.
+  for (const s of [1, -1]) gl.add(new THREE.TorusGeometry(0.055, 0.012, 5, 14), '#e6b54c', at(0.01, 1.42, s * 0.205));
+  // The wig.
+  const RAINBOW = ['#e8322a', '#ff8a1f', '#ffd23f', '#3ccf7a', '#2f6bff', '#8a44d8'];
+  if (v === 0 || v === 5) {
+    const c = v === 0 ? '#f3e9c6' : '#ffd75e';
+    blob(b, c, -0.03, 1.66, 0, 0.27, 0.24, 0.27, 0, 0, 0, 14);
+    blob(b, c, -0.03, 1.88, 0, 0.17, 0.13, 0.17, 0, 0, 0, 12);
+    for (const s of [1, -1]) blob(b, c, -0.02, 1.47, s * 0.21, 0.1, 0.12, 0.08, 0, 0, 0, 10);
+  } else if (v === 1) {
+    blob(b, '#ff4fb8', -0.04, 1.62, 0, 0.23, 0.2, 0.23, 0, 0, 0, 14);
+    blob(b, '#ff4fb8', -0.06, 1.93, 0, 0.18, 0.3, 0.18, 0, 0, 0, 14);
+    blob(b, '#ff4fb8', -0.07, 2.22, 0, 0.09, 0.08, 0.09, 0, 0, 0, 10);
+  } else if (v === 2) {
+    RAINBOW.forEach((c, i) => blob(b, c, -0.05, 1.62 + i * 0.105, 0, 0.245 - i * 0.025, 0.08, 0.245 - i * 0.025, 0, 0, 0, 14));
+    blob(b, '#ffffff', -0.05, 2.23, 0, 0.07, 0.07, 0.07, 0, 0, 0, 8);
+  } else if (v === 3) {
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 9) * TAU;
+      blob(b, '#9b3cff', -0.04 + Math.cos(a) * 0.15, 1.7 + (k % 2) * 0.06, Math.sin(a) * 0.17, 0.11, 0.11, 0.11, 0, 0, 0, 10);
+    }
+    blob(b, '#9b3cff', -0.04, 1.84, 0, 0.14, 0.12, 0.14, 0, 0, 0, 12);
+  } else {
+    blob(b, '#c4161c', -0.03, 1.6, 0, 0.24, 0.22, 0.25, 0, 0, 0, 14);
+    blob(b, '#c4161c', 0.12, 1.67, 0, 0.08, 0.06, 0.2, 0, 0, 0, 10);
+  }
+  // The fan: a half-disc of lace, upright.
+  const fan = new GeoBuilder();
+  fan.add(new THREE.CircleGeometry(0.2, 10, 0, Math.PI).rotateY(Math.PI / 2), v % 2 ? '#1b1b1f' : '#e8322a', at(HAND[0] + 0.02, HAND[1] - 0.02, 0, 0, 0, -1.3));
+  return {
+    matte: b.build(),
+    gloss: gl.build(),
+    leg: null,
+    arm: armOf(GLOVES[v], GLOVES[v]),
+    hand: fan.build(),
+    handGloss: false,
+    hand2: null,
+    wheel: null,
+    wheelAt: [],
+    wheelR: 1,
+    bell: null,
+    bellAt: [0, 0, 0],
+  };
+}
+
+/** A mariachi in a charro suit (black, cream or navy, silver down the trousers and the jacket), a red
+ *  bow, a moustache and a wide sombrero, playing a guitar, a trumpet, a violin or a guitarrón. */
+function mariachiKit(inst: number, suit: number): DressKit {
+  const SUITS = ['#16161a', '#16161a', '#efe7d3', '#1a2440'];
+  const BOWS = ['#c4161c', '#0f7a3d', '#c4161c', '#d4a72c'];
+  const HATS = ['#1d1b1f', '#1d1b1f', '#efe4c8', '#1d1b1f'];
+  const SILVER = '#d8dde3';
+  const cloth = SUITS[suit];
+  const skin = WARM_SKINS[(inst * 2 + suit) % WARM_SKINS.length];
+  const b = new GeoBuilder();
+  const gl = new GeoBuilder();
+  figure(b, cloth, skin);
+  // The shirt front, the bow, the moustache.
+  blob(b, '#ffffff', 0.2, 1.08, 0, 0.06, 0.2, 0.11, 0, 0, 0, 10);
+  for (const s of [1, -1]) blob(b, BOWS[suit], 0.215, 1.33, s * 0.065, 0.04, 0.05, 0.07, s * 0.4, 0, 0, 8);
+  blob(b, BOWS[suit], 0.225, 1.33, 0, 0.035, 0.035, 0.035, 0, 0, 0, 6);
+  blob(b, '#2a1a12', 0.172, 1.47, 0, 0.026, 0.022, 0.085, 0, 0, 0, 8);
+  // Silver buttons down the jacket.
+  for (const y of [0.86, 0.96, 1.06, 1.16]) for (const s of [1, -1]) gl.add(new THREE.SphereGeometry(0.018, 5, 3), SILVER, at(0.225, y, s * 0.13));
+  // The sombrero: a wide brim, upturned at its silver edge, a tall crown with a silver band.
+  const hat = HATS[suit];
+  b.add(new THREE.CylinderGeometry(0.5, 0.5, 0.035, 18), hat, at(0, 1.68, 0));
+  gl.add(new THREE.TorusGeometry(0.49, 0.035, 4, 18).rotateX(Math.PI / 2), SILVER, at(0, 1.71, 0));
+  b.add(new THREE.CylinderGeometry(0.13, 0.18, 0.3, 14), hat, at(0, 1.84, 0));
+  gl.add(new THREE.CylinderGeometry(0.183, 0.183, 0.05, 14), SILVER, at(0, 1.73, 0));
+  // The instrument (static, in front), and what moves in hand.
+  let hand: THREE.BufferGeometry | null = null;
+  const WOOD = '#c98a4b';
+  const DARK = '#5a3a22';
+  if (inst === 0 || inst === 3) {
+    // Guitar (or the bigger, deeper guitarrón), across the body, neck up to the left.
+    const big = inst === 3;
+    const ib = new GeoBuilder();
+    blob(ib, big ? '#8a5a2b' : WOOD, 0, 0, 0, big ? 0.1 : 0.055, big ? 0.27 : 0.2, big ? 0.24 : 0.17, 0, 0, 0, 12);
+    blob(ib, big ? '#8a5a2b' : WOOD, 0, big ? 0.27 : 0.2, 0, big ? 0.09 : 0.05, big ? 0.2 : 0.15, big ? 0.18 : 0.13, 0, 0, 0, 12);
+    ib.add(new THREE.CircleGeometry(0.055, 10).rotateY(Math.PI / 2), '#1e140e', at(big ? 0.105 : 0.06, 0.13, 0));
+    ib.add(new THREE.BoxGeometry(0.035, big ? 0.42 : 0.55, 0.06), DARK, at(0, big ? 0.62 : 0.62, 0));
+    ib.add(new THREE.BoxGeometry(0.04, 0.12, 0.08), DARK, at(0, big ? 0.88 : 0.95, 0));
+    const g = ib.build();
+    g.applyMatrix4(at(0.3, 0.98, 0.04, -1.05, 0, 0.2));
+    b.add(g, null);
+  } else if (inst === 1) {
+    // Trumpet, at the lips.
+    gl.add(new THREE.CylinderGeometry(0.024, 0.024, 0.32, 8).rotateZ(-Math.PI / 2), '#e6b54c', at(0.36, 1.46, 0, 0, 0, 0.12));
+    gl.add(new THREE.CylinderGeometry(0.1, 0.026, 0.16, 12, 1, true).rotateZ(-Math.PI / 2), '#e6b54c', at(0.59, 1.49, 0, 0, 0, 0.12));
+    for (const dx of [0, 0.045, 0.09]) gl.add(new THREE.CylinderGeometry(0.012, 0.012, 0.08, 6), '#e6b54c', at(0.3 + dx, 1.5, 0));
+  } else {
+    // Violin under the chin on the left shoulder; the bow in the right hand.
+    const ib = new GeoBuilder();
+    blob(ib, WOOD, 0, 0, 0, 0.17, 0.035, 0.09, 0, 0, 0, 10);
+    ib.add(new THREE.BoxGeometry(0.26, 0.025, 0.035), '#1e140e', at(0.24, 0.0, 0));
+    blob(ib, DARK, 0.38, 0, 0, 0.035, 0.03, 0.03, 0, 0, 0, 8);
+    const g = ib.build();
+    g.applyMatrix4(at(0.2, 1.36, -0.16, 0.3, 0.6, 0.15));
+    b.add(g, null);
+    const bow = new GeoBuilder();
+    rod(bow, '#3a2a1e', [HAND[0] - 0.05, HAND[1] - 0.02, -0.3], [HAND[0] + 0.02, HAND[1] - 0.02, 0.3], 0.008, 0.008, 5);
+    hand = bow.build();
+  }
+  // The trousers: silver buttons down the outside seam.
+  const leg = legOf(cloth, '#141416', (lb) => {
+    for (let k = 0; k < 5; k++) lb.add(new THREE.SphereGeometry(0.02, 5, 3), SILVER, at(0, -0.12 - k * 0.09, 0.075));
+  });
+  return {
+    matte: b.build(),
+    gloss: gl.build(),
+    leg,
+    arm: armOf(cloth, skin),
+    hand,
+    handGloss: false,
+    hand2: null,
+    wheel: null,
+    wheelAt: [],
+    wheelR: 1,
+    bell: null,
+    bellAt: [0, 0, 0],
+  };
+}
+
+/** A paletero pushing his cart: a white box painted with paletas, a striped umbrella over it, big
+ *  wheels, a bell on the handle; a straw hat. */
+function paleteroKit(v: number): DressKit {
+  const SHIRTS = ['#f4f4ef', '#9fd3f2', '#f2f0e4', '#ffd6a5', '#cfe8c9', '#ffffff'];
+  const PANTS = ['#4a3f35', '#2f3f5c', '#5b5048', '#3a3a40', '#6b5a45', '#2f2f35'];
+  const UMBRELLAS: [string, string][] = [
+    ['#e8322a', '#ffd23f'],
+    ['#2f6bff', '#ffffff'],
+    ['#3ccf7a', '#ff4f9a'],
+    ['#ff8a1f', '#ffffff'],
+    ['#8a44d8', '#ffd23f'],
+    ['#1fd1c0', '#ff5fa2'],
+  ];
+  const skin = WARM_SKINS[v % WARM_SKINS.length];
+  const b = new GeoBuilder();
+  figure(b, SHIRTS[v], skin);
+  if (v % 2 === 0) blob(b, '#2a1a12', 0.172, 1.47, 0, 0.026, 0.022, 0.08, 0, 0, 0, 8);
+  // The straw hat.
+  b.add(new THREE.CylinderGeometry(0.31, 0.31, 0.03, 14), '#d9b56a', at(0, 1.66, 0));
+  b.add(new THREE.CylinderGeometry(0.15, 0.17, 0.15, 10), '#d9b56a', at(0, 1.74, 0));
+  b.add(new THREE.CylinderGeometry(0.172, 0.172, 0.04, 10), '#6b4a2b', at(0, 1.69, 0));
+  // The cart: a white box, a pink band round it, paletas painted on its sides, a lid, the handle.
+  rbox(b, 0.5, 1.26, 0.3, 1.0, -0.3, 0.3, 0.04, '#f7f7f2', undefined, 1);
+  box(b, 0.49, 1.27, 0.6, 0.7, -0.31, 0.31, '#ff5fa2');
+  box(b, 0.5, 1.26, 1.0, 1.04, -0.3, 0.3, '#c9ced6');
+  const POPS = ['#ff5fa2', '#ffd23f', '#7ad151', '#ff8a3d'];
+  for (const s of [1, -1]) {
+    POPS.forEach((c, k) => {
+      const x = 0.62 + k * 0.17;
+      box(b, x - 0.045, x + 0.045, 0.78, 0.94, s * 0.305 - 0.006, s * 0.305 + 0.006, c);
+      box(b, x - 0.008, x + 0.008, 0.72, 0.78, s * 0.305 - 0.004, s * 0.305 + 0.004, '#e8d3a8');
+    });
+  }
+  handleBar(b, '#8a8f96', 0.27);
+  for (const s of [1, -1]) rod(b, '#8a8f96', [0.36, 1.0, s * 0.27], [0.5, 0.85, s * 0.27], 0.018, 0.018, 6);
+  // The umbrella: a pole and eight panels, striped.
+  rod(b, '#8a8f96', [0.9, 1.04, 0], [0.9, 2.1, 0], 0.015, 0.015, 6);
+  const [ua, ub] = UMBRELLAS[v];
+  const apex: V3 = [0.9, 2.18, 0];
+  for (let k = 0; k < 8; k++) {
+    const a0 = (k / 8) * TAU;
+    const a1 = ((k + 1) / 8) * TAU;
+    const p0: V3 = [0.9 + Math.cos(a0) * 0.66, 1.94, Math.sin(a0) * 0.66];
+    const p1: V3 = [0.9 + Math.cos(a1) * 0.66, 1.94, Math.sin(a1) * 0.66];
+    b.tri(apex, p1, p0, k % 2 ? ua : ub, [0, 1, 0]);
+  }
+  const bell = new GeoBuilder();
+  bell.add(new THREE.ConeGeometry(0.035, 0.07, 10).translate(0, -0.06, 0), '#e6b54c');
+  bell.add(new THREE.SphereGeometry(0.014, 6, 4).translate(0, -0.1, 0), '#8a6a2a');
+  return {
+    matte: b.build(),
+    gloss: null,
+    leg: legOf(PANTS[v], '#3a2a1e'),
+    arm: armOf(SHIRTS[v], skin),
+    hand: null,
+    handGloss: false,
+    hand2: null,
+    wheel: wheelOf(0.19, 0.05, '#1c1d20', '#c9ced6'),
+    wheelAt: [
+      [0.95, 0.19, 0.345, 1],
+      [0.95, 0.19, -0.345, 1],
+      [1.2, 0.07, 0, 0.37],
+    ],
+    wheelR: 0.19,
+    bell: bell.build(),
+    bellAt: [0.36, 1.0, 0.2],
+  };
+}
+
+/** A hipster: beanie, thick glasses, maybe a beard, a flannel shirt, jeans, a tote bag; a phone held
+ *  up in one hand (photographing the view), an iced coffee in the other. */
+function hipsterKit(v: number): DressKit {
+  const BEANIES = ['#d4a72c', '#b5523b', '#6b7a3a', '#3a3a40', '#2c7a7b', '#8c2f39'];
+  const FLANNEL = ['#a3242b', '#2f5d3a', '#3a5f8f', '#8a5a2b', '#5b2a6e', '#a3242b'];
+  const skin = SKINS[(v * 4 + 2) % SKINS.length];
+  const b = new GeoBuilder();
+  // The shirt is the flannel's own (plaid) mesh: just the head here.
+  b.add(new THREE.SphereGeometry(0.19, 14, 10), skin, at(0, 1.52, 0));
+  // Beanie: a knitted dome and a turned-up band (a pompom on some).
+  b.add(new THREE.SphereGeometry(0.205, 12, 6, 0, TAU, 0, Math.PI / 2), BEANIES[v], at(-0.01, 1.55, 0));
+  b.add(new THREE.TorusGeometry(0.195, 0.035, 5, 16).rotateX(Math.PI / 2), BEANIES[v], at(-0.01, 1.58, 0));
+  if (v % 2) blob(b, '#f4f1ea', -0.01, 1.78, 0, 0.055, 0.055, 0.055, 0, 0, 0, 8);
+  // Thick black glasses.
+  for (const s of [1, -1]) b.add(new THREE.TorusGeometry(0.045, 0.012, 5, 12).rotateY(Math.PI / 2), '#141416', at(0.178, 1.54, s * 0.062));
+  rod(b, '#141416', [0.18, 1.545, -0.02], [0.18, 1.545, 0.02], 0.008, 0.008, 4);
+  if (v % 3 !== 0) blob(b, HAIRS[(v + 1) % HAIRS.length], 0.12, 1.41, 0, 0.1, 0.1, 0.14, 0, 0, 0, 10);
+  // The tote bag on the left side, and its strap.
+  rbox(b, -0.13, 0.13, 0.8, 1.1, -0.33, -0.3, 0.02, '#e9e2cf');
+  rod(b, '#d9cfb3', [-0.1, 1.1, -0.31], [-0.04, 1.36, -0.2], 0.012, 0.012, 4);
+  rod(b, '#d9cfb3', [0.1, 1.1, -0.31], [0.04, 1.36, -0.2], 0.012, 0.012, 4);
+  // The phone (in the right hand, held up), the iced coffee (the left).
+  const phone = new GeoBuilder();
+  phone.add(new THREE.BoxGeometry(0.02, 0.15, 0.075), '#141416', at(HAND[0] + 0.07, HAND[1] + 0.02, -0.02));
+  phone.add(new THREE.PlaneGeometry(0.12, 0.06).rotateY(-Math.PI / 2), '#9fd0ff', at(HAND[0] + 0.059, HAND[1] + 0.02, -0.02));
+  const cup = new GeoBuilder();
+  cup.add(new THREE.CylinderGeometry(0.045, 0.035, 0.15, 10), '#d8c7a8', at(HAND[0] + 0.03, HAND[1] + 0.02, 0));
+  cup.add(new THREE.CylinderGeometry(0.047, 0.047, 0.05, 10), '#6b4a2b', at(HAND[0] + 0.03, HAND[1] + 0.0, 0));
+  rod(cup, '#2f8f4e', [HAND[0] + 0.03, HAND[1] + 0.08, 0], [HAND[0] + 0.05, HAND[1] + 0.18, 0], 0.006, 0.006, 4);
+  return {
+    matte: b.build(),
+    gloss: null,
+    leg: legOf('#2f4466', '#5a3a22'),
+    arm: armOf(FLANNEL[v], skin),
+    hand: phone.build(),
+    handGloss: true,
+    hand2: cup.build(),
+    wheel: null,
+    wheelAt: [],
+    wheelR: 1,
+    bell: null,
+    bellAt: [0, 0, 0],
+  };
+}
+
+/** Flannel: a check in a shirt's colour over black, with a pale line through it. */
+const flannels = new Map<string, THREE.MeshStandardMaterial>();
+function flannelMat(color: string): THREE.MeshStandardMaterial {
+  let m = flannels.get(color);
+  if (!m) {
+    const tex = canvasTexture(
+      32,
+      32,
+      (g, w, h) => {
+        g.fillStyle = color;
+        g.fillRect(0, 0, w, h);
+        g.fillStyle = 'rgba(20, 20, 24, 0.55)';
+        g.fillRect(0, 0, w / 2, h);
+        g.fillRect(0, 0, w, h / 2);
+        g.fillStyle = 'rgba(240, 232, 210, 0.55)';
+        g.fillRect(w * 0.72, 0, 2, h);
+        g.fillRect(0, h * 0.72, w, 2);
+      },
+      { repeat: [4, 3] },
+    );
+    m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 });
+    flannels.set(color, m);
+  }
+  return m;
+}
+
+function dressKit(kind: PedDress, v: number, w: number): DressKit {
+  const key = `${kind}/${v}/${w}`;
+  let k = DRESS_KITS.get(key);
+  if (!k) {
+    k =
+      kind === 'stroller'
+        ? strollerKit(v)
+        : kind === 'drag'
+          ? dragKit(v)
+          : kind === 'mariachi'
+            ? mariachiKit(v, w)
+            : kind === 'paletero'
+              ? paleteroKit(v)
+              : hipsterKit(v);
+    DRESS_KITS.set(key, k);
+  }
+  return k;
+}
+
+/** A dressed figure: the same view as a plain pedestrian's (the legs swing, the body topples and
+ *  bobs back up), with its look's parts and its rig. */
+function buildDressed(p: Ped): PedView {
+  const m = mats();
+  const kind = p.dress!;
+  const seed = Math.abs(p.color * 7 + p.id * 13);
+  const v = kind === 'mariachi' ? p.id % 4 : seed % 6;
+  const k = dressKit(kind, v, kind === 'mariachi' ? seed % 4 : 0);
+  const root = new THREE.Group();
+  root.name = kind;
+  const body = new THREE.Group();
+  root.add(body);
+  const sway = new THREE.Group();
+  body.add(sway);
+  sway.add(mesh(k.matte, m.dress));
+  if (k.gloss) sway.add(mesh(k.gloss, m.dressGloss));
+  if (kind === 'hipster') sway.add(mesh(geos().torso, flannelMat(['#a3242b', '#2f5d3a', '#3a5f8f', '#8a5a2b', '#5b2a6e', '#a3242b'][v]), 0, 0.98, 0));
+  const legs: THREE.Object3D[] = [];
+  for (const s of [1, -1]) {
+    const leg = new THREE.Group();
+    leg.position.set(0, 0.62, s * 0.11);
+    if (k.leg) {
+      const lm = mesh(k.leg, m.dress);
+      lm.scale.z = s;
+      leg.add(lm);
+    }
+    legs.push(leg);
+    sway.add(leg);
+  }
+  const arm = new THREE.Group();
+  arm.position.set(0.05, 1.22, 0.25);
+  arm.add(mesh(k.arm, m.dress));
+  let prop: THREE.Object3D | null = null;
+  if (k.hand) {
+    prop = new THREE.Group();
+    // (A fan turns about the wrist.)
+    prop.position.set(HAND[0], HAND[1], 0);
+    const pm = mesh(k.hand, k.handGloss ? m.dressGloss : m.dress, -HAND[0], -HAND[1], 0);
+    prop.add(pm);
+    arm.add(prop);
+  }
+  sway.add(arm);
+  const arm2 = new THREE.Group();
+  arm2.position.set(0.05, 1.22, -0.25);
+  const a2 = mesh(k.arm, m.dress);
+  a2.scale.z = -1;
+  arm2.add(a2);
+  if (k.hand2) arm2.add(mesh(k.hand2, m.dress));
+  sway.add(arm2);
+  const wheels: { obj: THREE.Object3D; k: number }[] = [];
+  if (k.wheel) {
+    for (const [x, y, z, size] of k.wheelAt) {
+      const w = mesh(k.wheel, m.dress, x, y, z);
+      w.scale.set(size, size, 1);
+      wheels.push({ obj: w, k: 1 / size });
+      sway.add(w);
+    }
+  }
+  let bell: THREE.Object3D | null = null;
+  if (k.bell) {
+    bell = mesh(k.bell, m.dressGloss, k.bellAt[0], k.bellAt[1], k.bellAt[2]);
+    sway.add(bell);
+  }
+  return {
+    root,
+    body,
+    legs,
+    arm,
+    wobble: 0,
+    wobbleV: 0,
+    tilt: 0,
+    dress: { kind, sway, arm2, wheels, wheelR: k.wheelR, spin: 0, prop, bell, variant: v },
+  };
+}
+
+/** A dressed figure's pose this frame (the legs are already swinging with the walk). */
+function poseDressed(v: PedView, p: Ped, walking: boolean, swing: number, t: number, dt: number): void {
+  const r = v.dress!;
+  const ph = p.id * 1.7;
+  switch (r.kind) {
+    case 'stroller':
+    case 'paletero': {
+      // Both hands on the handle; the wheels turn as they walk, the bell swings.
+      v.arm.rotation.z = 0.63;
+      r.arm2.rotation.z = 0.63;
+      if (walking) r.spin += (p.speed * dt) / r.wheelR;
+      for (const w of r.wheels) w.obj.rotation.z = -r.spin * w.k;
+      if (r.bell) r.bell.rotation.x = walking ? Math.sin(t * 9 + ph) * 0.45 : Math.sin(t * 1.7 + ph) * 0.08;
+      r.sway.rotation.y = walking ? Math.sin(p.walk * 4.5) * 0.025 : 0;
+      break;
+    }
+    case 'drag': {
+      // A sashay: the hips twist and swing with every step; the fan going, the other hand on her hip.
+      const step = p.walk * 4.5;
+      r.sway.rotation.y = walking ? Math.sin(step) * 0.24 : Math.sin(t * 1.3 + ph) * 0.08;
+      r.sway.position.z = walking ? Math.sin(step) * 0.05 : 0;
+      r.sway.rotation.x = walking ? Math.sin(step) * 0.05 : 0;
+      v.arm.rotation.set(-0.15, 0, 1.25 + Math.sin(t * 5 + ph) * 0.18);
+      if (r.prop) r.prop.rotation.x = Math.sin(t * 13 + ph) * 0.4;
+      r.arm2.rotation.set(0.6, 0, -0.25);
+      break;
+    }
+    case 'mariachi': {
+      // Playing, swaying to the beat (or walking, like anyone).
+      r.sway.rotation.y = Math.sin(t * 2.2 + ph) * 0.1;
+      r.sway.position.y = Math.abs(Math.sin(t * 4.4 + ph)) * 0.02;
+      if (walking) {
+        v.arm.rotation.set(0, 0, -swing * 0.6);
+        r.arm2.rotation.set(0, 0, swing * 0.6);
+        break;
+      }
+      if (r.variant === 1) {
+        // Trumpet: both hands up on it.
+        v.arm.rotation.set(-0.3, 0, 1.4);
+        r.arm2.rotation.set(0.3, 0, 1.4);
+      } else if (r.variant === 2) {
+        // Violin: the left hand up on its neck, the bow sawing.
+        r.arm2.rotation.set(0.35, 0, 1.55);
+        v.arm.rotation.set(0, Math.sin(t * 5 + ph) * 0.35, 1.05);
+      } else {
+        // Guitar or guitarrón: strumming, the left hand up the neck.
+        v.arm.rotation.set(0, 0, 0.72 + Math.sin(t * 14 + ph) * 0.18);
+        r.arm2.rotation.set(0.6, 0, 1.15);
+      }
+      break;
+    }
+    case 'hipster': {
+      // The phone up to the view (or swinging along, walking), the coffee at the waist.
+      v.arm.rotation.z = walking ? -swing * 0.6 : 1.3 + Math.sin(t * 1.5 + p.id) * 0.1;
+      r.arm2.rotation.z = walking ? swing * 0.6 : 0.55;
+      break;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -964,7 +1688,7 @@ export class Actors {
     for (const w of sim.waymos) {
       let v = this.waymos.get(w.id);
       if (!v) {
-        v = buildWaymo();
+        v = w.dress === 'lowrider' ? buildLowrider(w.id) : buildWaymo();
         v.cone.visible = w.cone;
         this.waymos.set(w.id, v);
         this.group.add(v.root);
@@ -980,6 +1704,7 @@ export class Actors {
       // A knock rocks it on its springs.
       v.roll += (Math.hypot(w.pvx, w.pvz) * 0.05 - v.roll) * Math.min(1, dt * 8);
       v.root.children[0].rotation.x = Math.sin(t * 14) * v.roll;
+      if (v.hop !== undefined) hydraulics(v, w, t);
     }
     // Pedestrians (and dogs).
     for (const p of sim.peds) {
@@ -995,7 +1720,7 @@ export class Actors {
       }
       let v = this.peds.get(p.id);
       if (!v) {
-        v = buildPed(p.color, p.kind === 'tourist');
+        v = p.dress ? buildDressed(p) : buildPed(p.color, p.kind === 'tourist');
         this.peds.set(p.id, v);
         this.group.add(v.root);
       }
@@ -1006,7 +1731,8 @@ export class Actors {
       const swing = walking ? Math.sin(p.walk * 9) * 0.5 : 0;
       v.legs[0].rotation.z = swing;
       v.legs[1].rotation.z = -swing;
-      v.arm.rotation.z = p.kind === 'tourist' && !walking ? 1.3 + Math.sin(t * 1.5 + p.id) * 0.1 : -swing * 0.6;
+      if (v.dress) poseDressed(v, p, walking, swing, t, dt);
+      else v.arm.rotation.z = p.kind === 'tourist' && !walking ? 1.3 + Math.sin(t * 1.5 + p.id) * 0.1 : -swing * 0.6;
       // Knocked over like a weeble: tip away from the car, then wobble back up.
       const target = p.down > 0.4 ? 1.35 : p.dive > 0 ? 1.1 : 0;
       v.wobbleV += ((target - v.tilt) * 60 - v.wobbleV * 7) * dt;

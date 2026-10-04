@@ -32,6 +32,15 @@ Alamo Square and Duboce Park are open: drive anywhere in them, but the grass is 
 a crawl (unless you're boosting) and the trees and benches solid, so a cut pays only if you jump it or
 boost through it; the dogs chase you.
 
+Or three laps of **Castro, Noe & Mission**: from the start in front of the Castro Theatre, under the
+rainbow flag at Harvey Milk Plaza, down Castro St through the rainbow crosswalks at 18th, up the hill
+to the crest at 22nd (it throws you) and down to 24th; along 24th through Noe Valley's shops, where
+strollers cross at every corner; over the crest at Dolores and down into the Mission; up Mission St
+past El Farolito, the BART plaza and the mariachis, lowriders cruising low and slow; along 18th past
+the Women's Building, Tartine and Bi-Rite; down Dolores St under its palms and into Dolores Park by
+Mexico's Liberty Bell, up the hill (drive anywhere: it's open ground, the dogs chase you) to the top;
+down Church St with the J Church; and a sharp left up Market St to the line.
+
 Built with Vite, TypeScript and Three.js. Everything is procedural (geometry, textures, sound), and
 there is no backend.
 
@@ -50,9 +59,10 @@ npm run check      # type-check, smoke and balance in one go: run it after any p
 ## How to play
 
 0. **Pick the event** at the top of the garage: 🪂 the long jump down Russian Hill, 🏁 the sprint
-   down Russian Hill (first off the kicker wins), 🏁 a race round Twin Peaks, or 🏁 three laps of
-   Old Stomping Grounds (or `?map=russian-hill-race` / `?map=twin-peaks` /
-   `?map=old-stomping-grounds`; on a pad, Player 1's Y). Switching un-readies both cars.
+   down Russian Hill (first off the kicker wins), 🏁 a race round Twin Peaks, 🏁 three laps of
+   Old Stomping Grounds, or 🏁 three laps of Castro, Noe & Mission (or `?map=russian-hill-race` /
+   `?map=twin-peaks` / `?map=old-stomping-grounds` / `?map=castro-noe-mission`; on a pad, Player 1's
+   Y). Switching un-readies both cars.
 1. **Build.** Both players build at the same time, each on their own panel. Every slot (chassis,
    wheels, engine, boost bottle, wing, nose, booster, paint, topper) has a tab showing the part
    fitted there and what it cost. Click a part to fit it, and click it again to remove it and get
@@ -164,8 +174,8 @@ URL parameters:
 - `?autodrive=1` (or `p1` / `p2`): the autopilot drives both cars (or one). `?cpu=1`: Player 2 is
   the CPU. `?solo=1`: solo training.
 - `?traffic=0`, `?items=0`: an empty course.
-- `?map=russian-hill` (the long jump), `?map=russian-hill-race` (the sprint) or `?map=twin-peaks`
-  (the lap race): the event to start on.
+- `?map=russian-hill` (the long jump), `?map=russian-hill-race` (the sprint), `?map=twin-peaks`,
+  `?map=old-stomping-grounds` or `?map=castro-noe-mission` (the lap races): the event to start on.
 
 `window.__game` exposes the state machine, the race and hooks to script it (`input`, `place`,
 `giveItem`, `autodrive`, `setCpu`, `setSolo`, `setTraining`, `retry`, `setMap`, ...). See
@@ -182,8 +192,10 @@ URL parameters:
   fast lookups, shared by the physics, the bots and the visuals.
 - `src/maps/`: the maps. A map is an **event** (a mode, laps) on a **venue** (a course, its item
   boxes, its traffic, the HUD strip, splits, solo starts and tips). `index.ts` defines the events
-  (`MAPS`); `russianHill.ts` and `twinPeaks.ts` each define a course and its venue. Russian Hill
-  hosts two events that share everything.
+  (`MAPS`); `russianHill.ts`, `twinPeaks.ts`, `oldStompingGrounds.ts` and `castroNoeMission.ts` each
+  define a course and its venue (`data/` holds what was surveyed for them: Alamo Square, Dolores
+  Park, the Castro's, Noe Valley's and the Mission's streets and landmarks). Russian Hill hosts two
+  events that share everything.
 - `src/sim/`: the deterministic fixed-step race (`race.ts`: driving and drifting, boost, collisions,
   traffic, cable cars, items and seagulls, HYPE, the launch, laps and finish lines), the handling and
   flight model (`physics.ts`, which the CPU plans with too) and the autopilot (`bot.ts`). No
@@ -191,7 +203,9 @@ URL parameters:
 - `src/parts.ts`: the parts catalog; `src/garage.ts`: the build rules.
 - `src/scene/`: the renderer. `maps.ts` composes each venue's own scenery (the SF city, Lombard and
   the landmarks in `city.ts`, `lombard.ts`, `landmarks.ts`; Twin Peaks in `twinPeaks.ts`; Old
-  Stomping Grounds in `osg/`, a module per neighbourhood) with what
+  Stomping Grounds in `osg/`, a module per neighbourhood; Castro, Noe & Mission in `cnm/`, one per
+  neighbourhood over `osg/`'s shared parts: the context, streets, race furniture, lawns, paving and
+  the city and skyline beyond) with what
   every course gets from its shape: the start line, grid and gantries (`trackside.ts`), and for a
   course with a lip the kicker (`kicker.ts`) and the water and buoys (`bay.ts`). Shared props and
   textures (`props.ts`: tyre walls, barriers, the cable car...), cars, the race's cast
@@ -204,7 +218,8 @@ URL parameters:
   plus the balance report.
 - `preview/*.html`: dev-only showrooms for a map's scenery with the game's lighting (e.g.
   `/preview/twinpeaks.html?view=climb`, `/preview/city.html?view=kickerTop&map=russian-hill-race`,
-  `/preview/stomping.html?view=ladies`; add `&stats=1` for draw calls, triangles and build time).
+  `/preview/stomping.html?view=ladies`, `/preview/cnm.html?view=crosswalks`; add `&stats=1` for draw
+  calls, triangles and build time).
 
 ## Adding a map
 

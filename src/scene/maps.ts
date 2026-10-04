@@ -12,6 +12,7 @@ import type { MapDef } from '../maps';
 import type { Course } from '../track';
 import { buildBay, type Bay } from './bay';
 import { buildCity } from './city';
+import { buildCastroNoeMission } from './cnm';
 import { buildKicker, type Kicker } from './kicker';
 import { buildLandmarks } from './landmarks';
 import { buildOldStompingGrounds } from './osg';
@@ -65,6 +66,7 @@ const VENUES: Record<string, (world: World) => VenueScene> = {
   },
   'twin-peaks': () => buildTwinPeaks(),
   'old-stomping-grounds': () => buildOldStompingGrounds(),
+  'castro-noe-mission': () => buildCastroNoeMission(),
 };
 
 /** A venue's scenery with the course's shared furniture on top. */

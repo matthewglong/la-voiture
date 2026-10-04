@@ -79,7 +79,7 @@ const GRADE_EASE = 10;
 /** The ground graded under `arms` (a little under their height, as under the road; level, or
  *  climbing from one end to the other), easing back to the land over GRADE_EASE beyond their
  *  sidewalks. */
-function gradeUnder(arms: Arm[]): (x: number, z: number, y: number) => number {
+export function gradeUnder(arms: Arm[]): (x: number, z: number, y: number) => number {
   const q = arms.map((a) => ({ ...a, c: Math.cos(a.h), s: Math.sin(a.h), w: a.road + WALK + 1, r: a.u1 + a.road + WALK + GRADE_EASE + 2 }));
   return (x, z, y) => {
     let best = 0;
@@ -115,7 +115,7 @@ function inPortal(x: number, z: number): boolean {
 }
 
 /** How far (x, z) is from the nearest edge of `poly` (m). */
-function edgeDistance(poly: [number, number][], x: number, z: number): number {
+export function edgeDistance(poly: [number, number][], x: number, z: number): number {
   let best = Infinity;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const [ax, az] = poly[j];
@@ -408,7 +408,7 @@ export function buildOldStompingGrounds(): VenueScene {
 
 /** Victorians along every frontage that's still free (skipping any lot something else has
  *  taken). Behind them, backyards, then the city (distance.ts). */
-function fillFrontages(ctx: Ctx, frontages: Frontage[]): void {
+export function fillFrontages(ctx: Ctx, frontages: Frontage[]): void {
   const rng = ctx.rng;
   const D = 12;
   for (const f of frontages) {

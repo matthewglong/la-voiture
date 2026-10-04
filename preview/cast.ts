@@ -1,14 +1,15 @@
 // Dev-only preview of the race's cast as src/scene/actors.ts draws it from the sim: every breed of
 // dog in each of its states (trotting, galloping after a car and barking, resting, sniffing,
-// leaping clear, and facing the camera), and the N Judah streetcar beside a cable car. The sim is
-// faked: each row's dogs get the fields the real sim would give them.
-// /preview/cast.html?view=<row>|<row>1|<row>2|dogs|tram|tramside|tramback|pantograph|trams
+// leaping clear, and facing the camera), the N Judah streetcar beside a cable car, a map's own
+// locals (strollers, drag queens, mariachis, paleteros, hipsters: walking and standing) and
+// lowriders (cruising and stopped). The sim is faked: each row gets the fields the real sim would.
+// /preview/cast.html?view=<row>|<row>1|<row>2|dogs|tram|tramside|tramback|pantograph|trams|locals|lowriders
 //   rows: trot gallop rest sniff leap faces; <row>1 / <row>2 are its first and last four breeds.
 //   &freeze=<seconds> runs the fake sim that long and holds the pose; &tramPitch=<rad> tips the
 //   streetcar nose up (it faces +x).
 import * as THREE from 'three';
 import { Actors } from '../src/scene/actors';
-import { TRAM_DIMS, type CableCar, type Ped, type RaceSim, type TramKind } from '../src/sim/race';
+import { TRAM_DIMS, type CableCar, type Ped, type PedDress, type RaceSim, type TramKind, type Waymo } from '../src/sim/race';
 import { startPreview, type PreviewView } from './harness';
 
 const params = new URLSearchParams(location.search);
@@ -117,6 +118,30 @@ function tramOf(vehicle: TramKind, sign: string, x: number, z: number): CableCar
 
 const TRAM_Z = 22;
 const CABLE_Z = 34;
+/** The locals' rows (one per look, four of each: the first two walking) and the lowriders'. */
+const LOCAL_Z = -40;
+const LOW_Z = -76;
+const DRESSES: PedDress[] = ['stroller', 'drag', 'mariachi', 'paletero', 'hipster'];
+
+function local(id: number, dress: PedDress, k: number): Ped {
+  const standing = dress === 'mariachi' || k >= 2;
+  return {
+    ...dog(id, 0, 'trot'),
+    kind: dress === 'mariachi' || dress === 'hipster' ? 'tourist' : 'crosser',
+    dress,
+    x: k * 3,
+    z: LOCAL_Z - DRESSES.indexOf(dress) * 5,
+    heading: 0.35,
+    speed: standing ? 0 : 0.9,
+    wait: standing && dress !== 'mariachi' && dress !== 'hipster' ? 3 : 0,
+    walk: 0,
+    color: k * 5 + 3,
+  };
+}
+
+function lowrider(id: number, k: number): Waymo {
+  return { id, kind: 'traffic', dress: 'lowrider', x: k * 6, y: 0, z: LOW_Z, heading: 0.3, v: k % 2 ? 0 : 3.5, stopped: 0, parked: false, hazard: false, cone: false, pvx: 0, pvz: 0 } as unknown as Waymo;
+}
 const views: Record<string, PreviewView> = {
   dogs: { pos: [6, 7, 12], target: [6, 0, -12] },
   tram: { pos: [14, 3.2, TRAM_Z + 7], target: [0, 1.8, TRAM_Z] },
@@ -124,6 +149,8 @@ const views: Record<string, PreviewView> = {
   tramback: { pos: [-15, 4, TRAM_Z - 5], target: [0, 2, TRAM_Z] },
   pantograph: { pos: [1.5, 6.5, TRAM_Z + 5], target: [-2.3, 4.4, TRAM_Z] },
   trams: { pos: [24, 9, (TRAM_Z + CABLE_Z) / 2 + 4], target: [0, 1.5, (TRAM_Z + CABLE_Z) / 2] },
+  locals: { pos: [4.5, 4, LOCAL_Z + 8], target: [4.5, 0.9, LOCAL_Z - 10] },
+  lowriders: { pos: [18, 4.5, LOW_Z + 11], target: [18, 0.6, LOW_Z] },
 };
 for (const r of ROWS) {
   const z = rowZ(r);
@@ -152,9 +179,13 @@ startPreview({
     const rows: { p: Ped; row: Row }[] = [];
     let id = 1;
     for (const row of ROWS) for (let bi = 0; bi < BREEDS; bi++) rows.push({ p: dog(id++, bi, row), row });
+    const locals: Ped[] = [];
+    for (const d of DRESSES) for (let k = 0; k < 4; k++) locals.push(local(id++, d, k));
+    const lows: Waymo[] = [];
+    for (let k = 0; k < 7; k++) lows.push(lowrider(id++, k));
     const sim = {
-      waymos: [],
-      peds: rows.map((r) => r.p),
+      waymos: lows,
+      peds: [...rows.map((r) => r.p), ...locals],
       poos: [],
       boxes: [],
       cones: [],
@@ -166,6 +197,7 @@ startPreview({
     const step = (dt: number): void => {
       clock += dt;
       for (const r of rows) drive(r.p, r.row, clock, dt);
+      for (const p of locals) p.walk += dt;
       actors.update(dt, clock, sim);
     };
     step(0);

@@ -10,6 +10,7 @@ import { MODES, type Mode, type ModeRules } from '../modes';
 import { MAX_CLIMB } from '../sim/physics';
 import type { RaceSim } from '../sim/race';
 import { courseProblems, type Course } from '../track';
+import { CNM_VENUE } from './castroNoeMission';
 import { OSG_VENUE } from './oldStompingGrounds';
 import { RUSSIAN_HILL_VENUE } from './russianHill';
 import { TWIN_PEAKS_VENUE } from './twinPeaks';
@@ -135,7 +136,14 @@ export const OLD_STOMPING_GROUNDS_MAP: MapDef = defineMap(OSG_VENUE, {
   blurb: 'The Haight, Alamo Square, Hayes Valley, Duboce and Buena Vista: three laps of the old neighbourhood',
 });
 
-export const MAPS: readonly MapDef[] = [RUSSIAN_HILL_MAP, RUSSIAN_HILL_RACE, TWIN_PEAKS_MAP, OLD_STOMPING_GROUNDS_MAP];
+export const CASTRO_NOE_MISSION_MAP: MapDef = defineMap(CNM_VENUE, {
+  id: 'castro-noe-mission',
+  mode: 'race',
+  laps: 3,
+  blurb: 'The Castro, over the hill to Noe Valley, down into the Mission and up through Dolores Park: three laps',
+});
+
+export const MAPS: readonly MapDef[] = [RUSSIAN_HILL_MAP, RUSSIAN_HILL_RACE, TWIN_PEAKS_MAP, OLD_STOMPING_GROUNDS_MAP, CASTRO_NOE_MISSION_MAP];
 
 export function mapById(id: string | null | undefined): MapDef | null {
   return MAPS.find((m) => m.id === id) ?? null;

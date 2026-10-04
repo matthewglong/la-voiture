@@ -18,6 +18,11 @@ import { along, type Ctx } from './context';
 import { kerbside } from './kerbside';
 import { CORNER, CROSSING, KERB, STREET_KINDS, WALK, streetArms, type Arm } from './streets';
 
+/** Streets where the crowd stands two deep: shopping streets, and along the streetcars' tracks. (Not
+ *  the Mission's long main drags or Market St: two deep there doubled the crowd on Castro, Noe &
+ *  Mission to twice Old Stomping Grounds'.) */
+const LIVELY = new Set(['shops', 'rails', 'castro', 'noe']);
+
 /** Where each thing stands out from the corridor's edge (m), as Russian Hill has them; a barrier
  *  where the side has no sidewalk (a neighbourhood's own edge beyond it: the wall's parked cars,
  *  the boulevard's medians) stands right on the wall line, on the road. */
@@ -106,7 +111,7 @@ export function buildFurniture(ctx: Ctx, frontages: Frontage[], noWalk: (s: numb
 
   // --- The crowd: how thick it is along the course --------------------------------------------------
   const lively = (s: number, sec: Section): boolean =>
-    Math.abs(s - c.startS) < 36 || sec.kind === 'shops' || sec.kind === 'rails';
+    Math.abs(s - c.startS) < 36 || LIVELY.has(sec.kind);
   const clear = (x: number, z: number, s: number, d: number, side: 1 | -1): boolean => {
     if (things.some((t) => (t.x - x) ** 2 + (t.z - z) ** 2 < (t.r + 0.45) ** 2)) return false;
     // Not in front of a door (within 0.9 m of one along the street, on this side); the front row at

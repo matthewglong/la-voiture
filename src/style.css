@@ -2124,7 +2124,7 @@ kbd {
 
 .events {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.3rem;
   pointer-events: auto;
 }
 
@@ -2133,7 +2133,8 @@ kbd {
   flex-direction: column;
   align-items: center;
   gap: 0.05rem;
-  padding: 0.35rem 0.9rem 0.4rem;
+  /* (Five events side by side between the panels at 1280 wide.) */
+  padding: 0.35rem 0.6rem 0.4rem;
   border-radius: 0.9rem;
   border: 0.18rem solid var(--line);
   background: rgba(255, 253, 247, 0.9);

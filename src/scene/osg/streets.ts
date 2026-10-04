@@ -14,12 +14,12 @@ import { markThing } from './kerbside';
 import { PARK_PATH, PAVE_UV, SIDEWALK, kerbQuad, paveQuad, walkGround, walkStrip } from './paving';
 
 /** Stretches of plain street (sidewalks and houses both sides). */
-export const STREET_KINDS = new Set(['street', 'shops', 'ladies', 'rails', 'wall', 'haight', 'panhandle', 'portal', 'mint']);
+export const STREET_KINDS = new Set(['street', 'shops', 'ladies', 'rails', 'wall', 'haight', 'panhandle', 'portal', 'mint', 'castro', 'noe', 'mission', 'market', 'dolores', 'churchPark']);
 /** Where a cross street passes across the course, and where the course turns at an intersection. */
 export const CROSSING = 'crossing';
 export const CORNER = 'corner';
 /** Paths through the parks (pale asphalt down the middle, lawn to the hedges). */
-export const PARK_KINDS = new Set(['ramp', 'park', 'dogs', 'circle', 'summit', 'lawn', 'green', 'duboce']);
+export const PARK_KINDS = new Set(['ramp', 'park', 'dogs', 'circle', 'summit', 'lawn', 'green', 'duboce', 'dpark', 'hill', 'top']);
 /** Buena Vista's walks between stone walls. */
 export const BV_KINDS = new Set(['bv', 'bvSummit', 'switchbacks']);
 
@@ -519,7 +519,7 @@ export function buildStreets(ctx: Ctx, rules: SideRules): { frontages: Frontage[
 
 /** Street kinds that get street trees here (the rest bring their own, or none: the Painted Ladies'
  *  block is bare, as it is). */
-const TREE_KINDS = new Set(['street', 'rails', 'wall', 'mint']);
+const TREE_KINDS = new Set(['street', 'rails', 'wall', 'mint', 'noe', 'market', 'churchPark']);
 
 /** Trolley wires over a stretch of street: poles both sides every 30 m with span wires, and the two
  *  pairs of running wires 5.8 m up (Muni's trolleybuses). */

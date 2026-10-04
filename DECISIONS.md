@@ -17,8 +17,174 @@ shared: "One game, many maps" (it overrides parts of "Two events, and maps"). Mo
 venue, the lap race "Old Stomping Grounds", brought chunked courses, surfaces, dogs, streetcars and
 shared city scenery with it. Then a stronger boost that ploughs through grass, a seagull that
 lifts the leader and poo that blinds: "Boost, seagull and poo". Then a green shell and a Bullet
-Bill in San Francisco dress: "Crab and IPO coin". Latest, Halloween dress for the cars: "Spooky
-toppers" comes first of all. The older sections that still hold are kept after them.
+Bill in San Francisco dress: "Crab and IPO coin". Then Halloween dress for the cars: "Spooky
+toppers". Latest, a second neighbourhood lap race, through the Castro, Noe Valley and the Mission:
+"Castro, Noe & Mission" comes first of all. The older sections that still hold are kept after them.
+
+## Castro, Noe & Mission
+
+The request: "Using the same process we employed to build the old stomping grounds map, make another
+race centered around the Castro, Noe Valley and the Mission. Use the landmarks and stereotypes of
+each. It should feel different from the other map but not reinvent the wheel ... Castro should be
+super gay. Mission Mexican and Noe Valley very baby-centric (strollers)", and "prioritize building
+rather than testing". The same process: surveyed, laid in chunks, open ground where there's a park,
+the scenery one module per neighbourhood over Old Stomping Grounds' shared parts, each neighbourhood
+built by its own agent and then integrated.
+
+### The survey
+
+- **Streets** (OpenStreetMap, October 2026): every intersection the course and its cross streets use,
+  from the nodes the streets share, with its USGS 1 m elevation; about 80 places along them with their
+  addresses (`maps/data/cnmStreets.ts`, metres east and south of Castro & Market). **Mission Dolores
+  Park** (`maps/data/doloresPark.ts`): its outline, footpaths and steps, courts, playground,
+  restrooms, beds, 119 trees, benches, bins, fountains, the Hidalgo statue, Mexico's Liberty Bell, the
+  viewpoint, the J Church's tracks through its west edge, and a 20 m grid of elevations.
+- **What it changed**: Castro St dips from Market (45.9 m) to 18th (36.9) before it climbs to the
+  crest at 22nd (99.1) and drops to 24th (60.1); 24th is level through Noe Valley and falls from
+  Dolores (54.2) into the Mission (22.5 at Mission St); Mission St is flat; the park rises 31 m from
+  its northeast corner to the top; Church St drops 23 m from 19th to 18th, and 18th & Church is a dip.
+  The Castro Theatre is on Castro's east side (odd numbers), as are Twin Peaks Tavern and Hot Cookie.
+
+### The course
+
+- **The route**, every turn the way the streets go: the start in front of the Castro Theatre (Harvey
+  Milk Plaza's rainbow flag at the corner behind the grid); south down Castro St through the rainbow
+  crosswalks at 18th, up the hill to the crest at 22nd (Castro Hill) and down to 24th; left along 24th
+  through Noe Valley to Church and the crest at Dolores, where it tips into the Mission past Guerrero
+  and Valencia; left up Mission St (24th's BART plaza, El Farolito, the Alamo Drafthouse, Taqueria
+  Cancún); left along 18th (the Women's Building, Tartine, Bi-Rite); left down Dolores St under the
+  median's palms and right into Dolores Park by Mexico's Liberty Bell, up the hill to the top; a
+  hairpin out onto Church St at 20th, down past the park (the drop from 19th to 18th) and on with the J
+  Church to Market; a sharp left (130°) up Market St to the line. 1.85 km a lap, three laps.
+- **Chunks** (`castroNoeMission.ts`): castro, noe, mission24, missionSt, eighteenth, dolores, church,
+  and Market St the flexible one that closes the loop (135 m: the straight with the wind, as the
+  Panhandle is). The streets are compressed to between a quarter and a third of their length, the
+  Castro's blocks the least (the start, the crosswalks, the hill's grades); heights to half on the
+  hill, so it climbs at 17% (the most a block can take under the 25% limit with its curves rounded),
+  and to 0.6 elsewhere. The world is the real map turned so Market St runs along +x into the corner
+  of Castro (the first chunk starts there); downtown and Twin Peaks are placed by the same turn.
+- **Dolores Park and the streets beside it are one chunk**, drawn in the survey's frame at 0.4 of its
+  size, heights too (so its grades are the real ones): Dolores St along its east side and Church St
+  along its west, from 20th down to 18th. At the streets' scale and the park's, 18th St ran through
+  the park. The streets keep their width, though, so the lawn a car can drive on follows their
+  corridors (a sidewalk back from Dolores St, the sidewalk and the J's right of way back from Church
+  St), not the survey's fence.
+- **Into the park off Dolores St**, not at the 18th St corner (there the tennis courts filled the gap
+  between the course's corridor and the fence), 10 m north of the walk at 19th so Mexico's Liberty
+  Bell stands clear of the corridor; up the hill south of the plaza and west of the playground on the
+  survey's line; one hairpin over the top and out onto Church St at 20th, turned onto Church St's
+  surveyed heading whatever the path left the pen at (a hand-drawn arc there left it 12° off, and
+  Church St and Market St swung with it). Open ground, as Alamo Square is: the lawn slow, long grass a
+  crawl wherever a cut would pay, the trees, benches, courts, playground, restrooms and the gate's
+  banner arch solid.
+- **Air** (CPU races, per car-lap): off the crests at 22nd and 23rd on Castro (1.65, about 0.9 s), off
+  the crest at 24th & Dolores into the Mission (1.0, about 1 s), a little off 19th & Church.
+- **The J Church** is a Muni streetcar (the N Judah's kind) on its own track up Church St from 18th,
+  where it comes out of the park's right of way, to past Market.
+
+### The cast
+
+- **Locals** (`dress` on a pedestrian or a Waymo: the sim treats them as their kind, scene/actors.ts
+  draws them): drag queens crossing at the rainbow crosswalks and on the 500 block; strollers crossing
+  24th at every crosswalk in Noe Valley and mid-block; a mariachi trio playing at the kerb outside El
+  Farolito; paleteros pushing their carts across Mission St and 24th; picnickers taking in the view at
+  the top of the park; lowriders cruising Mission St low and slow. Waymos on Castro St, 24th and
+  Church, a stalled one with a protest cone on Church; dogs loose in the park, two of them chasers.
+- **The mariachis** first stood just past the corner onto Mission St, where the cars run wide coming
+  out of it: 0.8 hits a car-lap. Twenty metres up the block, none. The strollers are hit about a
+  quarter of a car-lap, the drag queens about a sixth (toy figures: they wobble back up).
+
+### Not reinventing the wheel
+
+- **The scenery** (`scene/cnm/`) is built as Old Stomping Grounds' is, from its shared parts in
+  `scene/osg/`: the context, the streets (sidewalks, cross streets, crosswalks, signs, lamps, trees),
+  race day's furniture, the lawns, paving and long grass, the Victorians in every free frontage, the
+  city and the skyline. The new section kinds are registered there (`STREET_KINDS`, `PARK_KINDS`,
+  street trees, and the shopping streets where the crowd stands two deep).
+- **The skyline and the city beyond take a config** (`SkylineConfig`, `DistanceConfig`: where a real
+  place stands in the world and the turn to it, the draw-in and push, the city's middle and reach,
+  which way downtown is, how high the hills' tops go bare, Twin Peaks' summit) whose default is Old
+  Stomping Grounds' own. Checked: Old Stomping Grounds' and Russian Hill's scenery geometry is
+  identical to before.
+- **The event picker** fits five events between the garage's panels at 1280 wide (the buttons'
+  side padding and gaps a little tighter).
+- **The crowd** stands two deep on the Castro's and Noe Valley's shopping blocks and along Church
+  St's tracks, one deep down Mission St and Market St: two deep everywhere doubled it to twice Old
+  Stomping Grounds' (458K triangles against 224K).
+
+### Neighbourhood by neighbourhood
+
+Built by one agent per neighbourhood (and one for the cast) against the shared context, then
+integrated; places from the survey, each at its fraction along its real block on its real side.
+
+- **The Castro** (`cnm/castro.ts`, `castro/`): Harvey Milk Plaza in the wedge at the corner, the
+  giant rainbow flag waving on its 21 m pole over the Muni station's stairs; Twin Peaks Tavern, Hot
+  Cookie, Castro Smoke House, Castro Coffee and the Castro Theatre on the left (east) side, the start
+  line in front of the theatre's marquee (LA VOITURE GRAND PRIX) under its red CASTRO blade; QBar and
+  Walgreens across the street; rainbow crosswalks at 18th and 19th, across the course and the cross
+  streets both ways, with disco balls on wires over 18th; Moby Dick, Toad Hall and Badlands round the
+  corner; Castro Camera on the 500 block with Harvey Milk's mural ("You gotta give 'em hope": the east
+  side, 575 being odd); Pride bunting, balloon arches (one with CASTRO HILL before the crest), Rainbow
+  Honor Walk plaques, rainbow flags over the shops and on every lamp post; the 24's trolley wires up
+  the hill. Market St: Café Flore, the Lookout, the Swedish American Hall, the F-line's tracks and
+  catenary down the middle, a cream-and-green PCC waiting at the terminus up Castro, and Pink Triangle
+  Park's pylons across the corner.
+- **Noe Valley** (`cnm/noe.ts`, `noe/`): 24th's shops in order, the real ones (the post office, Noe
+  Valley Bakery, Starbucks, Noe Valley Books, Fresca, Bernie's, Haystack Pizza, Martha & Bros. Coffee,
+  Noe Valley Wine & Spirits) among baby gyms, mommy-and-me yoga, a stroller store with price cards,
+  kids' barbers and toy shops; about 70 strollers parked outside them (singles, doubles, joggers),
+  balance bikes and scooters; IT'S A GIRL! and IT'S A BOY! balloon arches, SLOW CHILDREN AT PLAY and
+  BABY ON BOARD signs, STROLLER VALLEY pole banners, a diaper van; the Town Square with its market
+  tents, a stroller corral, benches and a play area; Noe Valley Pediatrics with a queue of strollers;
+  the J Church's tracks and wires across 24th at Church, and the palm median at Dolores.
+- **The Mission** (`cnm/mission.ts`, `mission/`): papel picado strung across 24th and Mission St,
+  murals on the side walls, a mercado, panaderías, a carnicería, piñata shops with their piñatas out
+  front, a paletería with its carts, a quinceañera window; the 24th St BART plazas (stairs, canopy,
+  palms); the Calle 24 arm with its ¡Bienvenidos a Calle 24! sign and La Victoria; La Taqueria and the
+  Mission Cultural Center down Mission St's south arm; El Farolito, the New Mission's tall sign over
+  the Alamo Drafthouse's bulb marquee, a lowrider shop, an ofrenda window, luchador masks, Taqueria
+  Cancún; the 14-Mission's trolley wires; on 18th the Women's Building in its MaestraPeace mural,
+  Tartine and Bi-Rite with their queues, Bi-Rite Creamery's line, Dandelion down Valencia and
+  Valencia's green bike lanes.
+- **Dolores Park and Church St** (`cnm/dolores.ts`, `dolores/`): Dolores St's palm median and its
+  far side's houses; the park lined like Alamo Square (barriers, spectators outside, the DOLORES PARK
+  arch over the gate); its trees, benches, fountains, the courts, the Helen Diller Playground and its
+  slide, the restrooms, picnics with dogs all over the hill and Gay Beach's rainbow umbrellas and
+  flags at the top; the J's right of way along the west edge (ballasted track, catenary, the
+  footbridge at 19th), 20th St along the top; down Church St the J's tracks and wires (the sim's
+  streetcar runs on the drawn rails), the F's tracks turning off along 17th with a PCC waiting, Mission
+  Dolores Basilica and the old adobe Mission down 16th, the Church St station near Market.
+- **What moved off the survey for the park's scale**: Mexico's Liberty Bell (its spot fell in the
+  gate's corridor) stands on the sidewalk by the gate; Miguel Hidalgo (his fell on the drivable lawn)
+  at the lawn's north edge; two benches that came out inside the tennis court are left out; the J's
+  two tracks are laid 3.5 m apart in the strip between the kerb and the lawn (at 0.4 the survey had
+  them 1.5 m apart). The picnics and Gay Beach's umbrellas and flags are in the course's plan
+  (`DOLORES_PICNICS`, `DOLORES_BEACH`), solid like the benches: a car cutting across the lawn steers
+  round them.
+- **The cast** (`scene/actors.ts`): a parent pushing a stroller with a baby peeking out (it tips
+  with them), a drag queen in a sequinned gown, gloves, boa and one of six wigs (a rainbow beehive
+  among them) sashaying with a fan, a mariachi in a charro suit playing guitar, trumpet, violin or
+  guitarrón, a paletero with his cart and bell, a hipster in a beanie photographing the view with an
+  iced coffee, and lowriders in seven candy colours on wire wheels with whitewalls, hopping now and
+  then and dancing when stopped. Each 2-4K triangles; with no `dress`, everything draws as before.
+
+### Checks
+
+- **`npm run smoke`** passes with the map in it, and `defineMap` holds it to `courseProblems` (no
+  climb over 25%, no bend tighter than the road, no legs through each other).
+- **CPU races** (headless, random builds, traffic, items and the cast; 12 races, 59 car-laps): no
+  rescues; a lap's median 100 s; per car-lap, strollers 0.36 and drag queens 0.19 hit, the J Church
+  0.41 (as the N Judah: the CPU pictures a tram as lying along the road), Waymos 0.03; air every lap off
+  Castro Hill (1.8 a car-lap, 0.9 s) and 24th & Dolores (1.05, 1 s); the hairpin out of the park onto
+  Church St is where the CPU most often brushes a wall (about one lap in two).
+- **`npm run balance:race`**: every build gets home in every wind; a V8 or jet build's lap is 86 s
+  (median; 90% within 98 s), so three laps take about 4¼ minutes; a lawnmower's is 165 s.
+- **The scenery** (built headless with a stand-in canvas: geometry only): 61 meshes, 1.86 million
+  triangles counted as Old Stomping Grounds' 1.45 million is, built in about 1.8 s; nothing stands in
+  the driving corridor at car height anywhere round the lap. Old Stomping Grounds', Russian Hill's and
+  Twin Peaks' scenery geometry is identical to before every shared change; `npm run balance`'s report
+  is identical too; `npm run build` clean. Not looked at in a browser (the user's preference): the
+  signs' lettering and the murals have never been seen drawn.
 
 ## Spooky toppers
 

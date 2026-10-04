@@ -8,14 +8,33 @@ import { makeRng, smoothstep } from '../util';
 import { HOUSE_COLORS, ROOF, worldUvBox } from '../victorian';
 import { box } from '../geo';
 import type { Ctx } from './context';
-import { buildSkyline } from './skyline';
+import { OSG_SKYLINE, buildSkyline, type SkylineConfig } from './skyline';
 
-/** How far out the city goes (m from the map's middle). */
-const REACH = 1400;
-const MID_X = 135;
-const MID_Z = -15;
+/** Where a map's city goes: its middle and how far out it goes (m), how much taller a block grows
+ *  towards downtown (0..1 at x, z), the height above which the hills' tops are open grass, and the
+ *  skyline beyond. Old Stomping Grounds' by default (downtown off to the east). */
+export interface DistanceConfig {
+  x: number;
+  z: number;
+  reach: number;
+  downtown(x: number, z: number): number;
+  bareAbove: number;
+  skyline: SkylineConfig;
+}
 
-export function buildDistance(ctx: Ctx, idx: CourseIndex, inPark: (x: number, z: number) => unknown): void {
+export const OSG_DISTANCE: DistanceConfig = {
+  x: 135,
+  z: -15,
+  reach: 1400,
+  downtown: (x, z) => smoothstep(500, 1300, x) * smoothstep(900, 200, Math.abs(z + 200)),
+  bareAbove: 70,
+  skyline: OSG_SKYLINE,
+};
+
+export function buildDistance(ctx: Ctx, idx: CourseIndex, inPark: (x: number, z: number) => unknown, cfg: DistanceConfig = OSG_DISTANCE): void {
+  const REACH = cfg.reach;
+  const MID_X = cfg.x;
+  const MID_Z = cfg.z;
   const rng = makeRng(2026);
   const S = ctx.sinks;
   // Rings of blocks: spacing grows with distance.
@@ -45,10 +64,10 @@ export function buildDistance(ctx: Ctx, idx: CourseIndex, inPark: (x: number, z:
         const y0 = Math.min(ctx.ground(x - w / 2, z - d / 2), ctx.ground(x + w / 2, z + d / 2), ctx.ground(x - w / 2, z + d / 2), ctx.ground(x + w / 2, z - d / 2));
         const y1 = Math.max(ctx.ground(x - w / 2, z - d / 2), ctx.ground(x + w / 2, z + d / 2));
         // Twin Peaks' tops are open grass.
-        if (y1 > 70) continue;
+        if (y1 > cfg.bareAbove) continue;
         if (y1 - y0 > 9) continue;
         // Taller towards downtown (east), lower on the hills.
-        const east = smoothstep(500, 1300, x) * smoothstep(900, 200, Math.abs(z + 200));
+        const east = cfg.downtown(x, z);
         const h = 7 + rng() * 6 + east * (8 + rng() * 22);
         const color = new THREE.Color(HOUSE_COLORS[Math.floor(rng() * HOUSE_COLORS.length)]).lerp(new THREE.Color('#e9e4d8'), 0.45 + rng() * 0.25);
         S.facades.add(worldUvBox(x - w / 2, x + w / 2, y0 - 1, y1 + h, z - d / 2, z + d / 2), color);
@@ -56,5 +75,5 @@ export function buildDistance(ctx: Ctx, idx: CourseIndex, inPark: (x: number, z:
       }
     }
   }
-  buildSkyline(ctx);
+  buildSkyline(ctx, cfg.skyline);
 }

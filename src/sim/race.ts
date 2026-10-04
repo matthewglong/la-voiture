@@ -394,9 +394,16 @@ function nearestOnOutline(poly: readonly (readonly [number, number])[], x: numbe
   return { x: bx, z: bz };
 }
 
+/** A map's own looks for its traffic and its people (drawn by scene/actors.ts; cosmetic only). */
+export type CarDress = 'lowrider';
+export type PedDress = 'stroller' | 'drag' | 'mariachi' | 'paletero' | 'hipster';
+
 export interface Waymo {
   id: number;
   kind: 'traffic' | 'stalled' | 'cross';
+  /** How it's drawn, if not as a Waymo (a map's own traffic: Mission St's lowriders). The sim treats
+   *  it the same. */
+  dress?: CarDress;
   x: number;
   z: number;
   y: number;
@@ -443,6 +450,9 @@ export interface Ped {
   /** A crosser walks back and forth across the road; a tourist stands about in it taking photos; a
    *  dog roams its patch of park (see addDog). */
   kind: 'crosser' | 'tourist' | 'dog';
+  /** How they're drawn, if not as a plain pedestrian (a map's own locals: strollers in Noe Valley,
+   *  drag queens in the Castro, mariachis in the Mission...). The sim treats them as their kind. */
+  dress?: PedDress;
   x: number;
   z: number;
   y: number;

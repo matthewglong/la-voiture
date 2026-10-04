@@ -17,14 +17,40 @@ import { TWIN_PEAKS_SUMMITS, type Ctx } from './context';
 // ---------------------------------------------------------------------------------------------
 // Where the real city goes on the map
 
-/** The postcard spot on the lawn in Alamo Square, in the world and on the map. */
+/** The postcard spot on the lawn in Alamo Square, in the world and on the map. (Real places are
+ *  measured from it, on every map.) */
 const LAWN = { lat: 37.7763, lon: -122.4337, x: 150, z: -95 };
-/** The real city is turned this far clockwise round the lawn (so downtown, east-northeast of the
- *  park, stands due east behind the Painted Ladies), drawn in to this fraction of its distances
- *  and pushed this far on east, past the last of the city's blocks. */
-const TURN = (28 * Math.PI) / 180;
-const DRAW_IN = 0.44;
-const PUSH = 60;
+
+/**
+ * Where the real city goes on a map: a real place (`anchor`) and where it stands in the world, the
+ * turn from reality (east, north) to the world, how far the city's distances are drawn in towards the
+ * anchor and the push past the last of the map's own city blocks, the blocks' extent (distance.ts:
+ * downtown stands beyond them) and Twin Peaks' first summit (Sutro Tower stands on the hill there).
+ */
+export interface SkylineConfig {
+  anchor: { lat: number; lon: number; x: number; z: number };
+  turn: number;
+  drawIn: number;
+  push: { x: number; z: number };
+  city: { x: number; z: number; reach: number };
+  sutro: { x: number; z: number };
+}
+
+/** Old Stomping Grounds: the real city is turned 28° clockwise round the lawn (so downtown, east-
+ *  northeast of the park, stands due east behind the Painted Ladies), drawn in to 0.44 of its
+ *  distances and pushed 60 m on east, past the last of the city's blocks. */
+export const OSG_SKYLINE: SkylineConfig = {
+  anchor: { lat: LAWN.lat, lon: LAWN.lon, x: LAWN.x, z: LAWN.z },
+  turn: (28 * Math.PI) / 180,
+  drawIn: 0.44,
+  push: { x: 60, z: 0 },
+  city: { x: 135, z: -15, reach: 1400 },
+  sutro: { x: TWIN_PEAKS_SUMMITS[0][0], z: TWIN_PEAKS_SUMMITS[0][1] },
+};
+
+/** The map being built's (set by buildSkyline). */
+let CFG = OSG_SKYLINE;
+let TURN = CFG.turn;
 /** Heights are this fraction of the real ones: a touch more than the map's hills get (about 0.6),
  *  so the towers clear the Painted Ladies' roofs from the park. */
 const TALL = 0.72;
@@ -33,12 +59,23 @@ const E_PER_DEG = 111320 * Math.cos((LAWN.lat * Math.PI) / 180);
 const N_PER_DEG = 110574;
 /** How the street grids lie on the map, as turns about y (+x along the grid): the Financial
  *  District's (north–south in reality) and South of Market's (square to Market Street). */
-const FIDI = -TURN;
-const SOMA = -TURN + Math.PI / 4;
+let FIDI = -TURN;
+let SOMA = -TURN + Math.PI / 4;
 /** The city's plain blocks (distance.ts) stand out to here from the map's middle (their middles:
  *  they're up to 19 m across). Downtown's buildings stand beyond, so the two never build through
  *  each other. */
-const CITY = { x: 135, z: -15, reach: 1400 };
+let CITY = CFG.city;
+/** The anchor, in real metres from the lawn. */
+let ANCHOR = { e: 0, n: 0 };
+
+function useSkyline(cfg: SkylineConfig): void {
+  CFG = cfg;
+  TURN = cfg.turn;
+  FIDI = -TURN;
+  SOMA = -TURN + Math.PI / 4;
+  CITY = cfg.city;
+  ANCHOR = real(cfg.anchor.lat, cfg.anchor.lon);
+}
 
 /** Is a building reaching r from (x, z) clear of the city's blocks? */
 function pastCity(x: number, z: number, r: number): boolean {
@@ -54,7 +91,10 @@ function real(lat: number, lon: number): { e: number; n: number } {
 function mapOf(e: number, n: number): { x: number; z: number } {
   const c = Math.cos(TURN);
   const s = Math.sin(TURN);
-  return { x: LAWN.x + PUSH + DRAW_IN * (e * c + n * s), z: LAWN.z - DRAW_IN * (n * c - e * s) };
+  const de = e - ANCHOR.e;
+  const dn = n - ANCHOR.n;
+  const k = CFG.drawIn;
+  return { x: CFG.anchor.x + CFG.push.x + k * (de * c + dn * s), z: CFG.anchor.z + CFG.push.z - k * (dn * c - de * s) };
 }
 
 /** Market Street, from Van Ness to the Ferry Building (real metres from the lawn). */
@@ -628,8 +668,8 @@ function bands(b: GeoBuilder, a: V3, c: V3, r0: number, r1: number, n: number): 
  */
 function sutroTower(ctx: Ctx): void {
   const S = ctx.sinks;
-  // The first of the two summits (osg/index.ts), or rather the top of the hill it's on.
-  const [px, pz] = TWIN_PEAKS_SUMMITS[0];
+  // The first of the two summits (the map's ground raises it), or rather the top of the hill it's on.
+  const { x: px, z: pz } = CFG.sutro;
   const { x, y, z } = summit(ctx, px, pz);
   const H = 146;
   const MAST = 24;
@@ -675,7 +715,8 @@ function sutroTower(ctx: Ctx): void {
 
 /** Downtown to the east (its landmarks, Telegraph Hill, the crowd of towers round them and the low
  *  city at their feet), and Sutro Tower on Twin Peaks. */
-export function buildSkyline(ctx: Ctx): void {
+export function buildSkyline(ctx: Ctx, cfg: SkylineConfig = OSG_SKYLINE): void {
+  useSkyline(cfg);
   const rng = makeRng(1906);
   const taken: Disc[] = [];
   landmarks(ctx, taken);
