@@ -69,8 +69,9 @@ across the line wins).
 - **Arcade cornering grip,** and a **drift**: tap the brake while turning at speed; the wheel then
   sets the slide's arc (tighter than grip allows), and letting go ends it. Drifting fills the boost.
 - **Boost:** a bottle of a few seconds (the Boost slot sets its size), full at the start, refilled by
-  drifting and items. Holding boost pushes the car up to a little past its top speed. What's left at
-  the lip is wasted.
+  drifting and items. Holding boost pushes hard, up to about a third past the car's top speed, on the
+  road or off it: a rocket needs no grip, so grass and long grass don't slow a boosting car (only
+  their grip still counts). What's left at the lip is wasted.
 - **Handling from the parts:** grip (wheels; tyres lose a little under load), how quickly the nose
   answers (chassis, slowed by weight), the tightest turn (chassis), brakes (wheels, limited by grip
   and weight), downforce (spoiler), top speed (engine × wheel gearing; the wind shifts it).
@@ -81,22 +82,27 @@ across the line wins).
   clear of anything that comes at them.
 - **Surfaces:** a park's path is paved down the middle with lawn either side: the lawn is about half
   speed (at most about 30 km/h, whatever the engine) and slidey; long grass and planted beds are a
-  crawl. The CPU keeps to the paths.
+  crawl. Boosting ploughs through both at road speed. The CPU keeps to the paths.
 - **Open ground:** a park the course runs through can be open (Alamo Square): drive anywhere in it,
   round its trees, benches and bins, held only by its edge, lined with barriers, but for the gates
   under banner arches where the course comes in and goes out. Cutting across doesn't pay on the
-  ground (long grass lies wherever it would); jumping over it can. Coming back onto the course
+  ground (long grass lies wherever it would); jumping over it can, and a boost ploughs through it
+  while the bottle lasts. Coming back onto the course
   further along than you drove is a shortcut.
 - **Items** from boxes, two held at once with a key to swap which one fires: Jump, Determination,
-  Poo, Boost +50%, Full boost (rare), Seagull (chases the rival and blinds them for a moment). The
+  Poo (spins out whoever drives through it and splatters their screen for 5 s), Boost +50%, Full
+  boost (rare), Seagull (swoops on the leader, carries them up into the air and drops them), Crab
+  (a green shell: straight down the road, or back up it, off the kerbs, spins out whoever it
+  meets), IPO coin (a Bullet Bill for a car well behind: 4.5 s on rails through everything). The
   odds lean on the race order.
 - **HYPE** (0-100) from racing with flair, turned into up to +15% launch speed at the lip (the long
   jump; a race doesn't show it).
 - **The kicker drops:** it stands at 25° for the first car off it, then comes down 2° a second to
   12°, so whoever is behind launches lower (about 5% less distance per second behind, at most about
   a third). Racing alone, it never moves.
-- **Split screen:** one camera while both cars fit; a fluid split when they don't; it heals when they
-  come back together.
+- **Split screen:** two cars race split, Player 1 left and Player 2 right. The countdown is one
+  screen; at GO it splits down the middle, and it comes back together for the results. Solo never
+  splits.
 
 ## Physics (`src/sim/`, deterministic fixed 1/120 s step)
 - Driving in the horizontal plane with gravity along the slope, drag against the wind, rolling

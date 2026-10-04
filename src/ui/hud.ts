@@ -29,7 +29,7 @@ export interface CarHudState {
   sel: number;
   roulette: boolean;
   grit: boolean;
-  /** A seagull is flapping on the windscreen. */
+  /** A seagull has hold of the car. */
   gull: boolean;
   /** 1-based race position, and the gap to the other car in metres (+ ahead). */
   position: number;
@@ -105,7 +105,7 @@ export interface ResultsView {
 
 type FlashKind = 'spin' | 'empty' | 'waste' | 'dnf' | 'air' | 'hit' | 'good' | 'hype' | 'item' | 'boost' | 'ramp';
 
-export const ITEM_ICONS: Record<ItemKind, string> = { jump: '🦘', grit: '😤', poo: '💩', topup: '⚡', refill: '🌟', gull: '🐦' };
+export const ITEM_ICONS: Record<ItemKind, string> = { jump: '🦘', grit: '😤', poo: '💩', topup: '⚡', refill: '🌟', gull: '🐦', crab: '🦀', ipo: '🪙' };
 export const ITEM_LABELS: Record<ItemKind, string> = {
   jump: 'JUMP',
   grit: 'DETERMINATION',
@@ -113,6 +113,8 @@ export const ITEM_LABELS: Record<ItemKind, string> = {
   topup: 'BOOST +50%',
   refill: 'FULL BOOST',
   gull: 'SEAGULL',
+  crab: 'CRAB',
+  ipo: 'IPO COIN',
 };
 /** One line per item for the controls card. */
 export const ITEM_HELP: [ItemKind, string][] = [
@@ -121,9 +123,11 @@ export const ITEM_HELP: [ItemKind, string][] = [
   ['poo', 'Poo: drop it for your rival'],
   ['topup', 'Boost +50%: refills half the bottle'],
   ['refill', 'Full boost (rare): a full bottle'],
-  ['gull', 'Seagull: chases your rival and blinds them'],
+  ['gull', 'Seagull: swoops on the leader, carries them up and drops them'],
+  ['crab', 'Crab: scuttles straight down the road and nips who it meets (hold brake: throw it back)'],
+  ['ipo', 'IPO coin (well behind): ride it to the moon, through everything'],
 ];
-const ROULETTE = ['🦘', '😤', '💩', '⚡', '🐦', '🌟'];
+const ROULETTE = ['🦘', '😤', '💩', '⚡', '🐦', '🦀', '🌟', '🪙'];
 
 interface SlotRefs {
   root: HTMLElement;
@@ -158,6 +162,81 @@ interface CarRefs {
   tags: [HTMLElement, HTMLElement];
   dot: HTMLElement;
   splitUntil: number;
+  /** Poo splats over the player's view. */
+  blind: HTMLElement;
+}
+
+/** A closed, lumpy blob through `n` points jittered around a circle (a Catmull-Rom loop as Béziers). */
+function blobPath(cx: number, cy: number, r: number, n: number, lumpy: number, arms: number): string {
+  const pts: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ((i + (Math.random() - 0.5) * 0.6) / n) * Math.PI * 2;
+    // Now and then a point flung well out: a splash arm.
+    const k = Math.random() < arms ? 1.3 + Math.random() * 0.45 : 1 + (Math.random() - 0.5) * lumpy;
+    pts.push([cx + Math.cos(a) * r * k, cy + Math.sin(a) * r * k]);
+  }
+  const f = (v: number): string => v.toFixed(1);
+  let d = `M${f(pts[0][0])},${f(pts[0][1])}`;
+  for (let i = 0; i < n; i++) {
+    const [p0, p1, p2, p3] = [pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n], pts[(i + 2) % n]];
+    d +=
+      `C${f(p1[0] + (p2[0] - p0[0]) / 6)},${f(p1[1] + (p2[1] - p0[1]) / 6)} ` +
+      `${f(p2[0] - (p3[0] - p1[0]) / 6)},${f(p2[1] - (p3[1] - p1[1]) / 6)} ${f(p2[0])},${f(p2[1])}`;
+  }
+  return `${d}Z`;
+}
+
+/**
+ * Poo thrown at the windscreen, the way ink hits you in Mario Kart: a handful of big glossy splats
+ * with flecks and drips, and clear glass between them. Random each time; sized for a w x h pane.
+ */
+function splatter(w: number, h: number): SVGSVGElement {
+  const s = Math.min(w, h);
+  const rnd = (a: number, b: number): number => a + Math.random() * (b - a);
+  // One big splat near the middle, then one in most cells of a 3 x 2 grid.
+  const spots: [number, number, number][] = [[w * rnd(0.38, 0.62), h * rnd(0.35, 0.6), s * rnd(0.2, 0.25)]];
+  for (let gy = 0; gy < 2; gy++) {
+    for (let gx = 0; gx < 3; gx++) {
+      if (Math.random() < 0.25) continue;
+      spots.push([w * ((gx + rnd(0.2, 0.8)) / 3), h * (0.08 + (gy + rnd(0.15, 0.85)) * 0.4), s * rnd(0.09, 0.17)]);
+    }
+  }
+  let out = '';
+  spots.forEach(([x, y, r], i) => {
+    let bits = `<path d="${blobPath(x, y, r, 16, 0.3, 0.2)}"/>`;
+    // Flecks flung out around it.
+    for (let j = 0, m = 4 + Math.floor(Math.random() * 6); j < m; j++) {
+      const a = Math.random() * Math.PI * 2;
+      const dd = r * rnd(1.15, 1.9);
+      const fr = r * rnd(0.04, 0.12);
+      bits += `<path d="${blobPath(x + Math.cos(a) * dd, y + Math.sin(a) * dd, fr, 6, 0.4, 0)}"/>`;
+    }
+    // Drips running down from its lower edge.
+    let drips = '';
+    for (let j = 0, m = Math.floor(rnd(0, 3)); j < m; j++) {
+      const dx = x + r * rnd(-0.6, 0.6);
+      const top = y + r * 0.5;
+      const len = r * rnd(0.6, 1.4);
+      const dw = r * rnd(0.05, 0.09);
+      drips +=
+        `<g class="drip" style="animation-delay:${rnd(0.2, 1).toFixed(2)}s">` +
+        `<rect x="${(dx - dw).toFixed(1)}" y="${top.toFixed(1)}" width="${(dw * 2).toFixed(1)}" height="${len.toFixed(1)}" rx="${dw.toFixed(1)}"/>` +
+        `<circle cx="${dx.toFixed(1)}" cy="${(top + len).toFixed(1)}" r="${(dw * 1.5).toFixed(1)}"/></g>`;
+    }
+    // A glossy sheen and a glint up and to the left.
+    const shine =
+      `<path class="sheen" d="${blobPath(x - r * 0.12, y - r * 0.15, r * 0.62, 10, 0.3, 0)}"/>` +
+      `<ellipse class="glint" cx="${(x - r * 0.35).toFixed(1)}" cy="${(y - r * 0.4).toFixed(1)}" ` +
+      `rx="${(r * 0.16).toFixed(1)}" ry="${(r * 0.09).toFixed(1)}" transform="rotate(-30 ${(x - r * 0.35).toFixed(1)} ${(y - r * 0.4).toFixed(1)})"/>`;
+    out +=
+      `<g class="splat" style="--slide:${(h * rnd(0.03, 0.08)).toFixed(1)}px;animation-delay:${(i * 0.04).toFixed(2)}s,0s">` +
+      `${drips}${bits}${shine}</g>`;
+  });
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w.toFixed(0)} ${h.toFixed(0)}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid slice');
+  svg.innerHTML = out;
+  return svg;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -236,6 +315,8 @@ export class HUD {
   }
 
   private makeCar(p: PlayerIndex, line: HTMLElement): CarRefs {
+    // (Before the panel, so the splat sits under the HUD.)
+    const blind = el('div', 'blind hidden', this.root);
     const root = el('div', `hud-car p${p + 1}`, this.root);
     root.id = `hud-p${p + 1}`;
     const who = el('div', 'who', root);
@@ -292,6 +373,7 @@ export class HUD {
       tags,
       dot,
       splitUntil: 0,
+      blind,
     };
   }
 
@@ -493,6 +575,24 @@ export class HUD {
       q.el.style.left = `${x}px`;
       q.el.style.top = `${y - 46 - q.slot * 40}px`;
     }
+  }
+
+  /**
+   * Poo on a player's windscreen over their part of the screen (amount 0..1, the splats' opacity;
+   * null pane hides it). Each new hit throws new splats.
+   */
+  setBlind(p: PlayerIndex, pane: { x: number; y: number; w: number; h: number } | null, amount: number): void {
+    const b = this.cars[p].blind;
+    const on = pane !== null && amount > 0.001;
+    // A fresh hit throws a fresh set of splats.
+    if (on && b.classList.contains('hidden')) b.replaceChildren(splatter(pane.w, pane.h));
+    b.classList.toggle('hidden', !on);
+    if (!on) return;
+    b.style.left = `${pane.x}px`;
+    b.style.top = `${pane.y}px`;
+    b.style.width = `${pane.w}px`;
+    b.style.height = `${pane.h}px`;
+    b.style.opacity = amount.toFixed(3);
   }
 
   setTag(p: PlayerIndex, pane: 0 | 1, x: number, y: number, visible: boolean): void {

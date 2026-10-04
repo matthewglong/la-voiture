@@ -541,6 +541,37 @@ export class Sound {
     }
   }
 
+  /** A crab thrown: a clatter of little claws on the tarmac. */
+  clack(pan = 0): void {
+    for (let i = 0; i < 6; i++) this.burst(pan, 'bandpass', 3400 + (i % 2) * 900, 2600, 0.03, 0.14, 8, i * 0.055);
+  }
+
+  /** A crab's nip: a snip, and a toy bonk. */
+  pinch(pan = 0): void {
+    this.burst(pan, 'highpass', 5000, 2500, 0.05, 0.3, 2);
+    this.burst(pan, 'bandpass', 2400, 1800, 0.04, 0.2, 10, 0.06);
+    this.panTone(pan, 620, 0.25, 'triangle', 0.18, 0.05, 240);
+  }
+
+  /** The IPO: a cash register's ka-ching, then a rising whoosh to the moon. */
+  kaching(pan = 0): void {
+    this.burst(pan, 'bandpass', 900, 600, 0.08, 0.3, 3);
+    for (const [f, at] of [
+      [2093, 0.1],
+      [2637, 0.1],
+      [3136, 0.16],
+    ] as const) {
+      this.panTone(pan, f, 0.7, 'sine', 0.12, at);
+    }
+    this.panTone(pan, 180, 1.2, 'sawtooth', 0.05, 0.1, 900);
+  }
+
+  /** Off the coin: a pop, and a coin spinning down. */
+  coinPop(pan = 0): void {
+    this.burst(pan, 'bandpass', 1400, 400, 0.12, 0.25, 2);
+    for (let i = 0; i < 5; i++) this.panTone(pan, 1800 - i * 120, 0.08, 'triangle', 0.06, 0.05 + i * 0.07 * (1 - i * 0.12));
+  }
+
   /** The boost: a looping rocket roar whose level follows the flame. */
   boost(pan: number): BoostVoice {
     const ctx = this.ctx;

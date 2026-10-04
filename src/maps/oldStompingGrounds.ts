@@ -523,7 +523,7 @@ export const ALAMO_ARCHES: { s: number; text: string; posts: [number, number][] 
 /**
  * Long grass in Alamo Square's lawns: ragged patches away from the paths (a mown strip beside each
  * path stays short), so cutting across the park wades through it. Only a car in the air skims over
- * it.
+ * it, or a boosting one ploughs through.
  */
 function alamoLongGrass(outline: [number, number][], paths: { pts: [number, number][] }[]): [number, number][][] {
   const c = OLD_STOMPING_GROUNDS;
@@ -580,7 +580,7 @@ function alamoLongGrass(outline: [number, number][], paths: { pts: [number, numb
  * Alamo Square is open ground: from the southwest ramp to the foot of the steps a car can leave the
  * course's paths anywhere and drive the whole park: on the grass (slow; the park's footpaths are no
  * quicker), through the long grass and the beds (a crawl), round the trees, benches and bins; the
- * park's edge holds it but for the ramp and the steps. Only a jump over the rough makes a cut pay. Its ground is the survey, easing
+ * park's edge holds it but for the ramp and the steps. Only a jump over the rough (or a boost through it) makes a cut pay. Its ground is the survey, easing
  * over its outer few metres to the height of the streets round it, and the course's paths cut into
  * it (openGround.ts).
  */

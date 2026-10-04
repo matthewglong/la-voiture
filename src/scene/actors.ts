@@ -1,7 +1,7 @@
 // The race's moving cast, drawn from the simulation each frame: toy Waymos (lidar hats spinning,
 // hazards blinking, sometimes a protest cone on the hood), wobbly tourist figurines, dogs loose in
-// the parks, the map's cable cars (or its streetcar), loose traffic cones, item boxes, poo and
-// seagulls.
+// the parks, the map's cable cars (or its streetcar), loose traffic cones, item boxes, poo,
+// seagulls and crabs.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import type { Ped, RaceSim, TramKind } from '../sim/race';
@@ -38,6 +38,10 @@ function makeMats() {
     gullTip: new THREE.MeshStandardMaterial({ color: '#23262c', roughness: 0.5 }),
     beak: new THREE.MeshPhysicalMaterial({ color: '#ffc21f', roughness: 0.35, clearcoat: 0.6 }),
     gullLeg: new THREE.MeshStandardMaterial({ color: '#ff8a3d', roughness: 0.5 }),
+    // A Dungeness crab, cooked Fisherman's Wharf orange, its claws tipped white.
+    crab: new THREE.MeshPhysicalMaterial({ color: '#e2542b', roughness: 0.35, clearcoat: 0.8, clearcoatRoughness: 0.2 }),
+    crabBelly: new THREE.MeshStandardMaterial({ color: '#f6c9a0', roughness: 0.5 }),
+    crabTip: new THREE.MeshPhysicalMaterial({ color: '#fbf6ee', roughness: 0.3, clearcoat: 0.6 }),
     // Dogs: every breed's coat (and collar) is vertex colour on one material, eyes, noses and
     // tags on a glossy one.
     dogCoat: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62 }),
@@ -112,6 +116,12 @@ function makeGeos() {
     gullWingTip: new RoundedBoxGeometry(0.3, 0.04, 0.34, 2, 0.02),
     gullTail: new THREE.ConeGeometry(0.16, 0.4, 4).rotateZ(Math.PI / 2),
     gullLeg: new THREE.CylinderGeometry(0.025, 0.025, 0.3, 6),
+    crabShell: new THREE.SphereGeometry(0.5, 22, 14),
+    crabLeg: new THREE.CapsuleGeometry(0.04, 0.3, 2, 6).rotateX(Math.PI / 2),
+    crabArm: new THREE.CapsuleGeometry(0.05, 0.24, 2, 8).rotateZ(-Math.PI / 2),
+    crabClaw: new THREE.SphereGeometry(0.13, 14, 10),
+    crabTip: new THREE.ConeGeometry(0.05, 0.18, 8).rotateZ(-Math.PI / 2),
+    crabStalk: new THREE.CylinderGeometry(0.018, 0.024, 0.16, 6),
   };
 }
 const geos = (): NonNullable<typeof GEO> => (GEO ??= makeGeos());
@@ -809,6 +819,66 @@ function buildGull(): GullView {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Crabs (the item): a toy Dungeness crab, wide oval shell, eyes on stalks, big white-tipped claws
+// held up, four legs a side. It charges claws first (its wide back to the chase camera) with a
+// sideways swagger.
+
+interface CrabView {
+  root: THREE.Group;
+  /** Leg pivots, and which side each is on (+1: +z). */
+  legs: { pivot: THREE.Group; side: number; i: number }[];
+  arms: THREE.Group[];
+}
+
+function buildCrab(): CrabView {
+  const m = mats();
+  const g = geos();
+  const root = new THREE.Group();
+  root.name = 'crab';
+  const body = new THREE.Group();
+  body.scale.setScalar(1.6);
+  body.position.y = 0.2;
+  root.add(body);
+  const shell = mesh(g.crabShell, m.crab, 0, 0.04, 0);
+  shell.scale.set(0.72, 0.36, 1);
+  body.add(shell);
+  const belly = mesh(g.crabShell, m.crabBelly, 0, -0.03, 0);
+  belly.scale.set(0.66, 0.22, 0.92);
+  body.add(belly);
+  for (const side of [1, -1]) {
+    // Eyes on stalks at the front.
+    body.add(mesh(g.crabStalk, m.crab, 0.3, 0.2, side * 0.09));
+    body.add(mesh(g.eye, m.eye, 0.31, 0.3, side * 0.09));
+    body.add(mesh(g.pupil, m.pupil, 0.37, 0.31, side * 0.09));
+  }
+  const legs: CrabView['legs'] = [];
+  for (const side of [1, -1]) {
+    for (let i = 0; i < 4; i++) {
+      const pivot = new THREE.Group();
+      pivot.position.set(0.16 - i * 0.13, 0, side * 0.38);
+      pivot.add(mesh(g.crabLeg, m.crab, 0, 0, side * 0.17));
+      body.add(pivot);
+      legs.push({ pivot, side, i });
+    }
+  }
+  const arms: THREE.Group[] = [];
+  for (const side of [1, -1]) {
+    const arm = new THREE.Group();
+    arm.position.set(0.26, 0.06, side * 0.3);
+    arm.rotation.y = -side * 0.5;
+    arm.add(mesh(g.crabArm, m.crab, 0.16, 0, 0));
+    const claw = mesh(g.crabClaw, m.crab, 0.4, 0.02, 0);
+    claw.scale.set(1.5, 0.8, 1);
+    arm.add(claw);
+    arm.add(mesh(g.crabTip, m.crabTip, 0.62, 0.05, 0.03));
+    arm.add(mesh(g.crabTip, m.crabTip, 0.6, -0.03, -0.03));
+    body.add(arm);
+    arms.push(arm);
+  }
+  return { root, legs, arms };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Item boxes: glossy rainbow cubes with a question mark, spinning and bobbing.
 
 function boxTexture(): THREE.CanvasTexture {
@@ -845,6 +915,7 @@ export class Actors {
   private boxes = new Map<number, { root: THREE.Object3D; scale: number; seen: number }>();
   private cones = new Map<number, THREE.Object3D>();
   private gulls = new Map<number, GullView>();
+  private crabs = new Map<number, CrabView>();
   /** Cable cars (and streetcars): built once and kept (they only move between rounds), one per car
    *  on the rails, with the half-length, height and half-width of the box that fades them. */
   private readonly cables: { root: THREE.Group; faded: boolean; sign: string; vehicle: TramKind; hx: number; h: number; hz: number }[] = [];
@@ -883,6 +954,7 @@ export class Actors {
     this.boxes.clear();
     this.cones.clear();
     this.gulls.clear();
+    this.crabs.clear();
   }
 
   update(dt: number, t: number, sim: RaceSim | null): void {
@@ -1025,6 +1097,30 @@ export class Actors {
       if (sim.gulls.some((g) => g.id === id)) continue;
       this.group.remove(v.root);
       this.gulls.delete(id);
+    }
+    // Crabs: scuttling sideways, legs going, claws snapping; stopped, they flip and vanish.
+    for (const c of sim.crabs) {
+      let v = this.crabs.get(c.id);
+      if (!v) {
+        v = buildCrab();
+        this.crabs.set(c.id, v);
+        this.group.add(v.root);
+      }
+      const gone = c.gone ?? 0;
+      const going = c.gone === null;
+      v.root.position.set(c.x, c.y + (going ? Math.abs(Math.sin(t * 24 + c.id)) * 0.08 : gone * 2.2), c.z);
+      v.root.rotation.set(0, -c.heading + (going ? Math.sin(t * 9 + c.id) * 0.3 : 0), going ? 0 : gone * 9);
+      v.root.scale.setScalar(going ? Math.min(1, 0.3 + c.age * 6) : Math.max(0.001, 1 - gone / 0.6));
+      for (const l of v.legs) {
+        const ph = t * 30 + l.i * 1.6 + (l.side > 0 ? 0 : Math.PI);
+        l.pivot.rotation.set(l.side * (0.3 + Math.max(0, Math.sin(ph)) * 0.35), Math.cos(ph) * 0.35, 0);
+      }
+      v.arms.forEach((a, i) => (a.rotation.z = 0.55 + Math.sin(t * 11 + i * 1.9) * 0.2));
+    }
+    for (const [id, v] of this.crabs) {
+      if (sim.crabs.some((c) => c.id === id)) continue;
+      this.group.remove(v.root);
+      this.crabs.delete(id);
     }
     // The cable cars (or the streetcar, its destination in amber LEDs), tipped up or down their
     // rails' slope.

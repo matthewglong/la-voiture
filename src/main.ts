@@ -27,7 +27,7 @@ import { PARTS, computeStats, getOption } from './parts';
 import { Actors } from './scene/actors';
 import { buildCarMesh, type CarMesh } from './scene/carMesh';
 import { Splashes, Trail } from './scene/effects';
-import { Aura, DizzyStars, Particles, SkidMarks } from './scene/fx';
+import { Aura, DizzyStars, IpoCoin, Particles, SkidMarks } from './scene/fx';
 import { mapScene, type MapScene } from './scene/maps';
 import { damp, makeRng } from './scene/util';
 import { Views, type ViewTarget } from './scene/views';
@@ -243,6 +243,8 @@ class CarView {
   readonly trail: Trail;
   readonly stars = new DizzyStars();
   readonly aura = new Aura();
+  /** The IPO coin the car rides (hidden inside it). */
+  readonly coin = new IpoCoin();
   engine: EngineVoice | null = null;
   wind: WindVoice | null = null;
   skid: SkidVoice | null = null;
@@ -260,7 +262,7 @@ class CarView {
     this.tilt.add(this.holder);
     this.root.rotation.order = 'YXZ';
     this.trail = new Trail(PLAYER_COLORS[p]);
-    scene.add(this.root, this.trail.mesh, this.stars.group, this.aura.mesh);
+    scene.add(this.root, this.trail.mesh, this.stars.group, this.aura.mesh, this.coin.group);
   }
 
   setConfig(cfg: CarConfig): void {
@@ -800,7 +802,8 @@ function beginRun(): void {
   hud.setup(names, PLAYER_COLORS, wind, [bots[0] ? null : hudKeys(0), bots[1] ? null : hudKeys(1)], solo, hudEvent(sim.laps));
   hud.showCars(true);
   hud.show(true);
-  const soloItems: ItemKind[] = ITEM_KINDS.filter((k) => k !== 'poo' && k !== 'gull');
+  // (Nobody to drop poo for, throw at or catch up with.)
+  const soloItems: ItemKind[] = ITEM_KINDS.filter((k) => k !== 'poo' && k !== 'gull' && k !== 'crab' && k !== 'ipo');
   hud.showHelp(true, [bots[0] ? null : helpKeys(0), bots[1] ? null : helpKeys(1)], PLAYER_COLORS, names, {
     solo,
     items: solo ? soloItems : undefined,
@@ -816,6 +819,10 @@ function beginRun(): void {
     camTargets[p].s = sim.cars[p]?.s ?? map.course.grid[p].s;
     camTargets[p].prog = sim.cars[p]?.prog ?? 0;
     camTargets[p].speed = 0;
+    camTargets[p].heading = sim.cars[p]?.heading ?? 0;
+    camTargets[p].vx = 0;
+    camTargets[p].vz = 0;
+    camTargets[p].d = sim.cars[p]?.d ?? map.course.grid[p].d;
     camTargets[p].phase = 'grid';
   }
 }
@@ -974,7 +981,8 @@ function handleEvent(e: RaceEvent): void {
       rumble(e.victim, Math.min(1, e.impact / 6), 0.6, 220);
       particles.sparks(tmpV.set(e.x, e.y, e.z), tmpV2.set(0, 0, 0), Math.min(20, 5 + Math.round(e.impact * 2)));
       if (e.impact > 3 && e.ram !== 'none') {
-        const word = e.ram === 'grit' ? 'POWERED THROUGH!' : e.ram === 'bull' ? 'BULL BAR!' : e.ram === 'wedge' ? 'SCOOPED!' : 'SHOVE!';
+        const word =
+          e.ram === 'ipo' ? 'OUTTA MY WAY!' : e.ram === 'grit' ? 'POWERED THROUGH!' : e.ram === 'bull' ? 'BULL BAR!' : e.ram === 'wedge' ? 'SCOOPED!' : 'SHOVE!';
         hud.flash(e.p, 'shove', word, 'good', now, 1.8);
         hud.flash(e.victim, 'shoved', 'SHOVED!', 'hit', now, 1.8);
         shoutAt(e.p, word);
@@ -997,8 +1005,9 @@ function handleEvent(e: RaceEvent): void {
         views.shake(e.p, 0.55);
       } else if (e.what === 'cone') sound.tock(pan);
       if (e.plowed) {
-        hud.flash(e.p, 'plowed', 'POWERED THROUGH!', 'good', now, 2);
-        shoutAt(e.p, 'POWERED THROUGH!');
+        const word = (sim?.cars[e.p]?.ipoT ?? 0) > 0 ? 'OUTTA MY WAY!' : 'POWERED THROUGH!';
+        hud.flash(e.p, 'plowed', word, 'good', now, 2);
+        shoutAt(e.p, word);
         particles.confetti(tmpV.set(e.x, e.y, e.z), 18);
       } else if (e.what !== 'cone' && e.what !== 'poo') {
         hud.flash(e.p, `hit-${e.what}`, HIT_TEXT[e.what], 'hit', now, 2);
@@ -1044,6 +1053,16 @@ function handleEvent(e: RaceEvent): void {
       } else if (e.item === 'gull') {
         sound.squawk(pan);
         hud.flash(e.p, 'use', 'SEAGULL AWAY!', 'item', now, 1.4);
+      } else if (e.item === 'crab') {
+        sound.clack(pan);
+        hud.flash(e.p, 'use', 'CRAB AWAY!', 'item', now, 1.4);
+      } else if (e.item === 'ipo') {
+        sound.kaching(pan);
+        hud.flash(e.p, 'use', '🪙 IPO! TO THE MOON! 🚀', 'hype', now, 2.4);
+        shoutAt(e.p, 'IPO!');
+        particles.cash(tmpV.copy(c.root.position).setY(c.root.position.y + 1.5), 40, 9);
+        views.shake(e.p, 0.4);
+        rumble(e.p, 0.5, 0.8, 300);
       }
       // (The boost refills speak through their boostGain event.)
       break;
@@ -1053,9 +1072,42 @@ function handleEvent(e: RaceEvent): void {
       break;
     case 'spinout': {
       rumble(e.p, 0.6, 0.9, 450);
+      // (A crab's nip says who threw it in its own event.)
+      if (e.cause === 'crab') {
+        shoutAt(e.p, 'PINCHED!');
+        break;
+      }
       hud.flash(e.p, 'spin-out', e.by !== null ? `SPUN BY ${names[e.by].toUpperCase()}'S POO!` : 'SPUN OUT!', 'hit', now, 2.2);
       shoutAt(e.p, 'SPUN OUT!');
       if (e.by !== null) hud.flash(e.by, 'poo-hit', 'POO LANDED!', 'hype', now, 2);
+      break;
+    }
+    case 'crab': {
+      const pan = e.p === 0 ? -0.45 : 0.45;
+      particles.puff(tmpV.set(e.x, e.y, e.z), 6, '#e2542b', 0.35);
+      if (e.shielded) {
+        sound.bonk(pan, 0.6);
+        hud.flash(e.p, 'crab', 'CRAB SHRUGGED OFF!', 'good', now, 1.8);
+        break;
+      }
+      sound.pinch(pan);
+      views.shake(e.p, 0.6);
+      particles.sparks(tmpV.set(e.x, e.y, e.z), tmpV2.set(0, 0, 0), 8);
+      const own = e.by === e.p;
+      hud.flash(e.p, 'spin-out', own ? 'PINCHED BY YOUR OWN CRAB!' : `PINCHED BY ${names[e.by].toUpperCase()}'S CRAB!`, 'hit', now, 2.2);
+      if (!own) hud.flash(e.by, 'crab-hit', 'CRAB LANDED!', 'hype', now, 2);
+      break;
+    }
+    case 'crabGone':
+      // Stopped by traffic or another crab: a flash of shell; burrowed: a little dust.
+      particles.puff(tmpV.set(e.x, e.y, e.z), 5, e.why === 'burrow' ? '#cfc2a8' : '#e2542b', 0.35);
+      if (e.why !== 'burrow') sound.tock(0);
+      break;
+    case 'ipoEnd': {
+      const pan = e.p === 0 ? -0.45 : 0.45;
+      sound.coinPop(pan);
+      particles.cash(tmpV.copy(carPos(e.p)).setY(carPos(e.p).y + 1.5), 24, 7);
+      hud.flash(e.p, 'use', 'LOCK-UP OVER', 'item', now, 1.4);
       break;
     }
     case 'shortcut': {
@@ -1199,6 +1251,9 @@ function awardsFor(p: PlayerIndex, res: CarResult[]): string[] {
   if (t.driftBoost >= 2) out.push([5, `⚡ ${t.driftBoost.toFixed(1)} s of boost from drifts`]);
   if (t.gulls > 0) out.push([8, `🐦 Seagull sniper${t.gulls > 1 ? ` ×${t.gulls}` : ''}`]);
   if (t.shooed > 0) out.push([7, '🧹 Shooed a seagull']);
+  if (t.crabs > 0) out.push([8, `🦀 Crab sniper${t.crabs > 1 ? ` ×${t.crabs}` : ''}`]);
+  if (t.crabbed >= 2) out.push([6, `🦀 Crab magnet ×${t.crabbed}`]);
+  if (t.ipo > 0) out.push([6, '🪙 Went public']);
   if (lip && res[p].wastedBoostFrac < 0.01 && t.boostUsed > 1 && !res[p].dnf) out.push([3, '💨 Every drop of boost']);
   if (t.nearMiss >= 3) out.push([4, `😬 ${t.nearMiss} near misses`]);
   if (map.rules.hype && res[p].hype >= 90) out.push([6, '🔥 Maxed-out HYPE']);
@@ -1695,6 +1750,10 @@ const camTargets: [ViewTarget, ViewTarget] = [0, 1].map(() => ({
   s: 0,
   prog: 0,
   speed: 0,
+  heading: 0,
+  vx: 0,
+  vz: 0,
+  d: 0,
   phase: 'grid' as ViewTarget['phase'],
 })) as [ViewTarget, ViewTarget];
 let frames = 0;
@@ -1759,6 +1818,8 @@ function updateCars(dt: number, gdt: number, t: number): void {
       mesh?.update(dt, t);
       car.stars.update(t, false, car.root.position, 0);
       car.aura.update(t, 0, car.root.position, 0, 1, 1);
+      car.coin.update(gdt, false, car.root.position, 0);
+      car.holder.visible = true;
       continue;
     }
     const k = sc.stats;
@@ -1855,8 +1916,13 @@ function updateCars(dt: number, gdt: number, t: number): void {
     if (sc.phase === 'race' && sc.spin > 0 && sc.grounded && Math.random() < gdt * 30) {
       particles.puff(tmpV.set(sc.x, sc.y + 0.25, sc.z), 1, Math.random() < 0.5 ? '#6b4122' : '#7a4a24', 0.32, 1.2);
     }
-    car.stars.update(t, sc.spin > 0 || sc.stun > 0.2, car.root.position, 1.4);
-    car.aura.update(t, sc.grit, car.root.position, sc.heading, k.length, k.width);
+    // Riding an IPO coin: the car's inside it, and money flies off it.
+    const ipo = sc.ipoT > 0;
+    car.holder.visible = !ipo;
+    car.coin.update(gdt, ipo, car.root.position, sc.heading);
+    if (ipo && Math.random() < gdt * 22) particles.cash(tmpV.copy(car.root.position).setY(car.root.position.y + 1.6), 1, 3);
+    car.stars.update(t, !ipo && (sc.spin > 0 || sc.stun > 0.2), car.root.position, 1.4);
+    car.aura.update(t, ipo ? 0 : sc.grit, car.root.position, sc.heading, k.length, k.width);
     // Hints: jump Lombard's hedges; spend the boost on the pier; the slipstream.
     if (sc.phase === 'race' && !bots[p]) {
       const dump = map.hints.boostDump;
@@ -2006,10 +2072,14 @@ function frame(): void {
     ct.s = sc ? sc.s : map.course.grid[p].s;
     ct.prog = sc ? (sc.finishT !== null ? sc.prog + 1e6 : sc.prog) : 0;
     ct.speed = sc ? Math.hypot(sc.vx, sc.vz) : 0;
+    ct.heading = sc ? sc.heading : 0;
+    ct.vx = sc ? sc.vx : 0;
+    ct.vz = sc ? sc.vz : 0;
+    ct.d = sc ? sc.d : map.course.grid[p].d;
     ct.phase = sc ? sc.phase : 'grid';
   }
-  const racing = state === 'RACE' || state === 'FLIGHT' || state === 'COUNTDOWN';
-  views.update(state === 'BUILD' ? dt : gdt, t, camTargets, racing && state !== 'COUNTDOWN');
+  // One screen through the countdown; from GO until the results, two players race split.
+  views.update(state === 'BUILD' ? dt : gdt, t, camTargets, state === 'RACE' || state === 'FLIGHT');
   updateGantry(dt);
 
   splashes.update(gdt);
@@ -2077,6 +2147,12 @@ function frame(): void {
   }
   // Shouts ride just above the tag on the player's own part of the screen.
   for (const p of PLAYERS) hud.placeShouts(p, ownTag[p].x, ownTag[p].y, ownTag[p].vis);
+  // Poo on the windscreen: over the player's own part of the screen, clearing in its last second.
+  for (const p of PLAYERS) {
+    const blindT = showTags ? (sim?.cars[p]?.blindT ?? 0) : 0;
+    const pane = views.isSplit ? views.pane(p) : solo && p === 0 ? views.pane(0) : null;
+    hud.setBlind(p, pane, Math.min(1, blindT / 1.2));
+  }
   if (++frames === 3) api.ready = true;
 }
 
@@ -2191,7 +2267,7 @@ const api = {
   get events() {
     return eventLog.map((e) => ({ ...e, event: { ...e.event } }));
   },
-  /** The race world: traffic, tourists, boxes, poo and the cable car. */
+  /** The race world: traffic, tourists, boxes, poo, seagulls, crabs and the cable car. */
   get world() {
     if (!sim) return null;
     return structuredClone({
@@ -2200,6 +2276,7 @@ const api = {
       peds: sim.peds.map((p) => ({ id: p.id, kind: p.kind, x: p.x, z: p.z, s: p.s, d: p.d, down: p.down > 0 })),
       poos: sim.poos.filter((q) => q.alive).map((q) => ({ id: q.id, x: q.x, z: q.z, s: q.s, owner: q.owner })),
       gulls: sim.gulls.map((g) => ({ id: g.id, owner: g.owner, target: g.target, state: g.state, x: g.x, y: g.y, z: g.z })),
+      crabs: sim.crabs.map((c) => ({ id: c.id, owner: c.owner, s: c.s, d: c.d, x: c.x, z: c.z, gone: c.gone !== null })),
       boxes: sim.boxes.map((b) => ({ id: b.id, s: b.s, d: b.d, hidden: b.hidden > 0 })),
       cable: sim.cables[0] ? { x: sim.cables[0].x, z: sim.cables[0].z } : null,
       cables: sim.cables.map((cb) => ({ x: cb.x, z: cb.z })),
@@ -2208,6 +2285,12 @@ const api = {
   /** Split-screen state: 0 = one screen, 1 = fully split. */
   get split(): number {
     return views.split;
+  },
+  /** Which way each camera looks (radians, like the cars' headings): each player's own, and the
+   *  shared one. */
+  get cameras(): { own: [number, number]; shared: number } {
+    const look = (yaw: number): number => Math.atan2(-Math.sin(yaw), -Math.cos(yaw));
+    return { own: [look(views.rigs[0].cur.yaw), look(views.rigs[1].cur.yaw)], shared: look(views.shared.cur.yaw) };
   },
   /** The kicker: its angle now (degrees), and the race time the first car went off it (or null). */
   get ramp() {

@@ -1,18 +1,18 @@
-// Cameras and the fluid split screen.
+// Cameras and the split screen.
 //
 // Three orbit rigs (focus, yaw, pitch, distance): one per player and one shared. Chase rigs sit
 // behind their car looking down the course (not along the car's nose, so Lombard's hairpins and
-// spin-outs don't whip the view round). While the shared rig can frame both cars, one camera fills
-// the screen. When it can't, the screen splits, Player 1 left and Player 2 right. The shared chase
-// camera already sits behind the trailing car, so that player's view carries straight on: the
-// divider slides in from the other side, cropping it (an off-centre projection, so nothing on it
-// moves), while it eases into that player's own camera. The leader's view slides in with the
-// divider, attached to it. Healing runs the same move backwards: the leader's half slides out and
-// the other half widens back into the shared view. No moment shows two overlapping blends of the
-// same scene, so a car is never drawn twice side by side.
+// spin-outs don't whip the view round). Off the road (across a park's lawn, over a hedge, cutting a
+// corner) the course's direction says nothing about where the car is going, so the chase camera
+// turns to follow the car instead, never faster than a steady turn. The shared rig frames both cars and fills the screen in the
+// garage, through the countdown and behind the results (racing solo, it follows Player 1 the whole
+// way). Two players race in split screen, Player 1 left and Player 2 right, from GO to the results.
+// They start side by side in that order, so at GO the screen splits down the middle of the shared
+// view: each half starts as its own half of it (an off-centre projection, so nothing on it moves)
+// and eases into its player's own camera, centred. The results run the same move backwards.
 import * as THREE from 'three';
-import { deltaS, heightAt, pointAt, type Course } from '../track';
-import { damp } from './util';
+import { deltaS, heightAt, pointAt, type Course, type CoursePoint } from '../track';
+import { damp, smoothstep } from './util';
 
 export type RigMode = 'build' | 'chase' | 'side' | 'results' | 'stalled';
 
@@ -22,6 +22,12 @@ export interface ViewTarget {
   s: number;
   prog: number;
   speed: number;
+  /** Which way its nose points (radians, like the course's headings), and its velocity. */
+  heading: number;
+  vx: number;
+  vz: number;
+  /** How far (m) it is from the course's centreline, sideways (+ or −). */
+  d: number;
   /** On the road (racing, or cruising past the flag), in the air after the lip, or finished. */
   phase: 'grid' | 'race' | 'flight' | 'splashed' | 'finished' | 'dnf';
 }
@@ -52,21 +58,40 @@ function inLipFrame(p: { x: number; z: number }): { a: number; l: number } {
   const dz = p.z - f.z;
   return { a: dx * f.tx + dz * f.tz, l: -dx * f.tz + dz * f.tx };
 }
-const MAX_SHARED_DIST = 30;
+/** The furthest back (m) the shared chase camera goes to fit both cars in. */
+const MAX_SHARED_DIST = 36;
 /** How close (m) the racers still on the road must be to the lip for one shared side-on view. */
 const NEAR_LIP = 25;
-/** Seconds for the divider to slide in or out. */
+/** Seconds for the screen to split at GO (and to come back together for the results). */
 const SPLIT_TIME = 0.5;
+/** Past the paved edge (m): where the chase camera starts following the car rather than the course,
+ *  and where it's following the car alone. */
+const OFF_START = 1.5;
+const OFF_FULL = 6;
+/** How quickly (1/s) it eases into following the car and back (a hop between legs is sudden). */
+const OFF_EASE = 2.5;
+/** Off the road, the way the car is going is where its nose points up to TRAVEL_V0 (m/s), and the
+ *  way it's moving from TRAVEL_V1. Reversing (at most 5 m/s) keeps the camera behind the nose;
+ *  sliding sideways or spinning at speed keeps it on the way the car is actually going. */
+const TRAVEL_V0 = 5.5;
+const TRAVEL_V1 = 10;
+/** The fastest (rad/s) the off-road camera turns: a car spinning on the spot doesn't spin it. */
+const OFF_TURN = 90 * DEG;
+const tmpPt = {} as CoursePoint;
 
 function clonePose(p: Pose): Pose {
   return { focus: p.focus.clone(), yaw: p.yaw, pitch: p.pitch, dist: p.dist };
 }
 
+/** An angle brought into −π..π. */
+function wrapAngle(a: number): number {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
 function lerpAngle(a: number, b: number, t: number): number {
-  let d = b - a;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return a + d * t;
+  return a + wrapAngle(b - a) * t;
 }
 
 /** Inside one of the course's wide views (Lombard's switchbacks), or just before one. */
@@ -116,6 +141,11 @@ class Rig {
   goal: Pose;
   private modeTime = 0;
   private sideFocusX = 0;
+  /** Off the road: how far into following the car (0..1), the way the car is going (turned at
+   *  most OFF_TURN), and the wide-view framing held from where it left the road. */
+  private off = 0;
+  private travel = 0;
+  private lombHeld = 0;
 
   constructor() {
     this.cur = this.buildPose(0);
@@ -173,8 +203,32 @@ class Rig {
     };
   }
 
-  /** Chase framing for one or two cars; returns how far back it needs to be to fit them. */
-  private chase(targets: ViewTarget[], aspect: number, fov: number, grid: boolean): number {
+  /** How far into following the car rather than the course (0..1), easing it along; `dir` is the
+   *  course's direction here. Keeps `travel` (the way the car is going) up to date. */
+  private offRoad(tg: ViewTarget, dir: number, dt: number, grid: boolean): number {
+    const past = Math.abs(tg.d) - pointAt(C, tg.s, tmpPt).pave;
+    const raw = grid ? 0 : smoothstep(OFF_START, OFF_FULL, past);
+    this.off = dt > 0 ? this.off + (raw - this.off) * damp(OFF_EASE, dt) : raw;
+    // The way it's going: the nose when slow (stopped, reversing, turning round), its velocity once
+    // it's properly moving.
+    const w = tg.speed > 0.01 ? smoothstep(TRAVEL_V0, TRAVEL_V1, tg.speed) : 0;
+    const x = Math.cos(tg.heading) * (1 - w) + (w > 0 ? (tg.vx / tg.speed) * w : 0);
+    const z = Math.sin(tg.heading) * (1 - w) + (w > 0 ? (tg.vz / tg.speed) * w : 0);
+    const want = x * x + z * z > 0.09 ? Math.atan2(z, x) : this.travel;
+    if (this.off < 0.01) {
+      // On the road: start from the course's direction when it leaves, so there's no jump.
+      this.travel = dir;
+    } else if (dt === 0) {
+      this.travel = want;
+    } else {
+      const max = OFF_TURN * dt;
+      this.travel = wrapAngle(this.travel + Math.max(-max, Math.min(max, wrapAngle(want - this.travel))));
+    }
+    return this.off < 0.01 ? 0 : this.off;
+  }
+
+  /** Chase framing for one or two cars. */
+  private chase(targets: ViewTarget[], aspect: number, fov: number, grid: boolean, dt: number): void {
     const g = this.goal;
     const n = targets.length;
     // With two cars: sit behind the trailing one and look ahead towards the leader.
@@ -184,10 +238,16 @@ class Rig {
     let speed = 0;
     for (const tg of targets) speed = Math.max(speed, tg.speed);
     const sMid = n === 2 ? trail.s + deltaS(C, trail.s, lead.s) * 0.4 : trail.s;
-    const dir = courseDirection(sMid);
+    // Off the road the course's s can jump (to whichever path or leg is nearest), so its direction,
+    // wide-view framing and grade give way to the car's own way and what it had on the road.
+    const road = courseDirection(sMid);
+    const off = this.offRoad(trail, road, dt, grid);
+    const dir = off > 0 ? lerpAngle(road, this.travel, off) : road;
     const dx = Math.cos(dir);
     const dz = Math.sin(dir);
-    const lomb = wideViewBlend(sMid);
+    const lombNow = wideViewBlend(sMid);
+    if (off === 0) this.lombHeld = lombNow;
+    const lomb = lombNow + (this.lombHeld - lombNow) * off;
     const look = grid ? 2 : 3 + Math.min(10, speed * 0.28);
     const fx = new THREE.Vector3().copy(trail.pos);
     // Two cars: aim between the trailing car and a point just ahead of the leader, so the trailing
@@ -203,7 +263,7 @@ class Rig {
     if (C.followGrade > 0 && !grid) {
       // Tilt with the road: look up the climb ahead (the road rising into the frame), and down a
       // drop, aiming at the road's height where the look-ahead lands.
-      const k = C.followGrade * (1 - lomb);
+      const k = C.followGrade * (1 - lomb) * (1 - off);
       const reach = 8 + speed * 0.5;
       const yAhead = heightAt(C, trail.s + ahead);
       const grade = (heightAt(C, sMid + reach) - heightAt(C, sMid - 4)) / (reach + 4);
@@ -223,12 +283,8 @@ class Rig {
     g.focus.copy(fx);
     g.yaw = dir + Math.PI;
     g.pitch = pitch;
-    g.dist = Math.min(fit, MAX_SHARED_DIST + 6);
-    return fit;
+    g.dist = Math.min(fit, MAX_SHARED_DIST);
   }
-
-  /** Last computed need (chase): how far back the camera wants to be to fit everyone. */
-  need = 0;
 
   private computeGoal(targets: ViewTarget[], t: number, dt: number, aspect: number, fov: number): void {
     const g = this.goal;
@@ -238,14 +294,13 @@ class Rig {
       g.yaw = p.yaw;
       g.pitch = p.pitch;
       g.dist = p.dist;
-      this.need = 0;
       return;
     }
     if (this.mode === 'chase' || this.mode === 'stalled') {
       const live = targets.filter((c) => c.phase === 'race' || c.phase === 'grid' || c.phase === 'finished');
       const pool = live.length ? live : targets;
       const grid = pool.every((c) => c.phase === 'grid');
-      this.need = this.chase(pool, aspect, fov, grid);
+      this.chase(pool, aspect, fov, grid, dt);
       if (this.mode === 'stalled') {
         g.focus.y -= 4;
         g.pitch = 24 * DEG;
@@ -291,7 +346,6 @@ class Rig {
     g.yaw = f.heading + SIDE_YAW + (results ? Math.sin(t * 0.15) * 3 * DEG : 0);
     g.pitch = (results ? 13 : 8) * DEG;
     g.dist = dist;
-    this.need = 0;
   }
 }
 
@@ -311,18 +365,16 @@ export class Views {
   readonly paneCams: [THREE.PerspectiveCamera, THREE.PerspectiveCamera];
   /** 0 = one screen, 1 = fully split. */
   split = 0;
-  /** Where the split is heading. */
-  splitting = false;
-  /** The player whose view carries on through a split or a heal (the other one slides). */
-  private anchor: 0 | 1 = 1;
-  private calm = 0;
   private readonly divider: HTMLElement;
   private readonly tmp = new THREE.Vector3();
-  private readonly tmp2 = new THREE.Vector3();
+  /** What each half shows while the screen splits or comes back together: a blend of the shared
+   *  view and its player's own. */
+  private readonly blend: [Pose, Pose] = [
+    { focus: new THREE.Vector3(), yaw: 0, pitch: 0, dist: 0 },
+    { focus: new THREE.Vector3(), yaw: 0, pitch: 0, dist: 0 },
+  ];
   private w = 1;
   private h = 1;
-  /** Seconds the shared framing has been failing (debounce). */
-  private strain = 0;
   /** Camera shake per player (decays). */
   private readonly shakeAmt: [number, number] = [0, 0];
   private shakeT = 0;
@@ -364,9 +416,6 @@ export class Views {
     this.shared.snap(this.solo ? [targets[0]] : targets, t, aspect, this.camera.fov);
     this.rigs.forEach((r, p) => r.snap([targets[p]], t, aspect / 2, this.camera.fov));
     this.split = 0;
-    this.splitting = false;
-    this.strain = 0;
-    this.calm = 0;
   }
 
   setSize(w: number, h: number): void {
@@ -375,8 +424,8 @@ export class Views {
   }
 
   /**
-   * Per-frame: pick each rig's mode from what the cars are doing, decide whether the screen should
-   * be split, and ease the split in or out.
+   * Per-frame: pick each rig's mode from what the cars are doing, and split the screen while two
+   * players race (`racing`: from GO until the results), easing it apart or back together.
    */
   update(dt: number, t: number, targets: [ViewTarget, ViewTarget], racing: boolean): void {
     const aspect = this.w / this.h;
@@ -387,6 +436,8 @@ export class Views {
         const ph = targets[p].phase;
         this.rigs[p].setMode(ph === 'flight' || ph === 'splashed' || ph === 'dnf' ? (ph === 'dnf' ? 'stalled' : 'side') : 'chase');
       }
+      // The shared view is on screen racing solo; with two players it stays on both cars so the
+      // results can come back together from it.
       const flying = live.some((c) => c.phase === 'flight' || c.phase === 'splashed');
       const allDone = live.every((c) => c.phase === 'flight' || c.phase === 'splashed' || c.phase === 'dnf');
       const nearLip = live.every((c) => c.phase !== 'race' || (C.lip !== null && inLipFrame(c.pos).a > -NEAR_LIP && Math.abs(inLipFrame(c.pos).l) < 20));
@@ -395,75 +446,18 @@ export class Views {
     this.shared.update(dt, t, live, aspect, fov);
     this.rigs[0].update(dt, t, [targets[0]], aspect / 2, fov);
     this.rigs[1].update(dt, t, [targets[1]], aspect / 2, fov);
-
-    // Should we be split? Only while racing: the rigs disagree about the mode, or the shared chase
-    // can't fit both cars (checked on the real projection, with some slack before splitting).
-    let want = false;
-    if (racing && !this.solo) {
-      const modes = [this.rigs[0].mode, this.rigs[1].mode];
-      const sameMode = modes[0] === modes[1] || this.shared.mode === 'side';
-      let fits = true;
-      if (this.shared.mode === 'chase') {
-        fits = this.shared.need <= MAX_SHARED_DIST && this.bothVisible(targets, 0.84);
-        // Coming back together needs more room (hysteresis).
-        if (this.splitting) fits = this.shared.need <= MAX_SHARED_DIST - 5 && this.bothVisible(targets, 0.62);
-      } else if (this.shared.mode === 'side') {
-        fits = targets.every((c) => c.phase !== 'race' || (C.lip !== null && inLipFrame(c.pos).a > -NEAR_LIP - 5 && Math.abs(inLipFrame(c.pos).l) < 20));
-      }
-      want = !sameMode || !fits;
-    }
-    if (want) {
-      this.strain += dt;
-      this.calm = 0;
-    } else {
-      this.calm += dt;
-      this.strain = 0;
-    }
-    const was = this.splitting;
-    if (!this.splitting && this.strain > 0.3) this.splitting = true;
-    if (this.splitting && this.calm > 0.6) this.splitting = false;
-    if (!racing) this.splitting = false;
-    // A move starting from rest picks whose view carries on: the one most like the shared view. For
-    // the shared chase camera that's whoever is still on the road, else whoever is behind (it looks
-    // over their shoulder); for the shared side-on view, whoever is already flying.
-    if (this.splitting !== was && (this.split < 0.001 || this.split > 0.999)) {
-      const onRoad = targets.map((c) => c.phase === 'race' || c.phase === 'grid' || c.phase === 'finished');
-      const behind = targets[0].prog <= targets[1].prog ? 0 : 1;
-      if (onRoad[0] === onRoad[1]) this.anchor = behind;
-      else if (this.shared.mode === 'side') this.anchor = onRoad[0] ? 1 : 0;
-      else this.anchor = onRoad[0] ? 0 : 1;
-    }
-    const speed = 1 / SPLIT_TIME;
-    this.split = Math.min(1, Math.max(0, this.split + (this.splitting ? speed : -speed) * dt));
+    const dir = racing && !this.solo ? 1 : -1;
+    this.split = Math.min(1, Math.max(0, this.split + (dir * dt) / SPLIT_TIME));
     this.shakeT += dt;
     for (const p of [0, 1] as const) this.shakeAmt[p] *= Math.exp(-6 * dt);
-    this.divider.style.left = `${this.dividerX().toFixed(1)}px`;
+    // The divider grows out from the middle as the halves part (and shrinks as they rejoin).
     this.divider.classList.toggle('on', this.isSplit);
-  }
-
-  /** Where the divider is (CSS px from the left): sliding in from the side of the player who isn't
-   *  carrying on, to the middle. */
-  private dividerX(): number {
-    const e = this.ease();
-    return this.anchor === 1 ? (this.w / 2) * e : this.w - (this.w / 2) * e;
+    this.divider.style.scale = `1 ${Math.min(1, this.split * 3).toFixed(3)}`;
   }
 
   private ease(): number {
     const x = this.split;
     return x * x * (3 - 2 * x);
-  }
-
-  /** Both cars inside the shared view, within `limit` of the edges in NDC. */
-  private bothVisible(targets: ViewTarget[], limit: number): boolean {
-    const cam = this.configure(this.camera, this.shared.cur, this.w, this.h, null);
-    for (const tg of targets) {
-      if (tg.phase !== 'race' && tg.phase !== 'grid' && tg.phase !== 'finished') continue;
-      this.tmp.copy(tg.pos);
-      this.tmp.y += 0.8;
-      this.tmp.project(cam);
-      if (this.tmp.z > 1 || Math.abs(this.tmp.x) > limit || this.tmp.y > limit || this.tmp.y < -limit - 0.08) return false;
-    }
-    return true;
   }
 
   /** Point a camera at a pose; `win` = which vertical strip of a w×h frustum it shows (null: all). */
@@ -491,27 +485,20 @@ export class Views {
     return cam;
   }
 
-  /** The pose each half shows right now, and which strip of a full-screen frustum it draws. */
-  private panePose(p: 0 | 1): { pose: Pose; offX: number; wp: number } {
+  /** The pose a half shows right now, and which strip of a full-screen frustum it draws: its own
+   *  half of the shared view as the split starts, easing into its player's camera, centred. */
+  private panePose(p: 0 | 1): { pose: Pose; offX: number } {
     const e = this.ease();
-    const wp = this.pane(p).w;
-    const own = this.rigs[p].cur;
-    if (p !== this.anchor) {
-      // Sliding in (or out) from its own side: its finished view, stuck to the divider.
-      return { pose: own, offX: p === 0 ? (3 * this.w) / 4 - wp : this.w / 4, wp };
-    }
-    // Carrying on: the shared view, cropped where the other half comes in, easing into this
-    // player's own camera, centred in its half.
     const a = this.shared.cur;
-    const pose: Pose = {
-      focus: this.tmp2.copy(a.focus).lerp(own.focus, e).clone(),
-      yaw: lerpAngle(a.yaw, own.yaw, e),
-      pitch: a.pitch + (own.pitch - a.pitch) * e,
-      dist: a.dist + (own.dist - a.dist) * e,
-    };
-    const crop = p === 0 ? 0 : this.w - wp;
-    const centred = (this.w - wp) / 2;
-    return { pose, offX: crop + (centred - crop) * e, wp };
+    const own = this.rigs[p].cur;
+    const pose = this.blend[p];
+    pose.focus.copy(a.focus).lerp(own.focus, e);
+    pose.yaw = lerpAngle(a.yaw, own.yaw, e);
+    pose.pitch = a.pitch + (own.pitch - a.pitch) * e;
+    pose.dist = a.dist + (own.dist - a.dist) * e;
+    const half = this.w / 2;
+    const crop = p === 0 ? 0 : half;
+    return { pose, offX: crop + (half / 2 - crop) * e };
   }
 
   /** Whether the screen is (even partly) split. */
@@ -519,11 +506,11 @@ export class Views {
     return this.split > 0.001;
   }
 
-  /** Where each player's view is on screen (the whole screen when not split). */
+  /** Where each player's view is on screen: their half when split, else the whole screen. */
   pane(p: 0 | 1): Pane {
     if (!this.isSplit) return { x: 0, y: 0, w: this.w, h: this.h };
-    const x = this.dividerX();
-    return p === 0 ? { x: 0, y: 0, w: x, h: this.h } : { x, y: 0, w: this.w - x, h: this.h };
+    const half = this.w / 2;
+    return { x: p === 0 ? 0 : half, y: 0, w: half, h: this.h };
   }
 
   /** The camera that draws a player's pane (or the whole screen). */
@@ -553,10 +540,9 @@ export class Views {
     }
     renderer.setScissorTest(true);
     for (const p of [0, 1] as const) {
-      const { pose, offX, wp } = this.panePose(p);
-      const cam = this.configure(this.paneCams[p], pose, w, h, { x: offX, w: Math.max(wp, 1) }, this.shakeAmt[p]);
-      if (wp < 0.5) continue;
-      const x = this.pane(p).x;
+      const { pose, offX } = this.panePose(p);
+      const { x, w: wp } = this.pane(p);
+      const cam = this.configure(this.paneCams[p], pose, w, h, { x: offX, w: wp }, this.shakeAmt[p]);
       renderer.setViewport(x, 0, wp, h);
       renderer.setScissor(x, 0, wp, h);
       before(cam, p);

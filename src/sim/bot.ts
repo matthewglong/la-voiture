@@ -5,7 +5,7 @@
 import { DS, deltaS, indexAt, locate, pointAt, toWorld, type Course, type CoursePoint } from '../track';
 import type { PlayerIndex } from '../types';
 import { G, brakeDecel, cornerGrip, cornerSpeed, driftGrip, flatLoad, maxYawRate, topSpeedIn, windAlong } from './physics';
-import { DRIFT_MIN, TOPUP, type CarInput, type ItemKind, type RaceCar, type RaceSim } from './race';
+import { DRIFT_MIN, IPO_LIP, TOPUP, type CarInput, type ItemKind, type RaceCar, type RaceSim } from './race';
 
 interface Line {
   /** Lateral offset of the line at each course sample. */
@@ -479,6 +479,16 @@ export class Bot {
     if (this.opt.items && car.items.length) {
       const rival = sim.cars.find((o) => o !== car && o.phase === 'race');
       const lip = c.lip;
+      // A crab goes straight down the road: throw it at a rival close ahead and in line with it (the
+      // car pointing down the road), or back at one close behind.
+      const crabAim = ((): 'ahead' | 'back' | null => {
+        if (!rival || Math.abs(rival.d - car.d) > 2.2) return null;
+        const gap = rival.prog - car.prog;
+        const straight = Math.abs(wrap(car.heading - pointAt(c, car.s, this.tmp).heading)) < 0.25;
+        if (gap > 4 && gap < 45 && straight) return 'ahead';
+        if (gap < -3 && gap > -25) return 'back';
+        return null;
+      })();
       const worth = (it: ItemKind): boolean => {
         if (it === 'grit') return !!threat || (lip !== null && car.s > lip.runupS0);
         if (it === 'jump') {
@@ -492,13 +502,19 @@ export class Bot {
         const runway = lip ? (c.length - car.s) / Math.max(v, 5) : Infinity;
         if (it === 'topup') return car.boostFrac < 0.45 && runway > car.boost + TOPUP * k.boostCap + 0.5;
         if (it === 'refill') return car.boostFrac < 0.15 && runway > k.boostCap + 0.5;
+        if (it === 'crab') return crabAim !== null;
+        // IPO coin: well behind, on the road, with room to ride it before the kicker.
+        if (it === 'ipo') return car.grounded && (rival === undefined || behind < -25) && (!lip || car.s < lip.rampS0 - IPO_LIP - 15);
         // Seagull: at a rival that's ahead (or, late on, behind), while they're still well short of the lip.
         if (!lip) return rival !== undefined && behind < -4;
         return rival !== undefined && rival.s < lip.rampS0 - 30 && (rival.s > car.s + 4 || car.s > lip.runupS0 - 70);
       };
       const sel = car.items[car.sel];
       const other = car.items.length > 1 ? car.items[1 - car.sel] : null;
-      if (worth(sel)) out.item = !this.lastItem;
+      if (worth(sel)) {
+        out.item = !this.lastItem;
+        out.back = sel === 'crab' && crabAim === 'back';
+      }
       else if (other && worth(other) && !this.lastSwap) out.swap = true;
     }
     this.lastItem = out.item;

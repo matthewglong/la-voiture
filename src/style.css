@@ -1238,6 +1238,62 @@ kbd {
   box-shadow: 0 0 0 0.22rem #27b7ff, var(--shadow);
 }
 
+.blind {
+  position: absolute;
+  pointer-events: none !important;
+  overflow: hidden;
+}
+
+.blind svg {
+  width: 100%;
+  height: 100%;
+  fill: #4b2e15;
+  filter: drop-shadow(0 0.3rem 0.4rem rgba(40, 22, 6, 0.35));
+}
+
+/* Slapped on with a bounce, then sliding slowly down the glass. */
+.blind .splat {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    splat-in 0.32s cubic-bezier(0.2, 1.6, 0.4, 1) backwards,
+    splat-slide 5s ease-in forwards;
+}
+
+.blind .drip {
+  transform-box: fill-box;
+  transform-origin: top;
+  animation: drip-grow 3.5s ease-out backwards;
+}
+
+.blind .sheen {
+  fill: #6e4422;
+  opacity: 0.55;
+}
+
+.blind .glint {
+  fill: #fff;
+  opacity: 0.35;
+}
+
+@keyframes splat-in {
+  from {
+    scale: 0.2;
+  }
+}
+
+@keyframes splat-slide {
+  to {
+    translate: 0 var(--slide);
+  }
+}
+
+@keyframes drip-grow {
+  from {
+    scale: 1 0.1;
+  }
+}
+
 .hud-car.gull {
   box-shadow: 0 0 0 0.25rem #f3efe4, 0 0 0 0.4rem var(--line), var(--shadow);
 }
@@ -1634,6 +1690,8 @@ kbd {
 
 /* ---------- Split screen divider ---------- */
 
+/* The seam between the two views, so under everything the HUD draws: it grows through the "GO!"
+   and shrinks behind the results card. */
 .split-divider {
   position: absolute;
   top: 0;
@@ -1645,7 +1703,6 @@ kbd {
   box-shadow: 0 0 0 0.14rem var(--line), 0 0 1.2rem rgba(22, 32, 58, 0.45);
   opacity: 0;
   pointer-events: none;
-  z-index: 1;
 }
 
 .split-divider.on {

@@ -46,7 +46,8 @@ export interface SurfaceGrip {
   cap: number;
 }
 
-/** Every surface, the same on every map (a course says where each one is: see Surface). */
+/** Every surface, the same on every map (a course says where each one is: see Surface). Boosting,
+ *  only the grip counts: the rocket needs none, so it ploughs through at road speed (see race.ts). */
 export const SURFACES: Record<Surface, SurfaceGrip> = {
   paved: { grip: 1, top: 1, drag: 0, cap: Infinity },
   // A lawn: about half speed (and never more than about 30 km/h), and slidey.

@@ -15,8 +15,78 @@ on a new map, and the code was restructured so events and maps can be added: "Tw
 Then the structure was finished off so that maps, modes and physics are each defined once and
 shared: "One game, many maps" (it overrides parts of "Two events, and maps"). Most recently a third
 venue, the lap race "Old Stomping Grounds", brought chunked courses, surfaces, dogs, streetcars and
-shared city scenery with it: its section comes first of all. The older sections that still hold are
-kept after them.
+shared city scenery with it. Then a stronger boost that ploughs through grass, a seagull that
+lifts the leader and poo that blinds: "Boost, seagull and poo". Latest, a green shell and a Bullet
+Bill in San Francisco dress: "Crab and IPO coin" comes first of all. The older sections that still
+hold are kept after them.
+
+## Crab and IPO coin
+
+The request: Mario Kart's items, San Francisco style. The red shell was already covered (the seagull
+homes in on the car ahead; with two cars, red and blue shells are the same thing), so: "a dungeness
+crab [as] the green shells", and "a magic bullet which is an 'IPO' coin".
+
+- **🦀 Crab.** Thrown off the nose at 32 m/s (at least 10 m/s faster than the car) in a straight
+  line along the road, within 0.35 rad of the road's direction wherever the car points (any wider
+  and it only zigzags across). It bounces off the kerbs and goes on for 5 s, then burrows. Holding
+  the brake throws it off the tail back up the road (at 24 m/s; `CarInput.back` for the CPU, so it
+  needn't brake). It moves in course coordinates, so it follows the bends rather than hitting the
+  first wall in world space. Waymos, trams and another crab stop it; tourists it scuttles between.
+  The first car it touches spins out as on poo (no windscreen splat) and loses 10 HYPE; the thrower
+  gets 8. After 0.5 s it can get its own thrower. Determination or an IPO coin shrugs it off.
+- **🪙 IPO coin.** For 4.5 s the car rides a giant spinning coin on rails down the road (speeding up
+  to 34 m/s, 122 km/h), steering round a tram in the way and ploughing through everything else as
+  Determination does, without spending it: Waymos, tourists, poo, seagulls, crabs and the rival (who
+  takes the whole shove). A spin-out or stun ends when it starts. When it ends the car is back on its
+  own at no more than its own top speed. It lets go 30 m short of the kicker's foot, and can't be
+  started closer than 45 m or rolled closer than 90 m, so the jump is always the car's own. It is
+  kinematic (`ipoRide` instead of `drive`), so no car physics changed.
+- **Odds** (jump / Determination / poo / +50% / full / seagull / crab / IPO): leading
+  26/8/36/18/1/3/14/0 (poo was 44), within 30 m 22/18/20/22/4/14/18/0, 30-90 m back
+  16/24/6/26/10/18/8/6, further back 12/20/4/22/10/16/4/20; solo 34/20/0/36/10/0/0/0. Racing solo
+  there's no crab or coin.
+- **The CPU** throws a crab at a rival 4-45 m ahead within 2.2 m of its line (pointing down the road),
+  or back at one 3-25 m behind, and rides a coin 25 m or more behind. In 30 CPU races per map, 80%
+  of thrown crabs landed and a coin ride gained a median 43-69 m.
+- **Looks.** The crab is a toy cooked Dungeness (orange shell, white-tipped claws up, eyes on stalks),
+  charging claws first with a sideways swagger so the chase camera sees its wide back. The coin is a
+  gold coin stamped IPO with a green line going up, spinning like a video-game pickup with the car
+  hidden inside, shedding coins and bills. Sounds: claws clattering, a snip, a cash register.
+
+## Boost, seagull and poo
+
+The feedback: the boost "doesn't appear to actually make the car go any faster"; it should be
+stronger and "power through grass better" (after a first pass: "still isn't making it through the
+grass very well"); the seagull "should spawn closer to the first place player and lift them up into
+the air before dropping them"; slipping on poo "should obscure visibility for 5 seconds as well".
+
+- **Physics is the same in every mode.** The user's hard constraint: the stronger boost is stronger
+  in the long jump too (a per-mode boost was started and stopped). Nor is there a ceiling on how far
+  a jump may go, so `balance.ts`'s flight targets (best builds 80-180 m, the all-$0 build's splash,
+  flights of at most 7 s) now fail and are informational, not targets.
+- **Boost** (`BOOST_ACC` 10 m/s², was 6; `BOOST_TOP` 1.35, was 1.1). It used to fade out between
+  0.88× and 1.1× top speed, so pressed at a cruise it added about 10%: a sedan went 89 → 100 km/h.
+  Now 89 → 124 km/h.
+- **Boost off the road.** The rocket needs no grip, so a boosting car ignores a surface's top speed,
+  cap and bleed: a sedan arriving at 90 km/h and boosting is at 124 km/h after 3 s on the road, on
+  grass and in long grass alike (without boost: 29 on grass, 9 in long grass). Only the grip still
+  counts. Tried first: a per-surface share of road speed (grass 0.6, about 75 km/h; long grass left
+  alone), which the user found still didn't get through (Alamo Square's lawns are 60% long grass).
+  This loosens "Cutting across mustn't pay, except in the air": a boost now ploughs through too, for
+  as long as the bottle lasts (1.5-4.5 s).
+- **Seagull.** It hunts the race leader (the car in second if the thrower leads), let loose 30 m
+  behind its target rather than beside the thrower. On a hit it hauls the car up 5 m over 1.4 s and
+  lets go: the car drops and lands hard (about 10 m/s, a little speed lost), with no air time or
+  HYPE for it. It used to cut the throttle and weave the steering for 1.8 s. Found on the way: it
+  closed in to 6.9 m and dived from inside 7 m, but a car faster than about 12 m/s gains over 0.1 m
+  a step, so the gull chased forever and never landed at racing speed. It now closes to 5 m.
+- **Poo** also splatters the windscreen, like ink in Mario Kart: for 5 s a handful of big glossy
+  brown splats, with flecks and drips, cover parts of that player's screen, with clear glass between
+  them and no tint over the rest (`blindT`; the HUD's `.blind`, a fresh random SVG each hit). They
+  slide slowly down the glass and fade out over the last second. The CPU doesn't see them.
+- **The run-off stops any car.** With the stronger boost, cars crossed a point-to-point finish line
+  faster than their brakes could stop them in the smoke test's 70 m run-off; past the flag, speed is
+  now held to what a 9 m/s² stop allows (`RUNOFF_ARREST`).
 
 ## Old Stomping Grounds
 
@@ -93,7 +163,7 @@ out; jumps "here or there" (stairs, crests, walls); dogs that chase you; the N J
   more than 8 m/s (about 30 km/h, whatever the engine: a jet on a lawn is still on a lawn), and speed
   over that bleeds away at 1.4/s (onto the lawn at speed, you're slowed to its pace in a second or
   two, not stopped dead); rough (long grass and planted beds) is a crawl, 2.5 m/s, and grabs the
-  wheels. The grip factor scales everything the tyres do (cornering, traction, braking, the drift's
+  wheels. A boosting car ignores all but the grip (see "Boost, seagull and poo"). The grip factor scales everything the tyres do (cornering, traction, braking, the drift's
   bite). The CPU's racing line keeps to the paved band. Grass clippings fly from the wheels. Paved
   everywhere, every factor is exactly 1 and the existing maps' races are bit-identical.
 - **Open ground** (`src/openGround.ts`, `course.open`): a park the course runs through that a car can
@@ -128,7 +198,8 @@ out; jumps "here or there" (stairs, crests, walls); dogs that chase you; the N J
   wide beyond a mown strip along each path wherever a cut from it could pay. Measured: straight
   across takes a V8 40 s against 25 on the paths (a jet 34 against 24, a lawnmower 48 against 29),
   and the best line a route search can find through the park, lawn allowed, gains about a second
-  over the paths alone (clipping corners on the mown strips).
+  over the paths alone (clipping corners on the mown strips). A boost now ploughs through too (see
+  "Boost, seagull and poo").
 - **The crawl** (`CRAWL_SPEED` 4 m/s, `CRAWL_GRADE` 0.12, `CRAWL_ACC` 2.5 m/s²): on the gas, not
   sliding or spun, on a climb steeper than 12%, a car never drops below walking pace: its lowest gear
   pulls anything up any hill a course may have. It's why the lawnmower gets up the 25% Duboce wall.
@@ -1096,30 +1167,44 @@ rounds won.
   the course**, not along the car's nose, averaging the course direction ahead (and over 60 m on
   Lombard, so the hairpins and spin-outs don't whip the view round). On Lombard the camera rises to
   42° and backs off.
+- **Off the road it follows the car.** The problem: the camera turned into corners before the car
+  did and, taking a shortcut, faced wherever the course went rather than where you were going (the
+  car's place on the course can jump to whichever path or leg is nearest, and the camera looked
+  16–40 m down the course from there). From 1.5 m past the paved edge to 6 m (eased over about
+  0.4 s, since a hop between legs is sudden) it blends from the course's direction to the car's own,
+  and the wide-view framing and the tilt with the road give way to what it had on the road. The
+  car's own direction is its nose below 5.5 m/s (stopped, turning round, reversing: reversing tops
+  out at 5, so it never swings the camera round) and its velocity from 10 (a slide or a spin at
+  speed keeps it on the way the car is going), and it never turns faster than 90°/s, so a car
+  spinning on the spot doesn't spin the view. On the road nothing changed: CPU laps spend 0.2% of
+  the time past 1.5 m, on the Old Stomping Grounds only.
 - The shared rig sits behind the trailing car and looks between the cars, zooming out and tilting
-  down as they string out.
-- **Splitting:** when the shared rig can't frame both cars (it would need to be more than 30 m back,
-  or either car's projection nears the screen edge) for 0.3 s, the screen splits: Player 1 left,
-  Player 2 right, matching the HUD cards, the garage panels and the keyboard. The shared chase camera
-  already sits behind the trailing car, so **that player's view carries on**: the divider slides in
-  from the other side over 0.5 s, cropping it (an off-centre projection with `setViewOffset`, so
-  nothing on it moves), while it eases into that player's own camera. **The leader's view slides in
-  attached to the divider**, already their own camera.
-- **Healing:** when both cars would fit again (with some margin) for 0.6 s, the same move runs
-  backwards: the leader's half slides out to its side and the trailing player's half widens back into
-  the shared view. (If only one car is still on the road, that car's view is the one that carries
-  on.)
-- The first version eased both halves at once, from their halves of the shared view to the players'
-  cameras. It was seamless at the two ends, but in between two overlapping blends of the same scene
-  sat side by side: with the cars running one behind the other down the middle, both halves showed
-  both cars, twice, at slightly different places.
+  down as they string out. It fills the screen in the garage, through the countdown and behind the
+  results.
+- **Always split for two.** The request: "ALWAYS split screen during two player play", looking like
+  one screen until the countdown is over, with the merging and unmerging taken out. So two cars race
+  split from GO until the results, Player 1 left and Player 2 right (matching the HUD cards, the
+  garage panels and the keyboard), through the flight too, however close they are. Against the CPU
+  it splits as well (the CPU has Player 2's seat); racing solo it never does.
+- **The split at GO:** the grid has Player 1 on the left, side by side with Player 2, so the screen
+  splits down the middle of the shared view. Each half starts as exactly its half of it (an
+  off-centre projection with `setViewOffset`, so nothing moves) and eases over 0.5 s into its
+  player's own camera, centred, while the divider grows out from the middle. For the results the
+  same move runs backwards into the shared view. The divider sits under the HUD, so it never cuts
+  through the "GO!" or the results card.
+- **Before that,** the screen split only when the shared rig couldn't frame both cars (more than 30 m
+  back, or a car near the edge, for 0.3 s): the trailing player's view carried on, cropped by a
+  divider sliding in from the other side, with the leader's view attached to it, and it healed the
+  same way when they fitted again for 0.6 s. Easing both halves at once, as now, had been tried for
+  that and dropped: with the cars one behind the other down the middle, both halves showed both
+  cars, twice, at slightly different places. At GO the cars are side by side, one in each half, so
+  the halves start as two different parts of one picture and never look like two copies of it.
 - A Voronoi split (a divider at any angle) was considered: it suits a top-down camera, but with
   forward-looking chase cameras each player's half ends up on the wrong side for seeing ahead.
-- **Flight:** each player's rig swings to the side-on flight view when their car launches; if the
-  other car is still racing, the screen stays split (flight on one side, the race on the other). Once
-  both are in the air or within 25 m of the lip, the shared rig frames them together and the screen
-  heals. (At 60 m the shared side view took over while a car was still racing along the pier, as a
-  speck.)
+- **Flight:** each player's rig swings to the side-on flight view when their car launches. Once both
+  are in the air or within 25 m of the lip, the shared rig frames them together side-on (at 60 m it
+  took over while a car was still racing along the pier, as a speck); racing solo that's the view,
+  and with two players it's what the results come back together into.
 - **See-through traffic:** just before each view is drawn, any Waymo (or the cable car) that the
   camera is within 1.5 m of, or that stands between the camera and a car that view follows, swaps to
   dithered see-through versions of its materials (`alphaHash`, so there's nothing to sort). A camera

@@ -8,11 +8,12 @@ splash wins.
 You drive: the gas, the brakes and the wheel are yours. Tap the brake while turning to **drift**
 through the corners, which fills your **boost** bottle; hold boost for a rocket push, and empty it
 on the pier for a bigger jump. Dodge Waymos and wobbly tourists, grab item boxes (hold two, swap
-between them: 🦘 Jump, 😤 Determination, 💩 Poo, ⚡ Boost +50%, 🌟 Full boost, 🐦 Seagull), shove your
+between them: 🦘 Jump, 😤 Determination, 💩 Poo, ⚡ Boost +50%, 🌟 Full boost, 🐦 Seagull, 🦀 Crab,
+🪙 IPO coin), shove your
 rival, catch air over the intersections, and build **HYPE** as you go: it boosts your launch off the
 kicker. Get there first, too: the kicker drops the moment the first car is off it, so whoever is
-behind launches lower. When the cars get too far apart for one camera, the screen splits smoothly into two, and it
-heals back into one when they come together again. Playing alone? Race the CPU, or train solo
+behind launches lower. The countdown shows both cars on one screen; at GO it splits down the middle, Player 1 on the
+left and Player 2 on the right, until the results. Playing alone? Race the CPU, or train solo
 against a ghost of your best run.
 
 Or race the same run: the **Russian Hill sprint** is the same streets, traffic and kicker, but the
@@ -28,7 +29,8 @@ past the Painted Ladies themselves, down Hayes through Hayes Valley's shops and 
 over the Mint's hill to Duboce Ave and the N Judah, through Duboce Park, up the Duboce wall and over
 Buena Vista's summit, down its switchbacks (hop the stone walls if you dare) and back to Haight.
 Alamo Square and Duboce Park are open: drive anywhere in them, but the grass is slow, the long grass
-a crawl and the trees and benches solid, so a cut only pays if you jump it; the dogs chase you.
+a crawl (unless you're boosting) and the trees and benches solid, so a cut pays only if you jump it or
+boost through it; the dogs chase you.
 
 Built with Vite, TypeScript and Three.js. Everything is procedural (geometry, textures, sound), and
 there is no backend.
@@ -124,9 +126,14 @@ landings, shoves, the launch and the splash (Chrome and Edge).
 - **Items** from the rainbow boxes. You hold two: the item key uses the one in the big slot, the swap
   key switches them. **🦘 Jump** hops over anything (used on the kicker it's a slightly higher
   launch), **😤 Determination** ploughs through the next thing you hit (a Waymo, a tourist, poo, a
-  seagull, or your rival), **💩 Poo** drops behind you and spins out whoever drives through it,
+  seagull, a crab, or your rival), **💩 Poo** drops behind you, spins out whoever drives through it and
+  splatters their screen for 5 seconds,
   **⚡ Boost +50%** refills half your bottle, **🌟 Full boost** (rare) fills it, and **🐦 Seagull**
-  chases your rival down the road and flaps on their windscreen. The leader tends to get poo, the
+  swoops on the leader (or whoever's second, if that's you), carries them up into the air and drops
+  them. **🦀 Crab** (a green shell) scuttles straight down the road, bouncing off the kerbs, and
+  spins out the first car it meets (yours too, if it comes back round); hold brake to throw it
+  backwards. **🪙 IPO coin** (only when you're well behind) carries you down the road for 4.5 s at
+  122 km/h, straight through traffic, tourists and your rival. The leader tends to get poo, the
   chaser gets comebacks.
 - **Hedge hop:** on Lombard, turn across the inside of a hairpin and jump. Land on the next leg and
   you touch down lined up with the road at full speed: a well-aimed hop is worth half a second or

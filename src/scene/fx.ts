@@ -1,7 +1,8 @@
 // Race effects: pooled particles (sparks, dust, tyre smoke, confetti, splats), skid marks laid on
-// the road while the tyres slide, dizzy stars over a spun-out car, and a golden aura while a car
-// is Determined.
+// the road while the tyres slide, dizzy stars over a spun-out car, a golden aura while a car
+// is Determined, and the giant spinning coin a car rides after its IPO.
 import * as THREE from 'three';
+import { canvasTexture } from './util';
 
 interface Particle {
   p: THREE.Vector3;
@@ -96,6 +97,15 @@ export class Particles {
     for (let i = 0; i < n; i++) {
       const v = new THREE.Vector3((Math.random() - 0.5) * 7, 4 + Math.random() * 5, (Math.random() - 0.5) * 7);
       this.spawn(at, v, cols[i % cols.length], 0.12, 1.2 + Math.random() * 0.6, { grav: 5, drag: 1.2 });
+    }
+  }
+
+  /** Money (an IPO): gold coins and green bills flung up and fluttering down. */
+  cash(at: THREE.Vector3, n: number, spread = 6): void {
+    for (let i = 0; i < n; i++) {
+      const v = new THREE.Vector3((Math.random() - 0.5) * spread, 3 + Math.random() * 5, (Math.random() - 0.5) * spread);
+      const coin = i % 3 === 0;
+      this.spawn(at, v, coin ? '#ffc933' : i % 2 ? '#5fae5a' : '#86c77a', coin ? 0.14 : 0.18, 1.1 + Math.random() * 0.7, { grav: coin ? 7 : 3, drag: coin ? 0.8 : 2 });
     }
   }
 
@@ -350,5 +360,103 @@ export class Aura {
     this.mesh.rotation.set(0, -heading, 0);
     const s = 1 + 0.05 * pulse;
     this.mesh.scale.set((length / 2 + 0.5) * s, 1.15 * s, (width / 2 + 0.5) * s);
+  }
+}
+
+/**
+ * The IPO coin: a giant gold coin stamped IPO, spinning like a video-game pickup as it carries a
+ * car down the road (the car itself is hidden inside it). It pops in and out.
+ */
+export class IpoCoin {
+  readonly group = new THREE.Group();
+  private readonly coin: THREE.Mesh;
+  private level = 0;
+  private spin = 0;
+
+  constructor() {
+    const R = 1.5;
+    const geo = new THREE.CylinderGeometry(R, R, 0.36, 48, 1);
+    geo.rotateX(Math.PI / 2);
+    const gold = { color: '#ffffff', metalness: 0.55, roughness: 0.3, emissive: '#7a5200', emissiveIntensity: 0.45 };
+    const face = canvasTexture(512, 512, (ctx, w, h) => {
+      const g = ctx.createRadialGradient(w * 0.38, h * 0.34, w * 0.05, w / 2, h / 2, w / 2);
+      g.addColorStop(0, '#fff3b0');
+      g.addColorStop(0.55, '#ffcc2e');
+      g.addColorStop(1, '#d99100');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+      // A raised rim.
+      ctx.lineWidth = 26;
+      ctx.strokeStyle = '#e8a50c';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, w / 2 - 30, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = '#fff1a8';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, w / 2 - 46, 0, Math.PI * 2);
+      ctx.stroke();
+      // IPO, and the line going up.
+      ctx.font = '900 170px "Arial Rounded MT Bold", "Arial Black", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#b87400';
+      ctx.fillText('IPO', w / 2 + 6, h * 0.44 + 6);
+      ctx.fillStyle = '#fff6c4';
+      ctx.fillText('IPO', w / 2, h * 0.44);
+      ctx.lineWidth = 18;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#1f9d55';
+      ctx.beginPath();
+      ctx.moveTo(w * 0.28, h * 0.74);
+      ctx.lineTo(w * 0.42, h * 0.66);
+      ctx.lineTo(w * 0.52, h * 0.7);
+      ctx.lineTo(w * 0.7, h * 0.58);
+      ctx.stroke();
+      ctx.fillStyle = '#1f9d55';
+      ctx.beginPath();
+      ctx.moveTo(w * 0.75, h * 0.54);
+      ctx.lineTo(w * 0.64, h * 0.555);
+      ctx.lineTo(w * 0.71, h * 0.64);
+      ctx.fill();
+    });
+    // (The caps' texture comes out a quarter turn round: stand IPO upright.)
+    face.center.set(0.5, 0.5);
+    face.rotation = Math.PI / 2;
+    // The milled edge.
+    const edge = canvasTexture(
+      256,
+      32,
+      (ctx, w, h) => {
+        ctx.fillStyle = '#f2b51c';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#c98a00';
+        for (let x = 0; x < w; x += 8) ctx.fillRect(x, 0, 3, h);
+      },
+      { repeat: [6, 1] },
+    );
+    const faceMat = new THREE.MeshStandardMaterial({ ...gold, map: face });
+    const edgeMat = new THREE.MeshStandardMaterial({ ...gold, map: edge });
+    this.coin = new THREE.Mesh(geo, [edgeMat, faceMat, faceMat]);
+    this.coin.castShadow = true;
+    this.coin.position.y = R + 0.15;
+    this.group.add(this.coin);
+    this.group.visible = false;
+  }
+
+  /** `on` while the car rides it; `at` and `heading` are the car's. */
+  update(dt: number, on: boolean, at: THREE.Vector3, heading: number): void {
+    this.level += ((on ? 1 : 0) - this.level) * Math.min(1, dt * (on ? 10 : 14));
+    const shown = this.level > 0.02;
+    this.group.visible = shown;
+    if (!shown) return;
+    this.spin += dt * 9;
+    this.group.position.copy(at);
+    this.group.rotation.set(0, -heading + this.spin, 0);
+    // Pops in with a little overshoot.
+    const pop = on ? 1 + Math.sin(Math.min(1, this.level) * Math.PI) * 0.15 : this.level;
+    this.group.scale.setScalar(Math.max(0.001, this.level * pop));
+    this.coin.position.y = 1.65 + Math.sin(this.spin * 0.7) * 0.12;
   }
 }

@@ -88,9 +88,9 @@ const DRIFT_RELEASE = 0.3;
 export const DRIFT_CHARGE = 0.5;
 // Boost: a rocket push from the bottle while the boost key is held.
 /** Push at full thrust (m/s², the same for every car). */
-export const BOOST_ACC = 6;
+export const BOOST_ACC = 10;
 /** How far past the engine's top speed boost can take the car (× top speed); it fades on the way. */
-export const BOOST_TOP = 1.1;
+export const BOOST_TOP = 1.35;
 /** Item top-up: share of the bottle it refills. */
 export const TOPUP = 0.5;
 /** How fast the nose eases back along the road when nobody is steering (rad/s). */
@@ -109,14 +109,38 @@ export const STRAGGLER_TIME = 25;
 const CRUISE_SPEED = 11;
 /** Past a point-to-point finish line, a car eases to a stop this far (m) short of the road's end. */
 const RUNOFF_STOP = 6;
+/** However fast it crossed the line, the run-off stops it by then, like a gravel trap (m/s²). */
+const RUNOFF_ARREST = 9;
 const ROULETTE_TIME = 0.9;
 /** Items a car can hold at once. */
 export const ITEM_SLOTS = 2;
 const GRIT_TIME = 12;
-/** Seagull: flying speed (m/s), how long it pesters the car it lands on, and how long it may hunt. */
+/** Seagull: flying speed (m/s), how long it carries the car it lands on, and how long it may hunt. */
 const GULL_SPEED = 44;
-const GULL_TIME = 1.8;
+const GULL_TIME = 1.4;
 const GULL_LIFE = 8;
+/** How high (m) a seagull hauls its catch before letting go, and how far back from its target it's
+ *  let loose when the thrower is further behind than that (m along the course). */
+const GULL_LIFT = 5;
+const GULL_SPAWN = 30;
+/** Seconds a poo spin-out leaves the windscreen splattered. */
+const POO_BLIND = 5;
+/** Dungeness crab (the item, a green shell): how fast it scuttles off (m/s, and at least this much
+ *  faster than the car that threw it), how long before it gives up and burrows into the road (s),
+ *  its size (m), and how long before it can nip the car that threw it (s). */
+const CRAB_SPEED = 32;
+const CRAB_LEAD = 10;
+const CRAB_LIFE = 5;
+const CRAB_R = 0.6;
+const CRAB_GRACE = 0.5;
+/** Thrown forwards, it goes where the nose points, give or take this much (radians) off the road's
+ *  own direction (any more and it only zigzags from kerb to kerb). */
+const CRAB_AIM = 0.35;
+/** IPO coin (the item, a Bullet Bill): how long the ride lasts (s), how fast it goes (m/s), and how
+ *  far short of the foot of the kicker it lets go (m): the jump is always the car's own. */
+const IPO_TIME = 4.5;
+const IPO_SPEED = 34;
+export const IPO_LIP = 30;
 const SPIN_TIME = 1.05;
 const WAYMO_MASS = 2300;
 const PED_R = 0.42;
@@ -139,9 +163,9 @@ const WRONG_WAY_TIME = 5;
 // ---------------------------------------------------------------------------------------------
 // Types
 
-export type ItemKind = 'jump' | 'grit' | 'poo' | 'topup' | 'refill' | 'gull';
+export type ItemKind = 'jump' | 'grit' | 'poo' | 'topup' | 'refill' | 'gull' | 'crab' | 'ipo';
 
-export const ITEM_KINDS: readonly ItemKind[] = ['jump', 'grit', 'poo', 'topup', 'refill', 'gull'];
+export const ITEM_KINDS: readonly ItemKind[] = ['jump', 'grit', 'poo', 'topup', 'refill', 'gull', 'crab', 'ipo'];
 
 export const ITEM_NAMES: Record<ItemKind, string> = {
   jump: 'Jump',
@@ -150,6 +174,8 @@ export const ITEM_NAMES: Record<ItemKind, string> = {
   topup: 'Boost top-up',
   refill: 'Full boost',
   gull: 'Seagull',
+  crab: 'Dungeness crab',
+  ipo: 'IPO coin',
 };
 
 export interface CarInput {
@@ -163,6 +189,8 @@ export interface CarInput {
   boost?: boolean;
   /** True on the step the swap key goes down (switch to the other held item). */
   swap?: boolean;
+  /** Throw the item backwards (a crab). Unset, holding the brake does. */
+  back?: boolean;
 }
 
 export const NO_INPUT: CarInput = { throttle: 0, brake: 0, steer: 0, item: false, boost: false, swap: false };
@@ -194,6 +222,11 @@ export interface Tally {
   /** Seagulls landed on the rival, and seagulls shooed away with Determination. */
   gulls: number;
   shooed: number;
+  /** Crabs that nipped the rival, and crabs that nipped this car. */
+  crabs: number;
+  crabbed: number;
+  /** IPO coins ridden. */
+  ipo: number;
 }
 
 export interface RaceCar {
@@ -260,8 +293,16 @@ export interface RaceCar {
   /** Seconds of Determination left (it also ends on the first hit). */
   grit: number;
   spin: number;
-  /** Seconds left with a seagull flapping on the windscreen. */
+  /** Seconds left in a seagull's grip, hauled up off the road. */
   gullT: number;
+  /** Seconds left with poo on the windscreen. */
+  blindT: number;
+  /** Seconds left riding an IPO coin (on rails down the course, ploughing through everything), and
+   *  how fast it's going. */
+  ipoT: number;
+  ipoV: number;
+  /** Up in the air because a seagull hauled it there (no air time, no HYPE for it). */
+  carried: boolean;
   /** Length of the current spin-out (grippy wheels shorten it). */
   spinDur: number;
   spinHeading0: number;
@@ -460,7 +501,7 @@ export interface ItemBox {
 }
 
 /** A seagull from the item: it flies down the course (over the road, not through the houses) to the
- *  rival, flaps on their windscreen for a moment and flies off. */
+ *  leading rival, hauls them up off the road, drops them and flies off. */
 export interface Gull {
   id: number;
   owner: PlayerIndex;
@@ -475,6 +516,27 @@ export interface Gull {
   age: number;
   state: 'hunt' | 'perch' | 'leave';
   stateT: number;
+}
+
+/** A Dungeness crab from the item: it scuttles down the course (or back up it) in a straight line
+ *  along the road, bouncing off the kerbs, and nips the first car it meets (the thrower too, once
+ *  it's had a moment to get clear). Traffic and trams stop it; after a while it burrows away. */
+export interface Crab {
+  id: number;
+  owner: PlayerIndex;
+  s: number;
+  d: number;
+  x: number;
+  y: number;
+  z: number;
+  /** Speed along the course (m/s; negative: back up it) and across it. */
+  vs: number;
+  vd: number;
+  /** Direction of travel (the crab itself faces across it: it walks sideways). */
+  heading: number;
+  age: number;
+  /** Seconds since it was stopped or burrowed (null: still going). */
+  gone: number | null;
 }
 
 /** A cable car (or any tram): it shuttles along straight rails, stopping for anything on them. */
@@ -557,7 +619,10 @@ export type RaceEvent =
   | { type: 'swap'; t: number; p: PlayerIndex; item: ItemKind }
   | { type: 'gull'; t: number; p: PlayerIndex; by: PlayerIndex; shooed: boolean; x: number; y: number; z: number }
   | { type: 'honk'; t: number; p: PlayerIndex }
-  | { type: 'spinout'; t: number; p: PlayerIndex; by: PlayerIndex | null }
+  | { type: 'spinout'; t: number; p: PlayerIndex; by: PlayerIndex | null; cause: 'poo' | 'crab' }
+  | { type: 'crab'; t: number; p: PlayerIndex; by: PlayerIndex; shielded: boolean; x: number; y: number; z: number }
+  | { type: 'crabGone'; t: number; id: number; why: 'bonk' | 'burrow' | 'crab'; x: number; y: number; z: number }
+  | { type: 'ipoEnd'; t: number; p: PlayerIndex }
   | { type: 'shortcut'; t: number; p: PlayerIndex; s: number; gained: number }
   | { type: 'hype'; t: number; p: PlayerIndex; amount: number; why: string }
   | { type: 'rescue'; t: number; p: PlayerIndex }
@@ -642,6 +707,9 @@ function newTally(): Tally {
     lead: 0,
     gulls: 0,
     shooed: 0,
+    crabs: 0,
+    crabbed: 0,
+    ipo: 0,
   };
 }
 
@@ -745,6 +813,7 @@ export class RaceSim {
   readonly boxes: ItemBox[] = [];
   readonly cones: LooseCone[] = [];
   readonly gulls: Gull[] = [];
+  readonly crabs: Crab[] = [];
   readonly cables: CableCar[] = [];
   readonly opts: Required<RaceOptions>;
   /** Sim time since construction (the countdown runs on the grid). */
@@ -849,6 +918,10 @@ export class RaceSim {
       grit: 0,
       spin: 0,
       gullT: 0,
+      blindT: 0,
+      ipoT: 0,
+      ipoV: 0,
+      carried: false,
       spinDur: SPIN_TIME,
       spinHeading0: 0,
       spinDir: 1,
@@ -1225,9 +1298,23 @@ export class RaceSim {
     this.updateWorld(dt, ev);
     const sPrev = this.cars.map((c) => c.s);
     for (const car of this.cars) {
-      if (car.phase === 'race') this.drive(car, inputs[car.p] ?? NO_INPUT, dt, ev);
+      if (car.phase === 'race') {
+        if (car.ipoT > 0) this.ipoRide(car, dt, ev);
+        else this.drive(car, inputs[car.p] ?? NO_INPUT, dt, ev);
+      }
       // Past the flag, a car cruises on out of the way.
-      else if (car.phase === 'finished') this.drive(car, this.cruise(car), dt, ev);
+      else if (car.phase === 'finished') {
+        this.drive(car, this.cruise(car), dt, ev);
+        if (!this.course.loop && car.grounded) {
+          const room = Math.max(0, this.course.length - RUNOFF_STOP - car.s);
+          const v = Math.hypot(car.vx, car.vz);
+          const vMax = Math.sqrt(2 * RUNOFF_ARREST * room);
+          if (v > vMax && v > 1e-6) {
+            car.vx *= vMax / v;
+            car.vz *= vMax / v;
+          }
+        }
+      }
     }
     this.carVsCar(ev);
     for (const car of this.cars) {
@@ -1345,6 +1432,7 @@ export class RaceSim {
   /** Home at race time `at`: the chequered flag (a car off a kicker flies on into the water). */
   private flag(car: RaceCar, at: number, ev: RaceEvent[]): void {
     if (car.phase === 'race') car.phase = 'finished';
+    if (car.ipoT > 0) this.endIpo(car, ev);
     car.finishT = at;
     car.runTime = at;
     car.boosting = false;
@@ -1400,12 +1488,14 @@ export class RaceSim {
       B = 0;
       S = 0;
     }
-    // A seagull on the windscreen: you can't see where you're going, so you lift and weave.
+    // In a seagull's grip: up in the air, nothing to drive on, swinging about.
     if (car.gullT > 0) {
       car.gullT -= dt;
-      T = Math.min(T, 0.45);
+      T = 0;
+      B = 0;
       S = clamp(S + 0.5 * Math.sin(this.raceT * 7.1 + car.p * 2.3), -1, 1);
     }
+    if (car.blindT > 0) car.blindT = Math.max(0, car.blindT - dt);
     car.throttle = T;
     car.brake = B;
     if (car.rocketWindow > 0) {
@@ -1523,7 +1613,8 @@ export class RaceSim {
     let spinning = false;
     const onPower = car.grounded || k.isJet;
     // (See windAlong: on a loop, behind you on one straight and in your face on the way back.)
-    const top = Math.min(topSpeedIn(k, windAlong(this.wind, car.heading, C.loop)) * surf.top, surf.cap);
+    const topRoad = topSpeedIn(k, windAlong(this.wind, car.heading, C.loop));
+    const top = Math.min(topRoad * surf.top, surf.cap);
     if (T > 0 && onPower && k.power > 0) {
       // Near its top speed the engine runs out of revs (or the jet out of thrust). A headwind loads
       // the engine and lowers the speed it can reach; a tailwind raises it.
@@ -1541,11 +1632,12 @@ export class RaceSim {
     if (spinning) car.wheelspinTime += dt;
 
     // --- Boost: a rocket push along the nose while the key is held (on the road or in the air)
-    // until the bottle runs dry. It fades out on the way past the engine's top speed.
+    // until the bottle runs dry. It fades out on the way past the engine's top speed on the road:
+    // a rocket needs no grip, so on grass or long grass it ploughs through just as fast.
     let boostF = 0;
     car.boosting = false;
-    if (inp.boost && car.boost > 0 && car.spin <= 0 && car.stun <= 0) {
-      const topB = top * BOOST_TOP;
+    if (inp.boost && car.boost > 0 && car.spin <= 0 && car.stun <= 0 && car.gullT <= 0) {
+      const topB = topRoad * BOOST_TOP;
       const fade = vf <= 0.8 * topB ? 1 : Math.max(0, (topB - vf) / (0.2 * topB));
       boostF = m * BOOST_ACC * fade;
       const used = Math.min(car.boost, dt);
@@ -1663,9 +1755,9 @@ export class RaceSim {
       car.sliding = false;
     }
 
-    if (car.grounded && surf.drag > 0) {
+    if (car.grounded && surf.drag > 0 && !car.boosting) {
       // A slow surface: speed over what it allows bleeds away (a car coming onto the grass fast
-      // is slowed to it in a second or two, not stopped dead).
+      // is slowed to it in a second or two, not stopped dead). Boosting, it isn't.
       const v = Math.sqrt(car.vx * car.vx + car.vz * car.vz);
       if (v > top && v > 1e-6) {
         const f = (top + (v - top) * Math.exp(-surf.drag * dt)) / v;
@@ -1837,7 +1929,16 @@ export class RaceSim {
       hRoad = this.roadY(car.s);
       vyRoad = this.gradeAt(p2) * vAlong;
     }
-    if (car.grounded) {
+    if (car.gullT > 0) {
+      // Hauled up by a seagull: rising to its height, drifting on slowly, then dropped.
+      car.grounded = false;
+      car.vy = clamp((hRoad + GULL_LIFT - car.y) * 3, -2, 6);
+      car.y += car.vy * dt;
+      const hold = Math.exp(-1.5 * dt);
+      car.vx *= hold;
+      car.vz *= hold;
+      car.airTime += dt;
+    } else if (car.grounded) {
       // Over a crest the road falls away faster than gravity can pull the car down: it flies
       // (a Bullitt jump at the intersections). Tiny hops at low speed are ignored.
       if (vyRoad < car.vy - G * dt - 1.6) {
@@ -1884,8 +1985,9 @@ export class RaceSim {
             car.yawRate = 0;
           }
         }
-        if (car.airTime > 0.12) ev.push({ type: 'land', t: this.t, p: car.p, impact, air: car.airTime });
+        if (car.airTime > 0.12) ev.push({ type: 'land', t: this.t, p: car.p, impact, air: car.carried ? 0 : car.airTime });
         if (car.grounded) {
+          car.carried = false;
           car.airTime = 0;
           car.jumpShortcut = false;
         }
@@ -2131,6 +2233,9 @@ export class RaceSim {
     car.spin = 0;
     car.stun = 0;
     car.gullT = 0;
+    car.ipoT = 0;
+    car.ipoV = 0;
+    car.carried = false;
     car.drift = 0;
     car.stuckS = s;
     car.stuckT = 0;
@@ -2225,12 +2330,14 @@ export class RaceSim {
     const mb = b.stats.mass;
     const Ia = (ma * (a.stats.length ** 2 + a.stats.width ** 2)) / 12;
     const Ib = (mb * (b.stats.length ** 2 + b.stats.width ** 2)) / 12;
-    // Separate by mass.
-    const tot = ma + mb;
-    a.x += h.nx * h.depth * (mb / tot);
-    a.z += h.nz * h.depth * (mb / tot);
-    b.x -= h.nx * h.depth * (ma / tot);
-    b.z -= h.nz * h.depth * (ma / tot);
+    // Separate by mass (a car riding an IPO coin doesn't budge: the other takes all of it).
+    const ipoA = a.ipoT > 0;
+    const ipoB = b.ipoT > 0;
+    const shareA = ipoA && !ipoB ? 0 : ipoB && !ipoA ? 1 : mb / (ma + mb);
+    a.x += h.nx * h.depth * shareA;
+    a.z += h.nz * h.depth * shareA;
+    b.x -= h.nx * h.depth * (1 - shareA);
+    b.z -= h.nz * h.depth * (1 - shareA);
     const rax = h.cx - a.x;
     const raz = h.cz - a.z;
     const rbx = h.cx - b.x;
@@ -2253,7 +2360,11 @@ export class RaceSim {
     const frontA = ca[h.ia][0] > 0 && noseA > 0.55;
     let rammer: RaceCar | null = null;
     let victim: RaceCar | null = null;
-    if (a.grit > 0 && b.grit > 0) {
+    if (ipoA !== ipoB) {
+      // An IPO coin rams whatever it meets, whichever way round.
+      rammer = ipoA ? a : b;
+      victim = ipoA ? b : a;
+    } else if (a.grit > 0 && b.grit > 0) {
       // Two Determined cars: the Determination cancels out and it's a plain collision.
       a.grit = 0;
       b.grit = 0;
@@ -2269,9 +2380,9 @@ export class RaceSim {
     let ram = 'none';
     if (rammer && victim) {
       const onA = rammer === a;
-      if (rammer.grit > 0) {
-        // Determination: plough through, the other car takes the lot.
-        ram = 'grit';
+      if (this.tough(rammer)) {
+        // Determination (or an IPO coin): plough through, the other car takes the lot.
+        ram = rammer.ipoT > 0 ? 'ipo' : 'grit';
         if (onA) {
           ja = 0;
           jb = j * 2.2;
@@ -2280,9 +2391,7 @@ export class RaceSim {
           ja = j * 2.2;
         }
         victim.stun = Math.max(victim.stun, 0.5);
-        rammer.grit = 0;
-        rammer.tally.plowed++;
-        this.addHype(rammer, 6, 'powered through', ev);
+        this.ploughed(rammer, ev);
       } else if (rammer.stats.ram === 'bull') {
         ram = 'bull';
         if (onA) jb *= 1.5;
@@ -2339,7 +2448,7 @@ export class RaceSim {
       this.hitHeavy(car, h, w, WAYMO_MASS, ev);
     }
     for (const cb of this.cables) {
-      if (clearance >= cb.height) continue;
+      if (clearance >= cb.height || car.ipoT > 0) continue;
       const h = contact(car.x, car.z, car.heading, cc, cb.x, cb.z, cb.heading, cb.circles);
       if (h) {
         this.noNearMiss(car, cb.id);
@@ -2368,13 +2477,11 @@ export class RaceSim {
         continue;
       }
       this.noNearMiss(car, p.id);
-      if (car.grit > 0) {
+      if (this.tough(car)) {
         p.dive = 1.4;
         p.fallX = -h.nz * (Math.sign(h.nx * car.vz - h.nz * car.vx) || 1);
         p.fallZ = h.nx * (Math.sign(h.nx * car.vz - h.nz * car.vx) || 1);
-        car.grit = 0;
-        car.tally.plowed++;
-        this.addHype(car, 6, 'powered through', ev);
+        this.ploughed(car, ev);
         ev.push({ type: 'hit', t: this.t, p: car.p, what: 'ped', id: p.id, impact: speed, plowed: true, x: p.x, y: p.y + 1, z: p.z });
         continue;
       }
@@ -2401,10 +2508,8 @@ export class RaceSim {
       const h = contact(car.x, car.z, car.heading, cc, poo.x, poo.z, 0, [[0, POO_R]]);
       if (!h) continue;
       poo.alive = false;
-      if (car.grit > 0) {
-        car.grit = 0;
-        car.tally.plowed++;
-        this.addHype(car, 6, 'powered through', ev);
+      if (this.tough(car)) {
+        this.ploughed(car, ev);
         ev.push({ type: 'hit', t: this.t, p: car.p, what: 'poo', id: poo.id, impact: speed, plowed: true, x: poo.x, y: poo.y, z: poo.z });
         continue;
       }
@@ -2447,7 +2552,7 @@ export class RaceSim {
     if (vn >= 0) return;
     const what: Obstacle = w ? 'waymo' : 'cable';
     const id = w ? w.id : cb ? cb.id : -1;
-    if (car.grit > 0 && w) {
+    if (w && this.tough(car)) {
       // Determination: the Waymo gets shoved out of your path (sideways, off your line) and you
       // keep going; you won't hit that one again for a moment.
       const sp = Math.max(0.1, Math.hypot(car.vx, car.vz));
@@ -2464,9 +2569,7 @@ export class RaceSim {
       w.spinV += (this.rng() < 0.5 ? -1 : 1) * 2.5;
       w.stopped = 3;
       w.hazard = true;
-      car.grit = 0;
-      car.tally.plowed++;
-      this.addHype(car, 6, 'powered through', ev);
+      this.ploughed(car, ev);
       ev.push({ type: 'hit', t: this.t, p: car.p, what, id, impact: -vn, plowed: true, x: h.cx, y: car.y + 0.8, z: h.cz });
       return;
     }
@@ -2535,7 +2638,21 @@ export class RaceSim {
     car.missed.add(id);
   }
 
-  private spinOut(car: RaceCar, by: PlayerIndex | null, ev: RaceEvent[]): void {
+  /** Ploughing through things: Determination (spent on the first thing it hits), or an IPO coin. */
+  private tough(car: RaceCar): boolean {
+    return car.grit > 0 || car.ipoT > 0;
+  }
+
+  /** Through something: Determination is spent on it (and pays HYPE); an IPO coin just carries on. */
+  private ploughed(car: RaceCar, ev: RaceEvent[]): void {
+    if (car.ipoT > 0) return;
+    car.grit = 0;
+    car.tally.plowed++;
+    this.addHype(car, 6, 'powered through', ev);
+  }
+
+  /** Spun round and slowed: by poo (which splatters the windscreen too) or a crab's nip. */
+  private spinOut(car: RaceCar, by: PlayerIndex | null, ev: RaceEvent[], cause: 'poo' | 'crab' = 'poo'): void {
     this.endDrift(car, ev);
     const resist = car.stats.spinResist;
     car.spin = SPIN_TIME * (1 - 0.4 * resist);
@@ -2545,16 +2662,20 @@ export class RaceSim {
     const f = 0.5 + 0.25 * resist;
     car.vx *= f;
     car.vz *= f;
-    car.tally.poo++;
+    if (cause === 'poo') {
+      car.tally.poo++;
+      car.blindT = POO_BLIND;
+    } else car.tally.crabbed++;
     this.addHype(car, -10, 'spun out', ev);
     if (by !== null) {
       const o = this.cars[by];
       if (o) {
-        o.tally.pooLanded++;
-        this.addHype(o, 8, 'poo landed', ev);
+        if (cause === 'poo') o.tally.pooLanded++;
+        else o.tally.crabs++;
+        this.addHype(o, 8, cause === 'poo' ? 'poo landed' : 'crab landed', ev);
       }
     }
-    ev.push({ type: 'spinout', t: this.t, p: car.p, by });
+    ev.push({ type: 'spinout', t: this.t, p: car.p, by, cause });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -2591,20 +2712,26 @@ export class RaceSim {
   }
 
   /**
-   * Item odds lean on the race order: the leader gets defence (poo), the chaser gets comebacks
-   * (Determination, boost and seagulls; the full boost is rare, and rarer still in front). With
-   * nobody else on the road there's no one to drop poo for or send a seagull after.
+   * Item odds lean on the race order: the leader gets defence (poo, and crabs to throw back), a
+   * close chaser gets crabs to throw ahead, and a car further back gets comebacks (Determination,
+   * boost and seagulls; the full boost is rare, and rarer still in front), and well back the IPO
+   * coin. With nobody else on the road there's no one to drop poo for or throw anything at, and no
+   * one to catch up.
    */
   private rollItem(car: RaceCar): ItemKind {
     const others = this.cars.filter((c) => c !== car && c.phase === 'race');
-    // Weights in ITEM_KINDS order: jump, grit, poo, topup, refill, gull.
+    // Weights in ITEM_KINDS order: jump, grit, poo, topup, refill, gull, crab, ipo.
     let w: number[];
-    if (!others.length) w = [0.34, 0.2, 0, 0.36, 0.1, 0];
+    if (!others.length) w = [0.34, 0.2, 0, 0.36, 0.1, 0, 0, 0];
     else {
       const gap = Math.max(...others.map((o) => o.prog)) - car.prog;
-      if (gap <= 0) w = [0.26, 0.08, 0.44, 0.18, 0.01, 0.03];
-      else if (gap < 30) w = [0.22, 0.18, 0.2, 0.22, 0.04, 0.14];
-      else w = [0.16, 0.24, 0.06, 0.26, 0.1, 0.18];
+      if (gap <= 0) w = [0.26, 0.08, 0.36, 0.18, 0.01, 0.03, 0.14, 0];
+      else if (gap < 30) w = [0.22, 0.18, 0.2, 0.22, 0.04, 0.14, 0.18, 0];
+      else if (gap < 90) w = [0.16, 0.24, 0.06, 0.26, 0.1, 0.18, 0.08, 0.06];
+      else w = [0.12, 0.2, 0.04, 0.22, 0.1, 0.16, 0.04, 0.2];
+      // Too near the kicker to ride a coin (it would have to let go almost at once).
+      const lip = this.course.lip;
+      if (lip && car.s > lip.rampS0 - IPO_LIP - 60) w[7] = 0;
     }
     let r = this.rng() * w.reduce((a, b) => a + b, 0);
     for (let i = 0; i < w.length; i++) {
@@ -2665,6 +2792,13 @@ export class RaceSim {
       ev.push({ type: 'boostGain', t: this.t, p: car.p, amount: got, full: it === 'refill' });
     } else if (it === 'gull') {
       this.releaseGull(car);
+    } else if (it === 'crab') {
+      this.throwCrab(car, inp.back ?? inp.brake > 0.5);
+    } else if (it === 'ipo') {
+      // On the road, and not on the run-up to the kicker (it would let go on the ramp): kept for later.
+      const lip = this.course.lip;
+      if (!car.grounded || (lip !== null && car.s > lip.rampS0 - IPO_LIP - 15)) return;
+      this.startIpo(car, ev);
     } else {
       const back = car.stats.length / 2 + 0.9;
       const x = car.x - Math.cos(car.heading) * back;
@@ -2681,20 +2815,36 @@ export class RaceSim {
     ev.push({ type: 'use', t: this.t, p: car.p, item: it, x: car.x, y: car.y, z: car.z });
   }
 
-  /** Let a seagull go after the rival (with nobody left racing, it just flies off). */
+  /** Let a seagull go after the leading rival (with nobody left racing, it just flies off). It's
+   *  let loose not far behind them, so it's on them in a couple of seconds wherever the thrower is. */
   private releaseGull(car: RaceCar): void {
-    const target = this.cars.find((c) => c !== car && c.phase === 'race');
-    const d = clamp(car.d, -4, 4);
-    const w = toWorld(this.course, car.s, d);
+    const C = this.course;
+    const target = this.order()
+      .map((p) => this.cars[p])
+      .find((c) => c !== car && c.phase === 'race');
+    let s = car.s;
+    let d = clamp(car.d, -4, 4);
+    let y = car.y + 2.2;
+    let heading = car.heading;
+    if (target) {
+      const gap = deltaS(C, car.s, target.s);
+      if (Math.abs(gap) > GULL_SPAWN) {
+        s = wrapS(C, target.s - Math.sign(gap) * GULL_SPAWN);
+        d = clamp(target.d, -4, 4);
+        y = this.roadY(s) + 3.4;
+        heading = pointAt(C, s, this.tmp).heading + (gap < 0 ? Math.PI : 0);
+      }
+    }
+    const w = toWorld(C, s, d);
     this.gulls.push({
       id: this.nextId++,
       owner: car.p,
       target: target ? target.p : car.p,
       x: w.x,
-      y: car.y + 2.2,
+      y,
       z: w.z,
-      heading: car.heading,
-      s: car.s,
+      heading,
+      s,
       d,
       age: 0,
       state: target ? 'hunt' : 'leave',
@@ -2705,7 +2855,7 @@ export class RaceSim {
   /**
    * A seagull hunts its target along the course, above the road (so it never cuts through the
    * houses), always a good deal faster than the car it's after; close in, it dives at the
-   * windscreen. Then it perches there for a moment and flies off.
+   * roof. Then it hauls the car up, lets go and flies off.
    */
   private updateGull(g: Gull, dt: number, ev: RaceEvent[]): void {
     const C = this.course;
@@ -2723,8 +2873,10 @@ export class RaceSim {
       const gap = deltaS(C, g.s, tc.s);
       const tv = Math.hypot(tc.vx, tc.vz);
       if (Math.abs(gap) > 7) {
+        // Closing in to 5 m, well inside the 7 m where it dives: the car pulls ahead a little every
+        // step, and stopping right at the line left it chasing forever at speed.
         const speed = Math.max(GULL_SPEED, tv + 18);
-        g.s = wrapS(C, g.s + Math.sign(gap) * Math.min(Math.abs(gap) - 6.9, speed * dt));
+        g.s = wrapS(C, g.s + Math.sign(gap) * Math.min(Math.abs(gap) - 5, speed * dt));
         g.d += clamp(tc.d - g.d, -6 * dt, 6 * dt);
         const w = toWorld(C, g.s, g.d);
         g.x = w.x;
@@ -2752,7 +2904,8 @@ export class RaceSim {
       g.y = tc.y + 1.05 + 0.33 * Math.max(0, tc.stats.length - 2.3);
       g.z = tc.z + Math.sin(tc.heading) * f;
       g.heading = tc.heading + Math.PI;
-      if (g.stateT > GULL_TIME || tc.phase !== 'race') {
+      if (tc.gullT <= 0 || tc.phase !== 'race') {
+        tc.gullT = 0;
         g.state = 'leave';
         g.stateT = 0;
         g.heading = tc.heading + (this.rng() < 0.5 ? -1 : 1) * 0.9;
@@ -2767,11 +2920,13 @@ export class RaceSim {
 
   private gullStrike(g: Gull, tc: RaceCar, ev: RaceEvent[]): void {
     g.stateT = 0;
-    if (tc.grit > 0) {
-      // Determination: shoo! It bounces off and flies away.
-      tc.grit = 0;
-      tc.tally.shooed++;
-      this.addHype(tc, 6, 'shooed a seagull', ev);
+    if (this.tough(tc)) {
+      // Determination (or an IPO coin): shoo! It bounces off and flies away.
+      if (tc.ipoT <= 0) {
+        tc.grit = 0;
+        tc.tally.shooed++;
+        this.addHype(tc, 6, 'shooed a seagull', ev);
+      }
       g.state = 'leave';
       g.heading = tc.heading + (this.rng() < 0.5 ? -1 : 1) * 1.3;
       ev.push({ type: 'gull', t: this.t, p: tc.p, by: g.owner, shooed: true, x: g.x, y: g.y, z: g.z });
@@ -2779,8 +2934,12 @@ export class RaceSim {
     }
     g.state = 'perch';
     tc.gullT = GULL_TIME;
-    tc.vx *= 0.85;
-    tc.vz *= 0.85;
+    tc.grounded = false;
+    tc.carried = true;
+    tc.airTime = 0;
+    tc.yawRate = clamp(tc.yawRate, -AIR_YAW, AIR_YAW);
+    tc.vx *= 0.7;
+    tc.vz *= 0.7;
     this.endDrift(tc, ev);
     const o = this.cars[g.owner];
     if (o && o !== tc) {
@@ -2789,6 +2948,190 @@ export class RaceSim {
     }
     this.addHype(tc, -4, 'seagull', ev);
     ev.push({ type: 'gull', t: this.t, p: tc.p, by: g.owner, shooed: false, x: g.x, y: g.y, z: g.z });
+  }
+
+  /** Throw a crab: off the nose down the road (about where the car points), or off the tail back up
+   *  it. */
+  private throwCrab(car: RaceCar, back: boolean): void {
+    const C = this.course;
+    const pt = pointAt(C, car.s, this.tmp);
+    let aim: number;
+    let speed: number;
+    if (back) {
+      aim = Math.PI;
+      speed = CRAB_SPEED * 0.75;
+    } else {
+      // (Facing back up the road, forwards is back up it.)
+      const rel = wrapAngle(car.heading - pt.heading);
+      aim = Math.abs(rel) > Math.PI / 2 ? Math.PI + clamp(wrapAngle(rel - Math.PI), -CRAB_AIM, CRAB_AIM) : clamp(rel, -CRAB_AIM, CRAB_AIM);
+      speed = Math.max(CRAB_SPEED, Math.abs(car.vx * pt.tx + car.vz * pt.tz) + CRAB_LEAD);
+    }
+    const off = (car.stats.length / 2 + CRAB_R + 0.4) * (back ? -1 : 1);
+    const loc = locate(C, car.x + Math.cos(car.heading) * off, car.z + Math.sin(car.heading) * off, car.s, 6);
+    const hw = pointAt(C, loc.s, this.tmp).hw;
+    const d = clamp(loc.d, -hw + CRAB_R, hw - CRAB_R);
+    const w = toWorld(C, loc.s, d);
+    const vs = speed * Math.cos(aim);
+    const vd = speed * Math.sin(aim);
+    this.crabs.push({
+      id: this.nextId++,
+      owner: car.p,
+      s: loc.s,
+      d,
+      x: w.x,
+      y: this.roadY(loc.s),
+      z: w.z,
+      vs,
+      vd,
+      heading: w.heading + Math.atan2(vd, vs),
+      age: 0,
+      gone: null,
+    });
+  }
+
+  /** A crab scuttles on along the road, off the kerbs, until it meets a car, traffic or a tram. */
+  private updateCrab(c: Crab, dt: number, ev: RaceEvent[]): void {
+    const C = this.course;
+    if (c.gone !== null) {
+      c.gone += dt;
+      return;
+    }
+    c.age += dt;
+    if (c.age > CRAB_LIFE) return this.crabGone(c, 'burrow', ev);
+    const s = c.s + c.vs * dt;
+    // Off either end of a point-to-point course (off the lip into the bay, say): gone.
+    if (!C.loop && (s < 0.6 || s > (C.lip ? C.lip.s : C.length - 0.6))) return this.crabGone(c, 'burrow', ev);
+    c.s = wrapS(C, s);
+    const pt = pointAt(C, c.s, this.tmp);
+    const lim = Math.max(0, pt.hw - CRAB_R);
+    c.d += c.vd * dt;
+    if (Math.abs(c.d) > lim) {
+      // Off the kerb and back across.
+      c.d = Math.sign(c.d) * lim;
+      c.vd = -c.vd;
+    }
+    const w = toWorld(C, c.s, c.d);
+    c.x = w.x;
+    c.z = w.z;
+    c.y = this.roadY(c.s);
+    c.heading = pt.heading + Math.atan2(c.vd, c.vs);
+    const body: [number, number][] = [[0, CRAB_R]];
+    for (const wm of this.waymos) {
+      if ((wm.x - c.x) ** 2 + (wm.z - c.z) ** 2 > 64) continue;
+      if (contact(c.x, c.z, 0, body, wm.x, wm.z, wm.heading, WAYMO_CIRCLES)) return this.crabGone(c, 'bonk', ev);
+    }
+    for (const cb of this.cables) {
+      if (contact(c.x, c.z, 0, body, cb.x, cb.z, cb.heading, cb.circles)) return this.crabGone(c, 'bonk', ev);
+    }
+    for (const car of this.cars) {
+      if (car.phase !== 'race' || (car.p === c.owner && c.age < CRAB_GRACE)) continue;
+      // Over it in the air.
+      if (car.y - c.y > 0.9 || (car.x - c.x) ** 2 + (car.z - c.z) ** 2 > (car.stats.length + 2) ** 2) continue;
+      if (!contact(car.x, car.z, car.heading, car.circles, c.x, c.z, 0, body)) continue;
+      this.crabHit(c, car, ev);
+      return;
+    }
+  }
+
+  /** A crab gets a car: it spins out, unless it's ploughing through things anyway. */
+  private crabHit(c: Crab, car: RaceCar, ev: RaceEvent[]): void {
+    const shielded = this.tough(car);
+    if (shielded) this.ploughed(car, ev);
+    else this.spinOut(car, c.owner !== car.p ? c.owner : null, ev, 'crab');
+    ev.push({ type: 'crab', t: this.t, p: car.p, by: c.owner, shielded, x: c.x, y: c.y + 0.4, z: c.z });
+    c.gone = 0;
+  }
+
+  private crabGone(c: Crab, why: 'bonk' | 'burrow' | 'crab', ev: RaceEvent[]): void {
+    c.gone = 0;
+    ev.push({ type: 'crabGone', t: this.t, id: c.id, why, x: c.x, y: c.y + 0.4, z: c.z });
+  }
+
+  /** Onto an IPO coin: whatever the car was up to (spinning, stunned, drifting) is over. */
+  private startIpo(car: RaceCar, ev: RaceEvent[]): void {
+    const pt = pointAt(this.course, car.s, this.tmp);
+    car.ipoT = IPO_TIME;
+    car.ipoV = Math.max(0, car.vx * pt.tx + car.vz * pt.tz);
+    car.spin = 0;
+    car.stun = 0;
+    this.endDrift(car, ev);
+    car.tally.ipo++;
+  }
+
+  /**
+   * Riding an IPO coin: on rails down the middle of the road, speeding up to IPO_SPEED, round a tram
+   * in the way and straight through everything else. It lets go when the time's up, or short of
+   * the kicker.
+   */
+  private ipoRide(car: RaceCar, dt: number, ev: RaceEvent[]): void {
+    const C = this.course;
+    const k = car.stats;
+    car.ipoV += (IPO_SPEED - car.ipoV) * (1 - Math.exp(-2.5 * dt));
+    const s = C.loop ? wrapS(C, car.s + car.ipoV * dt) : Math.min(car.s + car.ipoV * dt, C.length - 0.6);
+    const pt = pointAt(C, s, this.tmp);
+    const lim = Math.max(0, pt.hw - k.width / 2 - 0.3);
+    let want = 0;
+    for (const cb of this.cables) {
+      const loc = locate(C, cb.x, cb.z, s, 40, this.loc2);
+      const ahead = deltaS(C, s, loc.s);
+      if (ahead < -cb.length / 2 - 3 || ahead > cb.length / 2 + 30) continue;
+      const clear = cb.width / 2 + k.width / 2 + 0.6;
+      if (Math.abs(loc.d - want) < clear) want = loc.d + (loc.d > 0 ? -clear : clear);
+    }
+    want = clamp(want, -lim, lim);
+    const d = clamp(car.d + clamp(want - car.d, -5 * dt, 5 * dt), -lim, lim);
+    const w = toWorld(C, s, d);
+    const fx = Math.cos(pt.heading);
+    const fz = Math.sin(pt.heading);
+    car.x = w.x;
+    car.z = w.z;
+    car.y = this.roadY(s);
+    car.s = s;
+    car.d = d;
+    car.heading = pt.heading;
+    car.vx = fx * car.ipoV;
+    car.vz = fz * car.ipoV;
+    car.vy = this.gradeAt(pt) * car.ipoV;
+    car.yawRate = 0;
+    car.grounded = true;
+    car.airTime = 0;
+    car.carried = false;
+    car.surface = 'paved';
+    car.sliding = false;
+    car.slip = 0;
+    car.boosting = false;
+    car.engineOn = true;
+    car.wheelspin = false;
+    car.throttle = 1;
+    car.brake = 0;
+    car.hopS = -1;
+    car.hopLand = false;
+    car.cutS = -1;
+    car.stuckS = s;
+    car.stuckX = car.x;
+    car.stuckZ = car.z;
+    car.stuckT = 0;
+    car.wrongWay = 0;
+    car.backwardsT = 0;
+    if (car.blindT > 0) car.blindT = Math.max(0, car.blindT - dt);
+    if (car.grit > 0) car.grit = Math.max(0, car.grit - dt);
+    car.ipoT -= dt;
+    const lip = C.lip;
+    if (car.ipoT <= 0 || (lip !== null && s >= lip.rampS0 - IPO_LIP)) this.endIpo(car, ev);
+  }
+
+  /** Off the coin: back to the car's own driving, at no more than its own top speed. */
+  private endIpo(car: RaceCar, ev: RaceEvent[]): void {
+    const top = topSpeedIn(car.stats, windAlong(this.wind, car.heading, this.course.loop));
+    const v = Math.hypot(car.vx, car.vz);
+    if (v > top && v > 1e-6) {
+      car.vx *= top / v;
+      car.vz *= top / v;
+      car.vy *= top / v;
+    }
+    car.ipoT = 0;
+    car.ipoV = 0;
+    ev.push({ type: 'ipoEnd', t: this.t, p: car.p });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -2926,7 +3269,7 @@ export class RaceSim {
         car.driftGain += got;
         car.tally.driftBoost += got;
       }
-      if (!car.grounded && car.airTime > 0.15) {
+      if (!car.grounded && !car.carried && car.airTime > 0.15) {
         add += 6 * dt;
         car.tally.air += dt;
       }
@@ -2993,6 +3336,21 @@ export class RaceSim {
     for (const g of this.gulls) this.updateGull(g, dt, ev);
     for (let i = this.gulls.length - 1; i >= 0; i--) {
       if (this.gulls[i].state === 'leave' && this.gulls[i].stateT > 2.5) this.gulls.splice(i, 1);
+    }
+    for (const c of this.crabs) this.updateCrab(c, dt, ev);
+    // Two crabs that meet get into a fight and neither goes any further.
+    for (let i = 0; i < this.crabs.length; i++) {
+      const a = this.crabs[i];
+      for (let j = i + 1; j < this.crabs.length && a.gone === null; j++) {
+        const b = this.crabs[j];
+        if (b.gone !== null || (a.x - b.x) ** 2 + (a.z - b.z) ** 2 > (2 * CRAB_R) ** 2) continue;
+        this.crabGone(a, 'crab', ev);
+        this.crabGone(b, 'crab', ev);
+      }
+    }
+    for (let i = this.crabs.length - 1; i >= 0; i--) {
+      const g = this.crabs[i].gone;
+      if (g !== null && g > 0.6) this.crabs.splice(i, 1);
     }
 
     for (const w of this.waymos) {
@@ -3375,6 +3733,8 @@ export class RaceSim {
     car.vy = this.gradeAt(pointAt(this.course, s, this.tmp)) * speed;
     car.grounded = true;
     car.drift = 0;
+    car.ipoT = 0;
+    car.ipoV = 0;
     car.stuckS = s;
     car.stuckT = 0;
     car.wrongWay = 0;

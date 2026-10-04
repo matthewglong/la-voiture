@@ -1,5 +1,54 @@
 # Verification
 
+## Off-road camera pass
+
+The chase camera follows the car rather than the course off the road (see "Split screen and cameras"
+in `DECISIONS.md`). Checked with Playwright (headless Chromium, 1280×720) against `npm run dev` on
+the Old Stomping Grounds, a scripted car curving off Alamo Square's path onto the lawn, crossing it,
+stopping, circling, reversing and coasting back; solo and in split screen, the same:
+
+| On the lawn | Camera vs the car, before | After | Fastest camera turn, after |
+|---|---|---|---|
+| Crossing | 83° | 10° (mean) | 63°/s |
+| Stopped | 86° | 0° | 2°/s |
+| Circling slowly | 92° | 8° | 34°/s |
+| Stopped again | 144° | 4° | 34°/s |
+| Reversing (the car's place jumps 10 m to the next path) | 123° (and a 78°/s swing) | 1° | 37°/s |
+
+- **Spins, fed straight to the rig (Node):** a car stopped with its nose spinning at 720°/s turns
+  the camera at most 38°/s; a nose swung 150° at once, 88°/s; sliding at 15 m/s while spinning, the
+  camera stays on the way it's going (0°/s); reversing at 4 m/s with the nose 100° off the road, it
+  stays behind the nose.
+- **On the road:** CPU laps of every map spend 0% of the time far enough off to trigger it, but for
+  0.2% on the Old Stomping Grounds (0.4 s on Patricia's Green, a partial blend).
+- `npm run check` passes; 0 console errors or warnings.
+
+## Always split for two pass
+
+Two cars now race in split screen from GO until the results, with the merging and splitting on
+distance taken out (see "Split screen and cameras" in `DECISIONS.md`). Checked with Playwright
+(headless Chromium, 1280×720) against `npm run dev`, logging the split and the game state on every
+frame (about 16,000 frames in all) and slowing the game to 5% around GO and the results:
+
+- **Two players** (Russian Hill's long jump; Twin Peaks, 3 laps) **and against the CPU:** one screen
+  through the whole countdown; the split opens only after GO, is complete 0.5 s later, and never
+  dips through the race or the flight, however close the cars run (the Twin Peaks finish was 0.2 s);
+  it closes as the results card comes up. The divider shows exactly while the screen is split, and
+  sits under the "GO!" and the results card.
+- **Solo:** never splits.
+- `npm run check` passes; 0 console errors or warnings.
+
+`split/` (JPEG, 1280×720):
+
+| File | Shows |
+|---|---|
+| `split-01-countdown` | The countdown: one screen, both cars on the grid |
+| `split-02-go` | 0.3 s after GO at full speed: the screen splitting down the middle, under the "GO!" |
+| `split-03-side-by-side` | Side by side down the hill, still split |
+| `split-04-both-down` | Both in the water: each half keeps its own side-on view until the results |
+| `split-05-finish` | Twin Peaks: over the line 0.2 s apart, still split |
+| `split-06-closing` | Coming back together behind the results card |
+
 ## Old Stomping Grounds pass
 
 The new race map round the Haight, Alamo Square, Hayes Valley, Duboce and Buena Vista, and what came
