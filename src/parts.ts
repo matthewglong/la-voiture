@@ -275,6 +275,8 @@ export const PAINTS: OptionDef[] = [
   { id: 'teal', name: 'Teal', price: 0, mass: 0, color: '#14b8b0', tagline: 'Cosmetic' },
   { id: 'grape', name: 'Grape', price: 0, mass: 0, color: '#8a44d8', tagline: 'Cosmetic' },
   { id: 'pink', name: 'Bubblegum', price: 0, mass: 0, color: '#ff5fae', tagline: 'Cosmetic' },
+  { id: 'midnight', name: 'Midnight', price: 0, mass: 0, color: '#2b2440', tagline: 'Cosmetic' },
+  { id: 'bone', name: 'Bone', price: 0, mass: 0, color: '#e9e0c8', tagline: 'Cosmetic' },
 ];
 
 const TOPPERS: OptionDef[] = [
@@ -283,6 +285,11 @@ const TOPPERS: OptionDef[] = [
   { id: 'flag', name: 'Flag', price: 0, mass: 2, tagline: 'Cosmetic: flies your colours' },
   { id: 'duck', name: 'Rubber duck', price: 0, mass: 1, tagline: 'Cosmetic: squeak' },
   { id: 'cone', name: 'Traffic cone', price: 0, mass: 2, tagline: 'Cosmetic: borrowed from the pier' },
+  { id: 'pumpkin', name: 'Pumpkin', price: 0, mass: 2, tagline: 'Cosmetic: carved, candle lit' },
+  { id: 'ghost', name: 'Ghost', price: 0, mass: 1, tagline: 'Cosmetic: boo' },
+  { id: 'bat', name: 'Bat', price: 0, mass: 1, tagline: 'Cosmetic: flaps all race' },
+  { id: 'witch', name: 'Witch hat', price: 0, mass: 1, tagline: 'Cosmetic: banded in your colours' },
+  { id: 'spider', name: 'Spider', price: 0, mass: 1, tagline: 'Cosmetic: lives here now' },
 ];
 
 function withSlot(slot: SlotId, defs: OptionDef[]): PartOption[] {

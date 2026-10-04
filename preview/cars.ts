@@ -1,5 +1,5 @@
 // Dev-only showroom for src/scene/carMesh.ts: every part option, a few full builds, and a build-time benchmark.
-// Open /preview/cars.html?view=<overview|chassis|wheels|engines|tanks|wings|noses|boosters|toppers|full>.
+// Open /preview/cars.html?view=<overview|chassis|wheels|engines|tanks|wings|noses|boosters|toppers|spooky|full>.
 import * as THREE from 'three';
 import { startPreview, type PreviewView } from './harness';
 import { buildCarMesh, type CarMesh } from '../src/scene/carMesh';
@@ -110,6 +110,17 @@ const ROWS: { name: string; cars: Spec[] }[] = [
       base({ chassis: 'pickup', topper: 'flag', paint: 'teal' }),
       base({ chassis: 'pickup', topper: 'duck', paint: 'teal', accent: P2 }),
       base({ chassis: 'pickup', topper: 'cone', paint: 'teal' }),
+    ],
+  },
+  {
+    name: 'spooky',
+    cars: [
+      base({ topper: 'pumpkin', paint: 'midnight' }),
+      base({ chassis: 'tub', topper: 'ghost', paint: 'bone', accent: P2 }),
+      base({ chassis: 'sedan', topper: 'bat', paint: 'midnight' }),
+      base({ chassis: 'pickup', topper: 'witch', paint: 'lime', accent: P2 }),
+      base({ chassis: 'sedan', topper: 'spider', paint: 'bone' }),
+      base({ chassis: 'pickup', topper: 'pumpkin', paint: 'grape' }),
     ],
   },
   {

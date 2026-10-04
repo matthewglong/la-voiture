@@ -16,9 +16,35 @@ Then the structure was finished off so that maps, modes and physics are each def
 shared: "One game, many maps" (it overrides parts of "Two events, and maps"). Most recently a third
 venue, the lap race "Old Stomping Grounds", brought chunked courses, surfaces, dogs, streetcars and
 shared city scenery with it. Then a stronger boost that ploughs through grass, a seagull that
-lifts the leader and poo that blinds: "Boost, seagull and poo". Latest, a green shell and a Bullet
-Bill in San Francisco dress: "Crab and IPO coin" comes first of all. The older sections that still
-hold are kept after them.
+lifts the leader and poo that blinds: "Boost, seagull and poo". Then a green shell and a Bullet
+Bill in San Francisco dress: "Crab and IPO coin". Latest, Halloween dress for the cars: "Spooky
+toppers" comes first of all. The older sections that still hold are kept after them.
+
+## Spooky toppers
+
+The request: "a couple spooky car decorations… in addition to the rubber duck, let's allow for a
+pumpkin", and "a few more skins - ghost, bat, etc".
+
+- **Five toppers.** A jack-o'-lantern whose carved face flickers like a candle; a ghost that floats
+  over the roof, bobbing and turning; a bat that hovers and flaps; a witch hat whose crooked crown
+  flops in the wind, banded in the player's colour (as the flag flies it); and a spider with red
+  eyes and orange knees that breathes and shuffles round. Like every topper, on the go-kart and the
+  bathtub they sit on the driver's helmet.
+- **Two paints**, Midnight and Bone, for a bat car or a ghost car.
+- **Weights** follow the other toppers (1 kg; the pumpkin 2), so a topper still changes only
+  `computeStats`' mass, by a kilo or two. The CPU picks its topper and paint from the whole list, so
+  it wears these too.
+- **Motion belongs to the topper.** `buildTopper` returns an animator that `update` runs every frame
+  (the flag's flutter moved there unchanged), and the car is posed once when built, so a floating
+  topper never starts inside the roof (the solo ghost car is never updated). Each starts from a
+  random phase, so two of a kind never move in step.
+- **Sized for the chase camera.** From behind, the bat and the spider were too small to read at
+  first: the bat is now 1.2 m across and the spider 0.9 m; the pumpkin grew by 15% beside the duck.
+- **The jack-o'-lantern's face** is a decal projected onto the lobed skin (the grooves run shallow
+  across the face), lifted 3 mm with a polygon offset. It is unlit, its colour flickering between
+  ember and flame.
+- **The witch hat's crown** is one cone bent by moving its vertices each frame: a cone in jointed
+  sections showed a kink at every joint.
 
 ## Crab and IPO coin
 

@@ -2,7 +2,7 @@
 // Geometry and materials are cached at module level, so a rebuild (e.g. on hover) only creates meshes.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { getOption } from '../parts';
 import type { CarConfig } from '../types';
 
@@ -22,7 +22,7 @@ export interface CarMesh {
   setBoost(level: number): void;
   /** Glider wings: folded back along the body (false) or spread (true); animated unless instant. */
   setWingsOpen(open: boolean, instant?: boolean): void;
-  /** Idle animation (flag flutter, kite sway, flame flicker). */
+  /** Idle animation (the topper's own motion, such as the flag's flutter; kite sway, flame flicker). */
   update(dt: number, t: number): void;
   /** Frees per-car resources only (never shared cached geometry/materials). */
   dispose(): void;
@@ -132,6 +132,21 @@ function makeMaterials() {
     duck: physical(0xffd21c, { roughness: 0.25 }),
     beak: physical(0xff8a1a, { roughness: 0.3 }),
     eye: new THREE.MeshStandardMaterial({ color: 0x0e0e10, roughness: 0.2 }),
+    pumpkin: physical(0xff7414, { roughness: 0.45, clearcoat: 0.5 }),
+    stem: physical(0x6a5426, { roughness: 0.8, clearcoat: 0.1 }),
+    leaf: physical(0x3f8f2f, { roughness: 0.5, clearcoat: 0.3 }),
+    ghost: physical(0xf7f9ff, {
+      roughness: 0.6,
+      clearcoat: 0.25,
+      emissive: 0xc9d6ff,
+      emissiveIntensity: 0.2,
+      side: THREE.DoubleSide,
+    }),
+    batFur: physical(0x231c2b, { roughness: 0.7, clearcoat: 0.15 }),
+    batWing: physical(0x4a3463, { roughness: 0.55, clearcoat: 0.3, side: THREE.DoubleSide }),
+    witch: physical(0x241a33, { roughness: 0.55, clearcoat: 0.35 }),
+    spider: physical(0x18161c, { roughness: 0.45, clearcoat: 0.6 }),
+    redEye: new THREE.MeshBasicMaterial({ color: 0xff3020, toneMapped: false }),
     kiteYellow: new THREE.MeshStandardMaterial({ color: 0xffd21c, roughness: 0.6, side: THREE.DoubleSide }),
     kiteFabric: new THREE.MeshStandardMaterial({
       vertexColors: true,
@@ -1183,16 +1198,247 @@ function buildKite(ctx: Ctx, k: Layout['kite']): KiteRig {
   };
 }
 
-interface FlagRig {
-  geo: THREE.BufferGeometry;
-  base: Float32Array;
+// Spooky toppers' shapes
+
+const PUMPKIN_R = 0.26;
+const PUMPKIN_SQUASH = 0.74;
+
+/** The pumpkin's horizontal radius at azimuth `a` (0 = forward), as a share of PUMPKIN_R: ten lobes
+ *  with soft grooves, shallow across the carved face so it reads flat on. */
+function pumpkinLobe(a: number): number {
+  const depth = 0.11 * (1 - 0.8 * Math.exp(-((a / 0.55) ** 2)));
+  return 1 - depth + depth * Math.sqrt(Math.abs(Math.cos(5 * a)));
 }
 
-function buildTopper(ctx: Ctx, id: string, x: number, y: number): FlagRig | null {
+/** Squat ribbed pumpkin centred on the origin, dimpled top (for the stem) and bottom. */
+function pumpkinGeo(): THREE.BufferGeometry {
+  return cached('pumpkin', () => {
+    const ball = new THREE.SphereGeometry(PUMPKIN_R, 60, 24);
+    ball.deleteAttribute('uv');
+    ball.deleteAttribute('normal');
+    // Welded, so the normals are smooth across the sphere's seam.
+    const g = mergeVertices(ball);
+    ball.dispose();
+    const p = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i);
+      const y = p.getY(i);
+      const z = p.getZ(i);
+      const s = pumpkinLobe(Math.atan2(z, x));
+      const dimple = (1 - Math.hypot(x, z) / PUMPKIN_R) ** 3 * (y > 0 ? -0.045 : 0.02);
+      p.setXYZ(i, x * s, y * PUMPKIN_SQUASH + dimple, z * s);
+    }
+    g.computeVertexNormals();
+    return g;
+  });
+}
+
+/** Projects a point of the pumpkin's front view (u to the viewer's right, v up, from its centre)
+ *  straight back onto its skin, `lift` proud of it. */
+function onPumpkin(u: number, v: number, lift: number, out: THREE.Vector3): THREE.Vector3 {
+  const yo = v / PUMPKIN_SQUASH;
+  const h = Math.sqrt(Math.max(0, PUMPKIN_R * PUMPKIN_R - yo * yo));
+  let a = 0;
+  for (let i = 0; i < 4; i++) a = Math.asin(THREE.MathUtils.clamp(-u / (h * pumpkinLobe(a)), -1, 1));
+  const r = h * pumpkinLobe(a) + lift;
+  return out.set(r * Math.cos(a), v, r * Math.sin(a));
+}
+
+/** Splits every triangle of a flat position array into four, `levels` times. */
+function subdivide(pos: Float32Array, levels: number): Float32Array {
+  let cur = pos;
+  for (let l = 0; l < levels; l++) {
+    const next = new Float32Array(cur.length * 4);
+    let o = 0;
+    for (let i = 0; i < cur.length; i += 9) {
+      const a = [cur[i], cur[i + 1], cur[i + 2]];
+      const b = [cur[i + 3], cur[i + 4], cur[i + 5]];
+      const c = [cur[i + 6], cur[i + 7], cur[i + 8]];
+      const ab = a.map((v, k) => (v + b[k]) / 2);
+      const bc = b.map((v, k) => (v + c[k]) / 2);
+      const ca = c.map((v, k) => (v + a[k]) / 2);
+      for (const tri of [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]) {
+        for (const v of tri) {
+          next.set(v, o);
+          o += 3;
+        }
+      }
+    }
+    cur = next;
+  }
+  return cur;
+}
+
+/** The jack-o'-lantern's face (slanted triangle eyes, a nose, a toothy grin), a decal fine enough
+ *  to follow the pumpkin's curve. */
+function pumpkinFaceGeo(): THREE.BufferGeometry {
+  return cached('pumpkinFace', () => {
+    const shapes: THREE.Shape[] = [];
+    for (const s of [-1, 1]) {
+      const eye = new THREE.Shape();
+      eye.moveTo(s * 0.135, 0.025);
+      eye.lineTo(s * 0.035, 0.025);
+      eye.lineTo(s * 0.07, 0.105);
+      eye.closePath();
+      shapes.push(eye);
+    }
+    const nose = new THREE.Shape();
+    nose.moveTo(-0.025, -0.015);
+    nose.lineTo(0.025, -0.015);
+    nose.lineTo(0, 0.03);
+    nose.closePath();
+    shapes.push(nose);
+    // The grin: two teeth hang from the top lip and one stands on the bottom, all left uncut.
+    const W = 0.15;
+    const top = (u: number): number => -0.065 + 0.03 * (u / W) ** 2 - (Math.abs(Math.abs(u) - 0.055) < 0.022 ? 0.028 : 0);
+    const bottom = (u: number): number => -0.13 + 0.095 * (u / W) ** 2 + (Math.abs(u) < 0.02 ? 0.025 : 0);
+    const mouth = new THREE.Shape();
+    mouth.moveTo(-W, -0.035);
+    for (let i = 1; i < 30; i++) mouth.lineTo(-W + i * (W / 15), top(-W + i * (W / 15)));
+    mouth.lineTo(W, -0.035);
+    for (let i = 29; i > 0; i--) mouth.lineTo(-W + i * (W / 15), bottom(-W + i * (W / 15)));
+    mouth.closePath();
+    shapes.push(mouth);
+
+    const flat = new THREE.ShapeGeometry(shapes).toNonIndexed();
+    const pos = subdivide(flat.getAttribute('position').array as Float32Array, 3);
+    flat.dispose();
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.length; i += 3) {
+      onPumpkin(pos[i], pos[i + 1], 0.003, v);
+      pos[i] = v.x;
+      pos[i + 1] = v.y;
+      pos[i + 2] = v.z;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    return g;
+  });
+}
+
+/** A sheet ghost: domed head, sides flaring to a scalloped hem (open underneath). */
+function ghostGeo(): THREE.BufferGeometry {
+  return cached('ghost', () => {
+    const pts = [
+      [0.245, 0],
+      [0.232, 0.06],
+      [0.218, 0.13],
+      [0.207, 0.2],
+      [0.2, 0.27],
+      [0.196, 0.33],
+    ].map(([r, y]) => new THREE.Vector2(r, y));
+    for (let i = 1; i <= 10; i++) {
+      const t = (i / 10) * (Math.PI / 2);
+      pts.push(new THREE.Vector2(0.196 * Math.cos(t), 0.33 + 0.205 * Math.sin(t)));
+    }
+    const lathe = new THREE.LatheGeometry(pts, 40);
+    lathe.deleteAttribute('uv');
+    lathe.deleteAttribute('normal');
+    const g = mergeVertices(lathe);
+    lathe.dispose();
+    const p = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < p.count; i++) {
+      const y = p.getY(i);
+      if (y < 0.14) p.setY(i, y + 0.04 * (1 - y / 0.14) ** 2 * Math.sin(7 * Math.atan2(p.getZ(i), p.getX(i))));
+    }
+    g.computeVertexNormals();
+    return g;
+  });
+}
+
+/** A bat's +z wing: a membrane from the body's centre line out to the tip, scalloped between the
+ *  fingers along the trailing edge. */
+function batWingGeo(): THREE.BufferGeometry {
+  return cached('batWing', () => {
+    const s = new THREE.Shape();
+    // Planform in (x = forward, y = out along the span); the extrusion becomes its thickness.
+    s.moveTo(0.06, 0.02);
+    s.lineTo(0.095, 0.2);
+    s.lineTo(0.0, 0.46);
+    s.quadraticCurveTo(-0.025, 0.385, -0.1, 0.36);
+    s.quadraticCurveTo(-0.087, 0.277, -0.15, 0.22);
+    s.quadraticCurveTo(-0.077, 0.139, -0.08, 0.02);
+    s.closePath();
+    const g = new THREE.ExtrudeGeometry(s, {
+      depth: 0.008,
+      bevelEnabled: true,
+      bevelThickness: 0.004,
+      bevelSize: 0.004,
+      bevelSegments: 1,
+      curveSegments: 6,
+    });
+    g.rotateX(Math.PI / 2);
+    return g;
+  });
+}
+
+/** Hip, knee and foot of each of a spider's eight legs, fanned forward and back. The feet reach
+ *  a little below its base, so on a flat roof they plant. */
+function spiderLegs(): [THREE.Vector3, THREE.Vector3, THREE.Vector3][] {
+  const legs: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [];
+  for (const s of [1, -1]) {
+    [0.95, 0.35, -0.3, -0.85].forEach((a, i) => {
+      const hip = new THREE.Vector3(0.115 - i * 0.03, 0.085, s * 0.045);
+      const dir = new THREE.Vector3(Math.sin(a), 0, s * Math.cos(a));
+      legs.push([hip, hip.clone().addScaledVector(dir, 0.14).setY(0.215), hip.clone().addScaledVector(dir, 0.32).setY(-0.05)]);
+    });
+  }
+  return legs;
+}
+
+/** A tapered rod from a to b (radius ra at a, rb at b), as geometry for merging. */
+function rodGeo(a: THREE.Vector3, b: THREE.Vector3, ra: number, rb: number): THREE.BufferGeometry {
+  _dir.subVectors(b, a);
+  const g = new THREE.CylinderGeometry(rb, ra, _dir.length(), 8, 1);
+  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(_up, _dir.normalize()));
+  g.translate((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+  return g;
+}
+
+const WITCH_CROWN = 0.72;
+
+/** The witch hat's crown: a tall cone with its base at the origin, welded so it shades smoothly
+ *  when bent. A fresh one per hat, since the hat bends its own. */
+function witchCrownGeo(): THREE.BufferGeometry {
+  const cone = new THREE.CylinderGeometry(0, 0.165, WITCH_CROWN, 28, 18, true);
+  cone.deleteAttribute('uv');
+  cone.deleteAttribute('normal');
+  const g = mergeVertices(cone);
+  cone.dispose();
+  g.translate(0, WITCH_CROWN / 2, 0);
+  return g;
+}
+
+/** All eight legs in one mesh (they never move on their own: the spider turns as a whole). */
+function spiderLegsGeo(): THREE.BufferGeometry {
+  return cached('spiderLegs', () => {
+    const parts = spiderLegs().flatMap(([hip, knee, foot]) => [rodGeo(hip, knee, 0.016, 0.014), rodGeo(knee, foot, 0.013, 0.006)]);
+    const g = mergeGeometries(parts)!;
+    for (const part of parts) part.dispose();
+    return g;
+  });
+}
+
+/** The orange bands at the spider's knees, one mesh. */
+function spiderKneesGeo(): THREE.BufferGeometry {
+  return cached('spiderKnees', () => {
+    const parts = spiderLegs().map(([, knee]) => new THREE.SphereGeometry(0.021, 10, 8).translate(knee.x, knee.y, knee.z));
+    const g = mergeGeometries(parts)!;
+    for (const part of parts) part.dispose();
+    return g;
+  });
+}
+
+/** A topper's own motion, run every frame by `update` (t in seconds). */
+type TopperAnim = (t: number) => void;
+
+function buildTopper(ctx: Ctx, id: string, x: number, y: number): TopperAnim | null {
   const m = M();
   const g = new THREE.Group();
   g.position.set(x, y, 0);
   ctx.body.add(g);
+  // Each moving topper starts from its own phase, so two of a kind never move in step.
+  const phase = Math.random() * 10;
   if (id === 'tophat') {
     add(g, cyl('y', 0.3, 0.3, 0.035, 28), m.black, 0, 0.018, 0);
     add(g, cyl('y', 0.2, 0.19, 0.46, 28), m.black, 0, 0.26, 0);
@@ -1216,7 +1462,147 @@ function buildTopper(ctx: Ctx, id: string, x: number, y: number): FlagRig | null
     const flag = add(g, geo, flagMat(ctx.accentHex), 0, 1.0, 0);
     add(flag, rbox(0.78, 0.07, 0.012, 0.005), m.white, -0.39, 0, 0);
     ctx.disposables.push(geo);
-    return { geo, base: Float32Array.from(geo.getAttribute('position').array as Float32Array) };
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    const base = Float32Array.from(arr);
+    return (t) => {
+      for (let i = 0; i < arr.length; i += 3) {
+        const u = -base[i] / 0.78;
+        arr[i + 2] = Math.sin(u * 7 - t * 9) * 0.07 * u + Math.sin(u * 3 - t * 5) * 0.03 * u;
+        arr[i + 1] = base[i + 1] - u * u * 0.04;
+      }
+      pos.needsUpdate = true;
+      geo.computeVertexNormals();
+    };
+  } else if (id === 'pumpkin') {
+    // A jack-o'-lantern sitting just into the roof, its carved face lit by a flickering candle.
+    const p = new THREE.Group();
+    p.scale.setScalar(1.15);
+    g.add(p);
+    const c = 0.18;
+    add(p, pumpkinGeo(), m.pumpkin, 0, c, 0);
+    const glow = new THREE.MeshBasicMaterial({
+      color: 0xffd04a,
+      toneMapped: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    ctx.disposables.push(glow);
+    add(p, pumpkinFaceGeo(), glow, 0, c, 0);
+    const top = c + PUMPKIN_R * PUMPKIN_SQUASH - 0.045;
+    add(p, cyl('y', 0.02, 0.032, 0.11, 10), m.stem, -0.008, top + 0.045, 0, { rx: 0.08, rz: 0.18 });
+    add(p, sphere(0.05, 12, 8), m.leaf, -0.06, top + 0.03, 0.045, { ry: 0.6, rz: -0.2, sy: 0.25, sz: 0.6 });
+    add(p, cached('tendril', () => new THREE.TorusGeometry(0.03, 0.005, 6, 18, Math.PI * 1.5)), m.leaf, 0.035, top + 0.045, -0.045, {
+      rx: 0.3,
+      ry: 0.9,
+    });
+    const ember = new THREE.Color(0xff8a1c);
+    const flame = new THREE.Color(0xfff1a8);
+    return (t) => {
+      const k = t + phase;
+      const f = 0.6 + 0.22 * Math.sin(k * 11) + 0.12 * Math.sin(k * 23 + 1.3) + 0.08 * Math.sin(k * 37 + 0.4);
+      glow.color.copy(ember).lerp(flame, THREE.MathUtils.clamp(f, 0, 1));
+    };
+  } else if (id === 'ghost') {
+    // Floats over the roof, bobbing and turning, arms up for a "boo".
+    const ghost = new THREE.Group();
+    g.add(ghost);
+    add(ghost, ghostGeo(), m.ghost);
+    for (const s of [1, -1]) {
+      add(ghost, sphere(0.045, 14, 10), m.eye, 0.178, 0.37, s * 0.066, { ry: -s * 0.35, sx: 0.32, sy: 1.3, sz: 0.8 });
+      add(ghost, sphere(0.06, 14, 10), m.ghost, 0.02, 0.2, s * 0.215, { rx: -s * 0.6, sx: 0.75, sy: 0.6, sz: 1.5 });
+    }
+    add(ghost, sphere(0.036, 14, 10), m.eye, 0.196, 0.265, 0, { sx: 0.3, sy: 1.3, sz: 0.85 });
+    return (t) => {
+      const k = t + phase;
+      ghost.position.y = 0.09 + 0.035 * Math.sin(k * 2.2);
+      ghost.rotation.set(0.05 * Math.sin(k * 1.9), 0.25 * Math.sin(k * 0.7), 0.07 * Math.sin(k * 1.6));
+    };
+  } else if (id === 'bat') {
+    // Hovers over the roof facing forward, flapping, with red eyes and fangs.
+    const bat = new THREE.Group();
+    bat.scale.setScalar(1.35);
+    g.add(bat);
+    add(bat, sphere(0.085, 16, 12), m.batFur, 0, 0, 0, { sx: 1.3, sy: 0.95, sz: 0.9 });
+    add(bat, sphere(0.065, 16, 12), m.batFur, 0.1, 0.045, 0);
+    const wings: THREE.Group[] = [];
+    for (const s of [1, -1]) {
+      add(bat, cyl('y', 0.0, 0.03, 0.085, 10), m.batFur, 0.085, 0.145, s * 0.045, { rx: s * 0.3, rz: 0.15 });
+      add(bat, sphere(0.014, 8, 6), m.redEye, 0.152, 0.065, s * 0.03);
+      add(bat, cyl('y', 0.008, 0.0, 0.03, 6), m.white, 0.15, 0.0, s * 0.015);
+      const pivot = new THREE.Group();
+      pivot.position.y = 0.02;
+      bat.add(pivot);
+      add(pivot, batWingGeo(), m.batWing, 0, 0, 0, { sz: s });
+      wings.push(pivot);
+    }
+    return (t) => {
+      const k = t + phase;
+      // Tip angle: up 1 rad, down 0.3; the body rises on the downstroke.
+      const flap = 0.35 + 0.65 * Math.sin(k * 19);
+      wings[0].rotation.x = -flap;
+      wings[1].rotation.x = flap;
+      bat.position.set(0.04 * Math.sin(k * 0.8), 0.38 - 0.03 * Math.sin(k * 19), 0.05 * Math.sin(k * 0.6));
+      bat.rotation.y = 0.15 * Math.sin(k * 0.7);
+    };
+  } else if (id === 'witch') {
+    // A crooked witch's hat banded in the player's colour; the crown bends back and its tip flops
+    // in the wind.
+    add(g, cyl('y', 0.34, 0.34, 0.025, 36), m.witch, 0, 0.0125, 0);
+    const crown = witchCrownGeo();
+    ctx.disposables.push(crown);
+    add(g, crown, m.witch, 0, 0.02, 0);
+    add(g, cyl('y', 0.152, 0.164, 0.06, 28), ctx.accent, 0, 0.06, 0);
+    const buckle = new THREE.Group();
+    buckle.position.set(0.16, 0.06, 0);
+    buckle.rotation.z = 0.23;
+    g.add(buckle);
+    add(buckle, rbox(0.014, 0.075, 0.075, 0.01), m.gold);
+    add(buckle, rbox(0.014, 0.042, 0.042, 0.006), ctx.accent, 0.004, 0, 0);
+    const pos = crown.getAttribute('position') as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    const base = Float32Array.from(arr);
+    return (t) => {
+      const k = t + phase;
+      const bend = (0.34 + 0.06 * Math.sin(k * 2.3)) * WITCH_CROWN;
+      for (let i = 0; i < arr.length; i += 3) {
+        // Clamped: the base ring sits a float's breadth below 0, and a negative base to a
+        // fractional power is NaN.
+        const u = Math.max(0, base[i + 1] / WITCH_CROWN);
+        arr[i] = base[i] - bend * u ** 2.6;
+        arr[i + 1] = base[i + 1] - 0.25 * bend * u ** 4;
+      }
+      pos.needsUpdate = true;
+      crown.computeVertexNormals();
+    };
+  } else if (id === 'spider') {
+    // Red-eyed, orange-kneed, breathing, and turning now and then to look about.
+    const spider = new THREE.Group();
+    spider.scale.setScalar(1.25);
+    g.add(spider);
+    add(spider, spiderLegsGeo(), m.spider);
+    add(spider, spiderKneesGeo(), m.orange);
+    add(spider, sphere(0.075, 18, 12), m.spider, 0.075, 0.085, 0, { sx: 1.15, sy: 0.75 });
+    const abdomen = add(spider, sphere(0.13, 22, 14), m.spider, -0.09, 0.115, 0);
+    for (const [px, py] of [
+      [-0.03, 0.214],
+      [-0.1, 0.222],
+      [-0.17, 0.207],
+    ]) {
+      add(spider, sphere(0.03, 12, 8), m.orange, px, py, 0, { sy: 0.4 });
+    }
+    for (const s of [1, -1]) {
+      add(spider, sphere(0.014, 8, 6), m.redEye, 0.15, 0.1, s * 0.022);
+      add(spider, sphere(0.009, 8, 6), m.redEye, 0.135, 0.115, s * 0.04);
+      add(spider, cyl('y', 0.01, 0.0, 0.04, 6), m.spider, 0.15, 0.05, s * 0.018);
+    }
+    return (t) => {
+      const k = t + phase;
+      const breath = 1 + 0.035 * Math.sin(k * 3);
+      abdomen.scale.set(1.25 * breath, 0.85 * breath, breath);
+      spider.rotation.y = 0.12 * Math.sin(k * 0.9) + 0.025 * Math.sin(k * 7.3);
+    };
   }
   return null;
 }
@@ -1324,10 +1710,12 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
     if (boosterId === 'kite') kite = buildKite(ctx, L.kite);
   }
 
-  let flag: FlagRig | null = null;
+  let topperAnim: TopperAnim | null = null;
   if (topperId !== 'none') {
     const y = columnTop(ctx, L.topperX, 0.12);
-    flag = buildTopper(ctx, topperId, L.topperX, Number.isFinite(y) ? y - 0.01 : 1);
+    topperAnim = buildTopper(ctx, topperId, L.topperX, Number.isFinite(y) ? y - 0.01 : 1);
+    // Pose it now: a floating topper would otherwise sit in the roof until the first update.
+    if (topperAnim) topperAnim(0);
   }
 
   root.traverse((o) => {
@@ -1442,17 +1830,7 @@ export function buildCarMesh(config: CarConfig, opts: { accent?: string } = {}):
         }
         applyWings();
       }
-      if (flag) {
-        const pos = flag.geo.getAttribute('position') as THREE.BufferAttribute;
-        const arr = pos.array as Float32Array;
-        for (let i = 0; i < arr.length; i += 3) {
-          const u = -flag.base[i] / 0.78;
-          arr[i + 2] = Math.sin(u * 7 - t * 9) * 0.07 * u + Math.sin(u * 3 - t * 5) * 0.03 * u;
-          arr[i + 1] = flag.base[i + 1] - u * u * 0.04;
-        }
-        pos.needsUpdate = true;
-        flag.geo.computeVertexNormals();
-      }
+      if (topperAnim) topperAnim(t);
       if (kite && kiteOpen) {
         kite.open.position.set(kite.base.x, kite.base.y + Math.sin(t * 0.9) * 0.2, kite.base.z + Math.sin(t * 0.6) * 0.25);
         kite.open.rotation.set(Math.sin(t * 1.3) * 0.12, 0, 0.65 + Math.sin(t * 1.1) * 0.06);
